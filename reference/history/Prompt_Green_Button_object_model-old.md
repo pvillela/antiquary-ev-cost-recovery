@@ -1,0 +1,3 @@
+Use the greenbutton-objects library (see https://pypi.org/project/greenbutton-objects/) to understand the object model in the Toronto Hydro Green Button download file `TH_Electric_Usage_23-11-2024_to_24-06-2026.XML`. Do not read the entire file -- read just enough to be able to glean the specifics of the Toronto Hydro object model. Create a markdown file describing the Toronto Hydro object model and depicting it as a UML diagram.
+
+Use the `uv` Python version and package manager (https://docs.astral.sh/uv/concepts/projects/init/) for the installation of any required Python versions and packages.

@@ -1,0 +1,30 @@
+{
+  "name": "Rust Dev Environment",
+  "image": "mcr.microsoft.com/devcontainers/base:jammy",
+  "features": {
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "latest",
+      "profile": "default"
+    },
+    "ghcr.io/devcontainers/features/node:2": {}
+  },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer"
+      ]
+    }
+  },
+  "containerEnv": {},
+  "runArgs": [
+    "--env-file",
+    ".devcontainer/devcontainer.env"
+  ],
+  "mounts": [
+    "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind",
+    "source=${localEnv:HOME}/.claude.json,target=/home/vscode/.claude.json,type=bind",
+    "source=${localEnv:HOME}/.omp,target=/home/vscode/.omp,type=bind,consistency=cached",
+    // "source=/home/pvillela/DEV/Rust/basic-stats,target=/workspaces/basic-stats,type=bind,consistency=cached,readonly"
+  ]
+}
