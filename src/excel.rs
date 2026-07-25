@@ -9,7 +9,7 @@ use jiff::{
     SignedDuration, Timestamp, civil,
     tz::{AmbiguousOffset, TimeZone},
 };
-use umya_spreadsheet::{Comment, Workbook, Worksheet};
+use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
 
 /// Time zone the session report's timestamps are stated in. See README.md, "Time zone".
 const TZ_NAME: &str = "America/Toronto";
@@ -24,6 +24,9 @@ const END_PADDING: SignedDuration = SignedDuration::from_secs(59);
 const DATETIME_FORMAT: &str = "yyyy-mm-dd hh:mm:ss ddd";
 /// Elapsed-time format: unlike `hh:mm:ss` it does not wrap a 25-hour duration to `01:00:00`.
 const DURATION_FORMAT: &str = "[h]:mm:ss";
+const ENERGY_USE_FORMAT: &str = "0.000";
+const AVG_POWER_FORMAT: &str = "0.000";
+const TOTAL_FEE_FORMAT: &str = "0.00";
 
 /// Outcome of converting one CSV file.
 #[derive(Debug)]
@@ -159,13 +162,16 @@ const REQUIRED_HEADERS: &[&str] = &[
 /// - Column order is given by [`COLUMNS`]: each UTC column sits beside the local value it derives
 ///   from, and `Adj_conn_end`, `Adj_conn_duration` and `Avg_power` are inserted as described in
 ///   README.md.
-/// - Timestamp columns are Excel date/time numbers formatted `yyyy-mm-dd hh:mm:ss ddd`; duration
-///   columns are Excel durations formatted `[h]:mm:ss`, which does not wrap past 24 hours.
+/// - Timestamp columns are Excel date/time numbers formatted `yyyy-mm-dd hh:mm:ss ddd`, left-
+///   justified; duration columns are Excel durations formatted `[h]:mm:ss`, which does not wrap
+///   past 24 hours, and are centered.
 /// - `Adj_conn_duration` and `Avg_power` are live formulas. `Adj_conn_duration` subtracts the two
 ///   *UTC* columns, so it is true elapsed time even across a DST fold; `Avg_power` is
-///   `=IF(Energy_Use=0, 0, Energy_Use/(Active_Charge_Time*24))`, in kW.
+///   `=IF(Energy_Use=0, 0, Energy_Use/(Active_Charge_Time*24))`, in kW, displayed to 3 decimal
+///   places, matching `Energy_Use`. `Total_Fee` is displayed to 2 decimal places.
 /// - The remaining columns are copied over with an explicit per-column type, so values that merely
 ///   look numeric — postal codes, station ids — keep their text form.
+/// - The sheet is named after the output file, minus its `.xlsx` suffix.
 ///
 /// Zero-`Energy_Use` sessions are written to the workbook; they are excluded later, by the peak
 /// power contribution logic.
@@ -188,10 +194,10 @@ pub fn session_csv_to_xlsx(path: &Path) -> Result<Report, Box<dyn Error>> {
         rows.extend(session.resolve(&tz, row_no, &mut anomalies)?);
     }
 
-    let mut book = umya_spreadsheet::new_file();
-    write_sheet(&mut book, path, &headers, &records, &rows)?;
-
     let output_path = path.with_extension("xlsx");
+    let mut book = umya_spreadsheet::new_file();
+    write_sheet(&mut book, &output_path, &headers, &records, &rows)?;
+
     umya_spreadsheet::writer::xlsx::write(&book, &output_path)?;
     Ok(Report {
         output_path,
@@ -235,8 +241,9 @@ fn field<'a>(headers: &Headers, record: &'a csv::StringRecord, name: &str) -> &'
 /// Local time as `YYYY-MM-DD HH:MM`; the report carries no seconds, which is what makes
 /// `Adj_conn_end` necessary in the first place.
 fn parse_local(s: &str, row: usize, column: &str) -> Result<civil::DateTime, Box<dyn Error>> {
-    civil::DateTime::strptime("%Y-%m-%d %H:%M", s)
-        .map_err(|e| format!("row {row}, column `{column}`: cannot parse timestamp {s:?}: {e}").into())
+    civil::DateTime::strptime("%Y-%m-%d %H:%M", s).map_err(|e| {
+        format!("row {row}, column `{column}`: cannot parse timestamp {s:?}: {e}").into()
+    })
 }
 
 /// `H:MM:SS`, with hours unbounded so a session longer than a day still parses.
@@ -424,7 +431,11 @@ impl Session {
 
     /// Resolves the reported end to UTC. When the end itself falls in the fold, the candidate
     /// nearest to `start + Conn_Duration` is the one consistent with this session.
-    fn resolve_end(&self, tz: &TimeZone, start_utc: Timestamp) -> Result<Timestamp, Box<dyn Error>> {
+    fn resolve_end(
+        &self,
+        tz: &TimeZone,
+        start_utc: Timestamp,
+    ) -> Result<Timestamp, Box<dyn Error>> {
         let ambiguous = tz.to_ambiguous_timestamp(self.end_local);
         Ok(match ambiguous.offset() {
             AmbiguousOffset::Unambiguous { .. } => ambiguous.unambiguous()?,
@@ -434,7 +445,11 @@ impl Session {
                 let earlier = tz.to_ambiguous_timestamp(self.end_local).earlier()?;
                 let later = tz.to_ambiguous_timestamp(self.end_local).later()?;
                 let d = |t: Timestamp| (t.as_second() - reference.as_second()).abs();
-                if d(earlier) <= d(later) { earlier } else { later }
+                if d(earlier) <= d(later) {
+                    earlier
+                } else {
+                    later
+                }
             }
         })
     }
@@ -481,13 +496,13 @@ fn column_index(source: Source) -> usize {
 
 fn write_sheet(
     book: &mut Workbook,
-    input: &Path,
+    output_path: &Path,
     headers: &Headers,
     records: &[csv::StringRecord],
     rows: &[Row],
 ) -> Result<(), Box<dyn Error>> {
     let sheet = book.sheet_mut(0)?;
-    sheet.set_name(sheet_name(input));
+    sheet.set_name(sheet_name(output_path));
 
     for (i, (header, _)) in COLUMNS.iter().enumerate() {
         let col = i as u32 + 1;
@@ -519,6 +534,9 @@ fn write_sheet(
                         match value.parse::<f64>() {
                             Ok(n) => {
                                 sheet.cell_mut((col, excel_row)).set_value_number(n);
+                                if let Some(code) = decimal_format(name) {
+                                    set_format(sheet, col, excel_row, code);
+                                }
                             }
                             // A non-numeric value in a numeric column is preserved rather than
                             // dropped; the workbook still shows what the report said.
@@ -535,7 +553,7 @@ fn write_sheet(
                         sheet
                             .cell_mut((col, excel_row))
                             .set_value_number(excel_duration(d));
-                        set_format(sheet, col, excel_row, DURATION_FORMAT);
+                        set_duration_style(sheet, col, excel_row);
                     }
                 }
                 Source::SessionId => {
@@ -564,16 +582,17 @@ fn write_sheet(
                 Source::AdjConnDuration => {
                     // Subtracting the UTC columns, not the local ones: local arithmetic is wrong by
                     // an hour for a session spanning the DST fold.
-                    sheet
-                        .cell_mut((col, excel_row))
-                        .set_formula(format!("{adj_end_utc_col}{excel_row}-{start_utc_col}{excel_row}"));
-                    set_format(sheet, col, excel_row, DURATION_FORMAT);
+                    sheet.cell_mut((col, excel_row)).set_formula(format!(
+                        "{adj_end_utc_col}{excel_row}-{start_utc_col}{excel_row}"
+                    ));
+                    set_duration_style(sheet, col, excel_row);
                 }
                 Source::AvgPower => {
                     if row.avg_power_computable {
                         sheet.cell_mut((col, excel_row)).set_formula(format!(
                             "IF({energy_col}{excel_row}=0,0,{energy_col}{excel_row}/({active_col}{excel_row}*24))"
                         ));
+                        set_format(sheet, col, excel_row, AVG_POWER_FORMAT);
                     }
                 }
             }
@@ -591,6 +610,12 @@ fn write_sheet(
 fn write_datetime(sheet: &mut Worksheet, col: u32, row: u32, serial: f64) {
     sheet.cell_mut((col, row)).set_value_number(serial);
     set_format(sheet, col, row, DATETIME_FORMAT);
+    set_alignment(sheet, col, row, HorizontalAlignmentValues::Left);
+}
+
+fn set_duration_style(sheet: &mut Worksheet, col: u32, row: u32) {
+    set_format(sheet, col, row, DURATION_FORMAT);
+    set_alignment(sheet, col, row, HorizontalAlignmentValues::Center);
 }
 
 fn set_format(sheet: &mut Worksheet, col: u32, row: u32, code: &str) {
@@ -600,9 +625,26 @@ fn set_format(sheet: &mut Worksheet, col: u32, row: u32, code: &str) {
         .set_format_code(code);
 }
 
-/// Excel sheet names are capped at 31 characters and cannot contain `[]:*?/\`.
-fn sheet_name(input: &Path) -> String {
-    let stem = input
+fn set_alignment(sheet: &mut Worksheet, col: u32, row: u32, horizontal: HorizontalAlignmentValues) {
+    sheet
+        .style_mut((col, row))
+        .alignment_mut()
+        .set_horizontal(horizontal);
+}
+
+/// Decimal precision for the `Source::Number` columns that need more than Excel's default display.
+fn decimal_format(csv_column: &str) -> Option<&'static str> {
+    match csv_column {
+        "Energy_Use" => Some(ENERGY_USE_FORMAT),
+        "Total_Fee" => Some(TOTAL_FEE_FORMAT),
+        _ => None,
+    }
+}
+
+/// The output file name, minus its `.xlsx` suffix. Excel sheet names are capped at 31 characters
+/// and cannot contain `[]:*?/\`.
+fn sheet_name(output_path: &Path) -> String {
+    let stem = output_path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "Sessions".to_owned());
@@ -744,7 +786,10 @@ mod test {
         let rows = session("2026-06-01 16:22", "2026-06-01 21:29", "5:07:53")
             .resolve(&tz(), 1, &mut anomalies)
             .unwrap();
-        assert_eq!(local_of(rows[0].adj_end_utc), dt("2026-06-01 21:29").with().second(59).build().unwrap());
+        assert_eq!(
+            local_of(rows[0].adj_end_utc),
+            dt("2026-06-01 21:29").with().second(59).build().unwrap()
+        );
 
         // start + duration <= end: the computed end binds. 16:42 + 6:58:29 = 23:40:29.
         let rows = session("2026-06-07 16:42", "2026-06-07 23:41", "6:58:29")
@@ -860,7 +905,8 @@ mod test {
             "elapsed {elapsed:?} lost the repeated hour"
         );
         // The same subtraction done on local wall times loses the repeated hour.
-        let wall_secs = excel_serial(row.adj_end_local).unwrap() - excel_serial(row.start_local).unwrap();
+        let wall_secs =
+            excel_serial(row.adj_end_local).unwrap() - excel_serial(row.start_local).unwrap();
         assert!(
             wall_secs * 86_400.0 < elapsed.as_secs() as f64,
             "local subtraction should undercount here"
@@ -905,7 +951,6 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
 
         let book = umya_spreadsheet::reader::xlsx::read(&report.output_path).unwrap();
         let sheet = book.sheet(0).unwrap();
-        assert_eq!(sheet.name(), "Session_Report_Test");
 
         // Header row, in the agreed order.
         let expected: Vec<&str> = COLUMNS.iter().map(|(h, _)| *h).collect();
@@ -924,13 +969,19 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
 
         // Formulas, not cached values.
         assert_eq!(
-            sheet.cell((col(Source::AdjConnDuration), 2)).unwrap().formula(),
+            sheet
+                .cell((col(Source::AdjConnDuration), 2))
+                .unwrap()
+                .formula(),
             "P2-L2"
         );
         assert_eq!(
             sheet.cell((col(Source::AvgPower), 2)).unwrap().formula(),
             "IF(V2=0,0,V2/(T2*24))"
         );
+
+        // Sheet name is the output file's name, minus the .xlsx suffix.
+        assert_eq!(sheet.name(), "Session_Report_Test");
 
         // Number formats.
         assert_eq!(
@@ -943,6 +994,56 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
         );
         assert_eq!(
             sheet
+                .style((col(Source::Number("Energy_Use")), 2))
+                .number_format()
+                .unwrap()
+                .format_code(),
+            ENERGY_USE_FORMAT
+        );
+        assert_eq!(
+            sheet
+                .style((col(Source::AvgPower), 2))
+                .number_format()
+                .unwrap()
+                .format_code(),
+            AVG_POWER_FORMAT
+        );
+        assert_eq!(
+            sheet
+                .style((col(Source::Number("Total_Fee")), 2))
+                .number_format()
+                .unwrap()
+                .format_code(),
+            TOTAL_FEE_FORMAT
+        );
+
+        // Date/time values are left-justified, duration values are centered.
+        assert_eq!(
+            *sheet
+                .style((col(Source::ConnStartLocal), 2))
+                .alignment()
+                .unwrap()
+                .horizontal(),
+            HorizontalAlignmentValues::Left
+        );
+        assert_eq!(
+            *sheet
+                .style((col(Source::Duration("Conn_Duration")), 2))
+                .alignment()
+                .unwrap()
+                .horizontal(),
+            HorizontalAlignmentValues::Center
+        );
+        assert_eq!(
+            *sheet
+                .style((col(Source::AdjConnDuration), 2))
+                .alignment()
+                .unwrap()
+                .horizontal(),
+            HorizontalAlignmentValues::Center
+        );
+        assert_eq!(
+            sheet
                 .style((col(Source::Duration("Conn_Duration")), 2))
                 .number_format()
                 .unwrap()
@@ -951,8 +1052,14 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
         );
 
         // Explicit typing: Vehicle_Year is numeric, Station_ID stays text.
-        assert_eq!(sheet.value((col(Source::Number("Vehicle_Year")), 2)), "2024");
-        assert_eq!(sheet.value((col(Source::Text("Station_ID")), 2)), "Station-7");
+        assert_eq!(
+            sheet.value((col(Source::Number("Vehicle_Year")), 2)),
+            "2024"
+        );
+        assert_eq!(
+            sheet.value((col(Source::Text("Station_ID")), 2)),
+            "Station-7"
+        );
 
         // The zero-energy session is present, not filtered out here.
         assert_eq!(sheet.value((col(Source::SessionId), 3)), "S13577");

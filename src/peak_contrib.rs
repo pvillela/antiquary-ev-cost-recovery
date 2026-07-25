@@ -15,14 +15,15 @@ pub const OVERLAP_THRESHOLD: Duration = Duration::from_secs(60);
 pub struct Session {
     /// From `session report`.
     pub id: String,
-    /// Conection start date-time from `session report`.
+    /// Conection start date-time (UTC) from `session report`.
     pub conn_start: Timestamp,
-    /// Conection end date-time from `session report`.
+    /// Non-adjusted conection end date-time (UTC) from `session report`.
     pub raw_conn_end: Timestamp,
-    /// 00:00:59 added during ingestion
+    /// Adjusted conection end date-time (UTC) from `session report`.
     pub conn_end: Timestamp,
     /// Active charge time from `session report`.
-    /// May differ from `conn_end - conn_start` due to `conn_end` ingestion adjustment.
+    /// May differ from `conn_end - conn_start` due to `conn_end` for various reasons, including
+    /// ingestion adjustment.
     pub charge_time: Duration,
     /// From `session report`.
     pub energy_use: f64,
