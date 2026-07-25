@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+csv = "1"
 jiff = "0.2.34"
+umya-spreadsheet = "3.0.1"
