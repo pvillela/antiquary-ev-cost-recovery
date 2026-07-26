@@ -3,6 +3,7 @@ use std::{
     error::Error,
     fmt,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use jiff::{
@@ -10,6 +11,8 @@ use jiff::{
     tz::{AmbiguousOffset, TimeZone},
 };
 use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
+
+use crate::Session;
 
 /// Time zone the session report's timestamps are stated in. See README.md, "Time zone".
 const TZ_NAME: &str = "America/Toronto";
@@ -28,9 +31,9 @@ const ENERGY_USE_FORMAT: &str = "0.000";
 const AVG_POWER_FORMAT: &str = "0.000";
 const TOTAL_FEE_FORMAT: &str = "0.00";
 
-/// Outcome of converting one CSV file.
+/// Outcome of converting one CSV file. The reading direction returns a [`SessionReport`] instead.
 #[derive(Debug)]
-pub struct Report {
+pub struct ConversionReport {
     /// Where the workbook was written.
     pub output_path: PathBuf,
     /// Rows that needed a judgement call. Empty for a clean conversion.
@@ -48,8 +51,8 @@ pub struct Anomaly {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnomalyKind {
-    /// `Active_Charge_Time` is zero on a session that reported non-zero `Energy_Use`,
-    /// so `Avg_power` is not computable and its cell is left empty.
+    /// `Active_Charge_Time` is zero on a session that reported non-zero `Energy_Use`, so the
+    /// session delivered energy in no time at all and its `Avg_power` cell shows `#DIV/0!`.
     ZeroActiveChargeTime,
     /// The start fell in the DST fold and both offsets reproduce the reported end,
     /// so the record was duplicated. See README.md, "Time zone".
@@ -168,10 +171,13 @@ const REQUIRED_HEADERS: &[&str] = &[
 /// - `Adj_conn_duration` and `Avg_power` are live formulas. `Adj_conn_duration` subtracts the two
 ///   *UTC* columns, so it is true elapsed time even across a DST fold; `Avg_power` is
 ///   `=IF(Energy_Use=0, 0, Energy_Use/(Active_Charge_Time*24))`, in kW, displayed to 3 decimal
-///   places, matching `Energy_Use`. `Total_Fee` is displayed to 2 decimal places.
+///   places, matching `Energy_Use`. The formula is written on every row, so a session with
+///   non-zero energy and zero `Active_Charge_Time` shows `#DIV/0!` rather than an empty cell:
+///   it delivered energy in no time at all, and the sheet says so. `Total_Fee` is displayed to
+///   2 decimal places.
 /// - The remaining columns are copied over with an explicit per-column type, so values that merely
 ///   look numeric — postal codes, station ids — keep their text form.
-/// - The sheet is named after the output file, minus its `.xlsx` suffix.
+/// - The sheet is named by [`sheet_name`].
 ///
 /// Zero-`Energy_Use` sessions are written to the workbook; they are excluded later, by the peak
 /// power contribution logic.
@@ -181,8 +187,8 @@ const REQUIRED_HEADERS: &[&str] = &[
 /// Returns `Err` only for conditions that invalidate the whole file: it cannot be read, a required
 /// header from [`REQUIRED_HEADERS`] is missing, a timestamp or duration does not parse, or the
 /// workbook cannot be written. Per-row judgement calls do not abort the conversion; they are
-/// collected in [`Report::anomalies`].
-pub fn session_csv_to_xlsx(path: &Path) -> Result<Report, Box<dyn Error>> {
+/// collected in [`ConversionReport::anomalies`].
+pub fn session_csv_to_xlsx(path: &Path) -> Result<ConversionReport, Box<dyn Error>> {
     let tz = TimeZone::get(TZ_NAME)?;
     let (headers, records) = read_csv(path)?;
 
@@ -190,7 +196,7 @@ pub fn session_csv_to_xlsx(path: &Path) -> Result<Report, Box<dyn Error>> {
     let mut rows: Vec<Row> = Vec::new();
     for (i, record) in records.iter().enumerate() {
         let row_no = i + 1;
-        let session = Session::parse(&headers, record, row_no)?;
+        let session = CsvSession::parse(&headers, record, row_no)?;
         rows.extend(session.resolve(&tz, row_no, &mut anomalies)?);
     }
 
@@ -199,7 +205,7 @@ pub fn session_csv_to_xlsx(path: &Path) -> Result<Report, Box<dyn Error>> {
     write_sheet(&mut book, &output_path, &headers, &records, &rows)?;
 
     umya_spreadsheet::writer::xlsx::write(&book, &output_path)?;
-    Ok(Report {
+    Ok(ConversionReport {
         output_path,
         anomalies,
     })
@@ -266,8 +272,10 @@ fn parse_duration(s: &str, row: usize, column: &str) -> Result<SignedDuration, B
     Ok(SignedDuration::from_secs(h * 3600 + m * 60 + sec))
 }
 
-/// The parsed fields of one CSV record that participate in the time calculations.
-struct Session {
+/// The parsed fields of one CSV record that participate in the time calculations. Named apart
+/// from [`Session`], which is the finished, UTC-resolved article this module hands to the peak
+/// power contribution logic.
+struct CsvSession {
     id: String,
     start_local: civil::DateTime,
     end_local: civil::DateTime,
@@ -287,11 +295,9 @@ struct Row {
     end_utc: Timestamp,
     adj_end_utc: Timestamp,
     adj_end_local: civil::DateTime,
-    /// `None` when `Active_Charge_Time` is zero on a session with non-zero energy.
-    avg_power_computable: bool,
 }
 
-impl Session {
+impl CsvSession {
     fn parse(
         headers: &Headers,
         record: &csv::StringRecord,
@@ -338,9 +344,9 @@ impl Session {
         anomalies: &mut Vec<Anomaly>,
     ) -> Result<Vec<Row>, Box<dyn Error>> {
         // Avg_power is a division by Active_Charge_Time; zero energy short-circuits to zero in the
-        // sheet, so only a non-zero-energy session with no charge time is a problem.
-        let avg_power_computable = self.energy_use == 0.0 || !self.active_charge_time.is_zero();
-        if !avg_power_computable {
+        // sheet, so only a non-zero-energy session with no charge time is a problem. The sheet
+        // shows it as #DIV/0!; it is reported here so it is not left to be noticed by eye.
+        if self.energy_use != 0.0 && self.active_charge_time.is_zero() {
             anomalies.push(Anomaly {
                 row,
                 session_id: self.id.clone(),
@@ -412,7 +418,6 @@ impl Session {
                     end_utc,
                     adj_end_utc,
                     adj_end_local: adj_end_utc.to_zoned(tz.clone()).datetime(),
-                    avg_power_computable,
                 })
             })
             .collect()
@@ -588,12 +593,13 @@ fn write_sheet(
                     set_duration_style(sheet, col, excel_row);
                 }
                 Source::AvgPower => {
-                    if row.avg_power_computable {
-                        sheet.cell_mut((col, excel_row)).set_formula(format!(
-                            "IF({energy_col}{excel_row}=0,0,{energy_col}{excel_row}/({active_col}{excel_row}*24))"
-                        ));
-                        set_format(sheet, col, excel_row, AVG_POWER_FORMAT);
-                    }
+                    // Written unconditionally: with zero Active_Charge_Time and non-zero energy
+                    // this evaluates to #DIV/0!, which is the honest answer — energy delivered in
+                    // no time at all has no finite average power. Zero energy yields zero.
+                    sheet.cell_mut((col, excel_row)).set_formula(format!(
+                        "IF({energy_col}{excel_row}=0,0,{energy_col}{excel_row}/({active_col}{excel_row}*24))"
+                    ));
+                    set_format(sheet, col, excel_row, AVG_POWER_FORMAT);
                 }
             }
         }
@@ -641,13 +647,24 @@ fn decimal_format(csv_column: &str) -> Option<&'static str> {
     }
 }
 
-/// The output file name, minus its `.xlsx` suffix. Excel sheet names are capped at 31 characters
-/// and cannot contain `[]:*?/\`.
+/// Prefix carried by the session report exports. Stripped from the sheet name, which Excel caps
+/// at 31 characters — long enough to lose the reporting period that follows it.
+const SESSION_REPORT_PREFIX: &str = "Session_Report_";
+
+/// The output file name, minus its `.xlsx` suffix and minus a leading [`SESSION_REPORT_PREFIX`],
+/// so `Session_Report_June_1_2026-June_30_2026` names the sheet `June_1_2026-June_30_2026` rather
+/// than being truncated to `Session_Report_June_1_2026-June`. Excel sheet names are capped at 31
+/// characters and cannot contain `[]:*?/\`.
 fn sheet_name(output_path: &Path) -> String {
     let stem = output_path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "Sessions".to_owned());
+    // A name that is *only* the prefix keeps it: an empty sheet name is not a name.
+    let stem = match stem.strip_prefix(SESSION_REPORT_PREFIX) {
+        Some(rest) if !rest.is_empty() => rest.to_owned(),
+        _ => stem,
+    };
     let cleaned: String = stem
         .chars()
         .map(|c| if "[]:*?/\\".contains(c) { '_' } else { c })
@@ -705,6 +722,153 @@ fn set_widths(sheet: &mut Worksheet) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Excel input
+// ---------------------------------------------------------------------------
+
+/// The sessions in a workbook produced by [`session_csv_to_xlsx`], split by whether their average
+/// power is a finite number. The writing direction returns a [`ConversionReport`] instead.
+#[derive(Debug)]
+pub struct SessionReport {
+    /// Sessions with non-zero `Energy_Use` and non-zero `Active_Charge_Time`. This is what the
+    /// peak power contribution logic consumes.
+    pub sessions: Vec<Session>,
+    /// Sessions that delivered non-zero `Energy_Use` in zero `Active_Charge_Time`, so
+    /// [`Session::charge_time`] is zero and [`Session::avg_power`] is infinite. Kept out of
+    /// `sessions` because an infinite average power would swamp every cluster it entered, and
+    /// surfaced rather than dropped because energy delivered in no time at all is exactly what a
+    /// demand charge bills on. See README.md, "Other".
+    pub spikes: Vec<Session>,
+}
+
+/// Sheet columns [`session_list`] cannot do without. The reading-side counterpart of
+/// [`REQUIRED_HEADERS`].
+const REQUIRED_SHEET_HEADERS: &[&str] = &[
+    "Charge_Session_ID",
+    "Conn_start_UTC",
+    "Conn_end_UTC",
+    "Adj_conn_end_UTC",
+    "Active_Charge_Time",
+    "Energy_Use",
+];
+
+/// Sheet header name to its 1-based column number. Deliberately distinct from [`Headers`], whose
+/// values are 0-based CSV field positions.
+type SheetHeaders = HashMap<String, u32>;
+
+/// Reads a workbook written by [`session_csv_to_xlsx`] and returns the charging sessions it
+/// describes, ready for the peak power contribution logic.
+///
+/// Columns are located by the header names in row 1, not by position, so inserting or reordering
+/// columns in the sheet does not silently shift what is read. Only [`REQUIRED_SHEET_HEADERS`] are
+/// consulted; the first worksheet is used.
+///
+/// Two rules from README.md, "Other", are applied here rather than at conversion time, because the
+/// workbook is meant to be a faithful rendering of the session report:
+///
+/// - Sessions with zero `Energy_Use` are excluded outright. They contribute no power.
+/// - Sessions with non-zero `Energy_Use` and zero `Active_Charge_Time` are returned separately, in
+///   [`SessionReport::spikes`].
+///
+/// `avg_power` is recomputed here rather than read from the sheet's `Avg_power` column, which
+/// holds a formula whose cached value this crate never writes.
+///
+/// # Errors
+///
+/// Returns `Err` if the workbook cannot be read, a required column is missing, or any cell in a
+/// row that has a `Charge_Session_ID` does not hold the number it should. A workbook that cannot
+/// be read in full is one whose peak numbers cannot be trusted, so no row is skipped quietly.
+/// Rows with no `Charge_Session_ID` at all are treated as trailing blanks and ignored.
+pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
+    let book = umya_spreadsheet::reader::xlsx::read(path)?;
+    let sheet = book.sheet(0)?;
+    let headers = sheet_headers(sheet, path)?;
+
+    let mut sessions = Vec::new();
+    let mut spikes = Vec::new();
+    for row in 2..=sheet.highest_row() {
+        let id = sheet
+            .value((headers["Charge_Session_ID"], row))
+            .trim()
+            .to_owned();
+        if id.is_empty() {
+            continue;
+        }
+
+        let energy_use = number(sheet, &headers, "Energy_Use", row)?;
+        if energy_use == 0.0 {
+            continue;
+        }
+
+        let charge_time = duration_of(number(sheet, &headers, "Active_Charge_Time", row)?);
+        let session = Session {
+            id,
+            conn_start: timestamp_of(number(sheet, &headers, "Conn_start_UTC", row)?)?,
+            raw_conn_end: timestamp_of(number(sheet, &headers, "Conn_end_UTC", row)?)?,
+            conn_end: timestamp_of(number(sheet, &headers, "Adj_conn_end_UTC", row)?)?,
+            charge_time,
+            energy_use,
+            // Zero charge time makes this infinite, which is the answer: the division is left to
+            // say so rather than being guarded against.
+            avg_power: energy_use / (charge_time.as_secs_f64() / 3600.0),
+        };
+
+        if charge_time.is_zero() {
+            spikes.push(session);
+        } else {
+            sessions.push(session);
+        }
+    }
+
+    Ok(SessionReport { sessions, spikes })
+}
+
+fn sheet_headers(sheet: &Worksheet, path: &Path) -> Result<SheetHeaders, Box<dyn Error>> {
+    let mut headers = SheetHeaders::new();
+    for col in 1..=sheet.highest_column() {
+        let name = sheet.value((col, 1)).trim().to_owned();
+        if !name.is_empty() {
+            // First wins, so a duplicated header cannot displace the column it shadows.
+            headers.entry(name).or_insert(col);
+        }
+    }
+
+    for required in REQUIRED_SHEET_HEADERS {
+        if !headers.contains_key(*required) {
+            return Err(format!("{}: missing required column `{required}`", path.display()).into());
+        }
+    }
+    Ok(headers)
+}
+
+/// Reads a numeric cell. `name` must be one of [`REQUIRED_SHEET_HEADERS`], which
+/// [`sheet_headers`] has already proven present.
+fn number(
+    sheet: &Worksheet,
+    headers: &SheetHeaders,
+    name: &str,
+    row: u32,
+) -> Result<f64, Box<dyn Error>> {
+    let col = headers[name];
+    sheet.value_number((col, row)).ok_or_else(|| {
+        let found = sheet.value((col, row));
+        format!("row {row}, column `{name}`: expected a number, found {found:?}").into()
+    })
+}
+
+/// Inverse of [`excel_serial_utc`]. Rounds to the nearest second: the writer stores whole seconds,
+/// and truncating what comes back would turn `20:22:00` into `20:21:59`.
+fn timestamp_of(serial: f64) -> Result<Timestamp, Box<dyn Error>> {
+    Ok(Timestamp::from_second(
+        (serial * 86_400.0).round() as i64 + EXCEL_EPOCH_UNIX_SECS,
+    )?)
+}
+
+/// Inverse of [`excel_duration`], rounded to the nearest second for the same reason.
+fn duration_of(days: f64) -> Duration {
+    Duration::from_secs((days * 86_400.0).round().max(0.0) as u64)
+}
+
 #[cfg(test)]
 // cargo test --package ev-peak-contrib --lib --all-features -- excel::test --nocapture
 mod test {
@@ -719,8 +883,8 @@ mod test {
         civil::DateTime::strptime("%Y-%m-%d %H:%M", s).unwrap()
     }
 
-    fn session(start: &str, end: &str, conn: &str) -> Session {
-        Session {
+    fn session(start: &str, end: &str, conn: &str) -> CsvSession {
+        CsvSession {
             id: "S1".to_owned(),
             start_local: dt(start),
             end_local: dt(end),
@@ -732,6 +896,17 @@ mod test {
 
     fn local_of(ts: Timestamp) -> civil::DateTime {
         ts.to_zoned(tz()).datetime()
+    }
+
+    fn utc(dt: civil::DateTime) -> Timestamp {
+        dt.to_zoned(TimeZone::UTC).unwrap().timestamp()
+    }
+
+    /// A scratch directory of its own per test, since these run in parallel within one process.
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ev_peak_excel_{}_{tag}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
@@ -766,6 +941,46 @@ mod test {
         );
         assert!(parse_duration("5:70:00", 1, "d").is_err());
         assert!(parse_duration("5:07", 1, "d").is_err());
+    }
+
+    #[test]
+    fn sheet_name_strips_the_report_prefix() {
+        let name = |s: &str| sheet_name(Path::new(s));
+        assert_eq!(
+            name("Session_Report_June_1_2026-June_30_2026.xlsx"),
+            "June_1_2026-June_30_2026"
+        );
+        // No prefix: the stem is used as it stands.
+        assert_eq!(name("July_data.xlsx"), "July_data");
+        // Stripping would leave nothing, so the prefix stays.
+        assert_eq!(name("Session_Report_.xlsx"), "Session_Report_");
+        // Excel's 31-character cap still applies, and it applies after stripping.
+        assert_eq!(
+            name("Session_Report_a_very_long_reporting_period_name.xlsx"),
+            "a_very_long_reporting_period_na"
+        );
+        assert_eq!(name("bad[name]:here.xlsx"), "bad_name__here");
+    }
+
+    #[test]
+    fn excel_serial_round_trips_to_the_second() {
+        for local in [
+            civil::date(2026, 6, 1).at(20, 22, 0, 0),
+            civil::date(2026, 6, 7).at(23, 41, 28, 0),
+            civil::date(2026, 11, 1).at(5, 30, 0, 0),
+            civil::date(1900, 1, 1).at(0, 0, 1, 0),
+        ] {
+            let ts = local.to_zoned(TimeZone::UTC).unwrap().timestamp();
+            assert_eq!(timestamp_of(excel_serial_utc(ts).unwrap()).unwrap(), ts);
+        }
+    }
+
+    #[test]
+    fn excel_duration_round_trips_to_the_second() {
+        for secs in [0, 1, 59, 3600, 5 * 3600 + 7 * 60 + 53, 30 * 3600] {
+            let days = excel_duration(SignedDuration::from_secs(secs));
+            assert_eq!(duration_of(days), Duration::from_secs(secs as u64));
+        }
     }
 
     #[test]
@@ -918,8 +1133,8 @@ mod test {
         let mut anomalies = Vec::new();
         let mut s = session("2026-06-01 10:00", "2026-06-01 10:00", "0:00:00");
         s.energy_use = 5.0;
-        let rows = s.resolve(&tz(), 7, &mut anomalies).unwrap();
-        assert!(!rows[0].avg_power_computable);
+        s.resolve(&tz(), 7, &mut anomalies).unwrap();
+        assert_eq!(anomalies.len(), 1);
         assert_eq!(anomalies[0].kind, AnomalyKind::ZeroActiveChargeTime);
         assert_eq!(anomalies[0].row, 7);
 
@@ -927,8 +1142,7 @@ mod test {
         let mut anomalies = Vec::new();
         let mut s = session("2026-06-01 10:00", "2026-06-01 10:00", "0:00:00");
         s.energy_use = 0.0;
-        let rows = s.resolve(&tz(), 7, &mut anomalies).unwrap();
-        assert!(rows[0].avg_power_computable);
+        s.resolve(&tz(), 7, &mut anomalies).unwrap();
         assert!(anomalies.is_empty());
     }
 
@@ -940,8 +1154,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
 
     #[test]
     fn round_trip_produces_the_expected_workbook() {
-        let dir = std::env::temp_dir().join(format!("ev_peak_excel_{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("round_trip");
         let csv_path = dir.join("Session_Report_Test.csv");
         fs::write(&csv_path, FIXTURE).unwrap();
 
@@ -980,8 +1193,8 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
             "IF(V2=0,0,V2/(T2*24))"
         );
 
-        // Sheet name is the output file's name, minus the .xlsx suffix.
-        assert_eq!(sheet.name(), "Session_Report_Test");
+        // Sheet name is the output file's name, minus the .xlsx suffix and the report prefix.
+        assert_eq!(sheet.name(), "Test");
 
         // Number formats.
         assert_eq!(
@@ -1064,6 +1277,111 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
         // The zero-energy session is present, not filtered out here.
         assert_eq!(sheet.value((col(Source::SessionId), 3)), "S13577");
 
+        // Avg_power is written on every row, the zero-energy one included, so a row that would
+        // divide by zero shows #DIV/0! rather than nothing at all.
+        assert_eq!(
+            sheet.cell((col(Source::AvgPower), 3)).unwrap().formula(),
+            "IF(V3=0,0,V3/(T3*24))"
+        );
+
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A row whose energy arrived in no time at all, alongside an ordinary one.
+    const SPIKE_FIXTURE: &str = "\
+UR_ID,Location_Address,Location_City,Location_Postal_Code,Station_ID,Station_Network_Provider,Station_Make,Station_Model,Charge_Session_ID,User_ID,Conn_DateTime_Start,Conn_DateTime_End,Conn_Duration,Charge_Duration,Active_Charge_Time,Charging_Level,Energy_Use,Total_Fee,Vehicle_Make,Vehicle_Model,Vehicle_Year
+CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S69865,,2026-06-01 16:22,2026-06-01 21:29,5:07:53,5:07:53,5:07:52,Level 2,30.6,5.63,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00001,,2026-06-03 09:00,2026-06-03 09:00,0:00:00,0:00:00,0:00:00,Level 2,4.2,0,VinFast,Vf8,2024
+";
+
+    /// Converts `csv` in a scratch directory of its own and returns the workbook path.
+    fn convert(tag: &str, csv: &str) -> PathBuf {
+        let dir = temp_dir(tag);
+        let csv_path = dir.join("Session_Report_Test.csv");
+        fs::write(&csv_path, csv).unwrap();
+        session_csv_to_xlsx(&csv_path).unwrap().output_path
+    }
+
+    #[test]
+    fn session_list_reads_back_what_was_written() {
+        let xlsx = convert("session_list", FIXTURE);
+        let report = session_list(&xlsx).unwrap();
+
+        // The zero-energy row is excluded, per README.md, "Other".
+        assert!(report.spikes.is_empty());
+        assert_eq!(report.sessions.len(), 1);
+
+        let s = &report.sessions[0];
+        assert_eq!(s.id, "S69865");
+        // 16:22 EDT is 20:22 UTC.
+        assert_eq!(s.conn_start, utc(civil::date(2026, 6, 1).at(20, 22, 0, 0)));
+        // The reported end, 21:29 EDT, unadjusted.
+        assert_eq!(s.raw_conn_end, utc(civil::date(2026, 6, 2).at(1, 29, 0, 0)));
+        // The adjusted end: 21:29:59 EDT.
+        assert_eq!(s.conn_end, utc(civil::date(2026, 6, 2).at(1, 29, 59, 0)));
+        assert_eq!(s.charge_time, Duration::from_secs(5 * 3600 + 7 * 60 + 52));
+        assert!((s.energy_use - 30.6).abs() < 1e-9);
+
+        let expected = 30.6 / (s.charge_time.as_secs_f64() / 3600.0);
+        assert!((s.avg_power - expected).abs() < 1e-9, "{}", s.avg_power);
+        // Matches the sheet's own formula, Energy_Use / (Active_Charge_Time * 24).
+        assert!(
+            (s.avg_power - 5.963_620_614_984_84).abs() < 1e-9,
+            "{}",
+            s.avg_power
+        );
+
+        fs::remove_dir_all(xlsx.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn zero_active_charge_time_becomes_a_spike() {
+        let xlsx = convert("spike", SPIKE_FIXTURE);
+        let report = session_list(&xlsx).unwrap();
+
+        assert_eq!(report.sessions.len(), 1);
+        assert_eq!(report.sessions[0].id, "S69865");
+        assert!(report.sessions[0].avg_power.is_finite());
+
+        assert_eq!(report.spikes.len(), 1);
+        let spike = &report.spikes[0];
+        assert_eq!(spike.id, "S00001");
+        assert!(spike.charge_time.is_zero());
+        assert!(spike.avg_power.is_infinite(), "{}", spike.avg_power);
+        // The energy is still there to be accounted for; that is why it is returned at all.
+        assert!((spike.energy_use - 4.2).abs() < 1e-9);
+
+        fs::remove_dir_all(xlsx.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn session_list_rejects_a_workbook_it_cannot_read_in_full() {
+        // A required column renamed out of existence.
+        let xlsx = convert("missing_header", FIXTURE);
+        let mut book = umya_spreadsheet::reader::xlsx::read(&xlsx).unwrap();
+        let start_col = column_index(Source::ConnStartUtc) as u32;
+        book.sheet_mut(0)
+            .unwrap()
+            .cell_mut((start_col, 1))
+            .set_value_string("Renamed");
+        umya_spreadsheet::writer::xlsx::write(&book, &xlsx).unwrap();
+
+        let err = session_list(&xlsx).unwrap_err().to_string();
+        assert!(err.contains("Conn_start_UTC"), "{err}");
+        fs::remove_dir_all(xlsx.parent().unwrap()).ok();
+
+        // Text where a number belongs.
+        let xlsx = convert("bad_number", FIXTURE);
+        let mut book = umya_spreadsheet::reader::xlsx::read(&xlsx).unwrap();
+        let energy_col = column_index(Source::Number("Energy_Use")) as u32;
+        book.sheet_mut(0)
+            .unwrap()
+            .cell_mut((energy_col, 2))
+            .set_value_string("n/a");
+        umya_spreadsheet::writer::xlsx::write(&book, &xlsx).unwrap();
+
+        let err = session_list(&xlsx).unwrap_err().to_string();
+        assert!(err.contains("Energy_Use") && err.contains("row 2"), "{err}");
+        fs::remove_dir_all(xlsx.parent().unwrap()).ok();
     }
 }

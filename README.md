@@ -57,4 +57,5 @@ to the peak in both candidate hours.
 
 ### Other
 
-- Sessions with zero `Energy_Use` are included in the transformation from CSV to Excel but are excluded from peak power contribution logic.
+- Sessions with zero `Energy_Use` are included in the transformation from CSV to Excel but are excluded from peak power contribution logic. `session_list` is where that exclusion happens: the workbook stays a faithful rendering of the session report, and filtering is left to the reading side.
+- A session with non-zero `Energy_Use` and zero `Active_Charge_Time` delivered energy in no time at all, so its average power is unbounded. The Excel `Avg_power` cell shows `#DIV/0!` — the formula is written on every row rather than being skipped, so the fault is visible in the sheet — and `session_list` returns the session as a *spike*, held apart from the sessions fed to the peak logic. Spikes are worth reviewing individually for their effect on the building's demand charge.
