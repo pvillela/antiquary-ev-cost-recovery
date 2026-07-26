@@ -1,4 +1,3 @@
-use chrono::{self, Datelike};
 use eframe::egui;
 use egui_extras::DatePickerButton;
 use jiff::civil::{Date, DateTime};
@@ -53,7 +52,8 @@ impl Default for MyApp {
             start_time_text: "00:00:00".to_string(),
 
             end_date_text: today.to_string(),
-            end_time_text: now.time().to_string(), // Formats automatically as HH:MM:SS
+            // `Time::to_string` includes fractional seconds, so format explicitly as HH:MM:SS
+            end_time_text: now.time().strftime("%H:%M:%S").to_string(),
 
             results: None,
             export_filename: "metrics_output.txt".to_string(),
@@ -116,11 +116,12 @@ impl MyApp {
 }
 
 impl eframe::App for MyApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    // Context-wide configuration; run before each call to `ui` below.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Makes everything 50% bigger than default
         ctx.set_zoom_factor(1.4);
         ctx.set_theme(egui::Theme::Light);
-        ctx.style_mut(|style| {
+        ctx.all_styles_mut(|style| {
             let visuals = &mut style.visuals;
 
             // Increase border stroke width and contrast for inactive widgets
@@ -136,8 +137,10 @@ impl eframe::App for MyApp {
             // Sharpen extreme background elements (TextEdits, etc.)
             // visuals.extreme_bg_color = egui::Color32::from_gray(20);
         });
+    }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(root_ui, |ui| {
             ui.heading("Excel Processor Settings (Jiff Power)");
             ui.add_space(10.0);
 
@@ -168,30 +171,21 @@ impl eframe::App for MyApp {
             // 2. Twin Interactive Date-Time Pickers
             egui::Grid::new("date_grid")
                 .spacing([10.0, 10.0])
+                // Required: without it egui cannot tell which cell is in the last column, and
+                // limits each cell to its previous-frame width, squeezing the trailing widget.
+                .num_columns(2)
                 .show(ui, |ui| {
                     // START Row
                     ui.label("Start Input:");
                     ui.horizontal(|ui| {
-                        // Interface standard library `time` compatibility for DatePickerButton
-                        let current_jiff_date: Date =
+                        // DatePickerButton operates directly on a Jiff date
+                        let mut picked_date: Date =
                             self.start_date_text.parse().unwrap_or_default();
-                        let mut temp_time_date = chrono::NaiveDate::from_ymd_opt(
-                            current_jiff_date.year() as i32,
-                            current_jiff_date.month() as u32,
-                            current_jiff_date.day() as u32,
-                        )
-                        .unwrap_or_default();
 
-                        let prev_date = temp_time_date;
-                        ui.add(DatePickerButton::new(&mut temp_time_date).id_salt("start_picker"));
-                        if temp_time_date != prev_date {
-                            if let Ok(jd) = Date::new(
-                                temp_time_date.year() as i16,
-                                temp_time_date.month() as i8,
-                                temp_time_date.day() as i8,
-                            ) {
-                                self.start_date_text = jd.to_string();
-                            }
+                        let prev_date = picked_date;
+                        ui.add(DatePickerButton::new(&mut picked_date).id_salt("start_picker"));
+                        if picked_date != prev_date {
+                            self.start_date_text = picked_date.to_string();
                         }
 
                         ui.add(
@@ -201,7 +195,7 @@ impl eframe::App for MyApp {
                         ui.label("Time:");
                         ui.add(
                             egui::TextEdit::singleline(&mut self.start_time_text)
-                                .desired_width(70.0),
+                                .desired_width(75.0),
                         );
                     });
                     ui.end_row();
@@ -209,25 +203,12 @@ impl eframe::App for MyApp {
                     // END Row
                     ui.label("End Input:");
                     ui.horizontal(|ui| {
-                        let current_jiff_date: Date =
-                            self.end_date_text.parse().unwrap_or_default();
-                        let mut temp_time_date = chrono::NaiveDate::from_ymd_opt(
-                            current_jiff_date.year() as i32,
-                            current_jiff_date.month() as u32,
-                            current_jiff_date.day() as u32,
-                        )
-                        .unwrap_or_default();
+                        let mut picked_date: Date = self.end_date_text.parse().unwrap_or_default();
 
-                        let prev_date = temp_time_date;
-                        ui.add(DatePickerButton::new(&mut temp_time_date).id_salt("end_picker"));
-                        if temp_time_date != prev_date {
-                            if let Ok(jd) = Date::new(
-                                temp_time_date.year() as i16,
-                                temp_time_date.month() as i8,
-                                temp_time_date.day() as i8,
-                            ) {
-                                self.end_date_text = jd.to_string();
-                            }
+                        let prev_date = picked_date;
+                        ui.add(DatePickerButton::new(&mut picked_date).id_salt("end_picker"));
+                        if picked_date != prev_date {
+                            self.end_date_text = picked_date.to_string();
                         }
 
                         ui.add(
@@ -235,7 +216,7 @@ impl eframe::App for MyApp {
                         );
                         ui.label("Time:");
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.end_time_text).desired_width(70.0),
+                            egui::TextEdit::singleline(&mut self.end_time_text).desired_width(75.0),
                         );
                     });
                     ui.end_row();
@@ -292,7 +273,7 @@ impl eframe::App for MyApp {
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
+                .show(root_ui.ctx(), |ui| {
                     ui.label("A file with this name already exists in the selected directory.");
                     ui.label("Do you want to overwrite it?");
                     ui.add_space(10.0);
