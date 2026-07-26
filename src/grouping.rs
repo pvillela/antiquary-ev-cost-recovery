@@ -256,7 +256,7 @@ fn end_points_to_groups<'a>(mut end_points: Vec<EndPoint<'a>>) -> Vec<SessionGro
 #[cfg(test)]
 // cargo test --package ev-peak-contrib --lib --all-features -- peak_contrib::test --nocapture
 mod test {
-    use crate::{Session, clustering::EndPoint, clustering::EndPointData};
+    use crate::{Session, grouping::EndPoint, grouping::EndPointData};
 
     #[test]
     fn test_end_point_kind_order() {

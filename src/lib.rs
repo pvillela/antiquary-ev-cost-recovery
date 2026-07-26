@@ -1,5 +1,5 @@
-mod clustering;
-pub use clustering::*;
+mod grouping;
+pub use grouping::*;
 
 mod est_peak;
 pub use est_peak::*;
