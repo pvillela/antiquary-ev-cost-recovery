@@ -1,8 +1,8 @@
 mod grouping;
 pub use grouping::*;
 
-mod est_peak;
-pub use est_peak::*;
+mod peak_est;
+pub use peak_est::*;
 
 mod excel;
 pub use excel::*;
