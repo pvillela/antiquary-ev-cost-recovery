@@ -1,5 +1,5 @@
-mod peak_contrib;
-pub use peak_contrib::*;
+mod clustering;
+pub use clustering::*;
 
 #[allow(unused)]
 mod quicksort;

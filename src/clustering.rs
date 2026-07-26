@@ -259,7 +259,7 @@ fn end_points_to_clusters<'a>(mut end_points: Vec<EndPoint<'a>>) -> Vec<Cluster<
 #[cfg(test)]
 // cargo test --package ev-peak-contrib --lib --all-features -- peak_contrib::test --nocapture
 mod test {
-    use crate::{EndPoint, Session, peak_contrib::EndPointData};
+    use crate::{EndPoint, Session, clustering::EndPointData};
 
     #[test]
     fn test_end_point_kind_order() {
