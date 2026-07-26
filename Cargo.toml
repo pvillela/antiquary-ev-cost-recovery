@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 csv = "1"
-jiff = "0.2.34"
+jiff = "0.2.35"
 umya-spreadsheet = "3.0.1"

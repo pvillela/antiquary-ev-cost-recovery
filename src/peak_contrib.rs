@@ -1,7 +1,6 @@
-use jiff::Timestamp;
-use std::{collections::BTreeSet, time::Duration};
-
 use crate::quicksort;
+use jiff::{Timestamp, Zoned, tz::TimeZone};
+use std::{collections::BTreeSet, time::Duration};
 
 pub const BREAKER_MAX_KW: f64 = 6.7;
 pub const BREAKER_MAX_KVA: f64 = 7.5;
@@ -9,6 +8,10 @@ pub const BREAKER_MAX_KVA: f64 = 7.5;
 /// Sessions whose overlap with the interval of interest is less than or equal to this
 /// are excluded from the calculations.
 pub const OVERLAP_THRESHOLD: Duration = Duration::from_secs(60);
+
+fn time_zone() -> TimeZone {
+    TimeZone::get("America/Toronto").expect("America/Toronto should be a valid time-zone name")
+}
 
 #[derive(Debug)]
 /// Charging session
@@ -29,6 +32,23 @@ pub struct Session {
     pub energy_use: f64,
     /// `energy_use / charge_time in hours`.
     pub avg_power: f64,
+}
+
+impl Session {
+    /// Connection start in local time (ET).
+    pub fn conn_start_local(&self) -> Zoned {
+        Zoned::new(self.conn_start, time_zone())
+    }
+
+    /// Non-adjusted conection end in local time (ET).
+    pub fn raw_conn_end_local(&self) -> Zoned {
+        Zoned::new(self.raw_conn_end, time_zone())
+    }
+
+    /// Adjusted conection end in local time (ET).
+    pub fn conn_end_local(&self) -> Zoned {
+        Zoned::new(self.conn_end, time_zone())
+    }
 }
 
 impl PartialEq for Session {
@@ -188,14 +208,17 @@ impl<'a> ClusterState<'a> {
 //
 //       |2-|3-----|2--|3-----|2--|1--|
 
-pub fn driver<'a>(interval: (Timestamp, Timestamp), sessions: &'a [Session]) -> Vec<Cluster<'a>> {
-    let end_points = end_points(interval, sessions, OVERLAP_THRESHOLD);
-    clusters(end_points)
+pub fn clusters_for_interval<'a>(
+    interval: (Timestamp, Timestamp),
+    sessions: &'a [Session],
+) -> Vec<Cluster<'a>> {
+    let end_points = end_points_for_interval(interval, sessions, OVERLAP_THRESHOLD);
+    end_points_to_clusters(end_points)
 }
 
 /// Returns an unsorted list of end-points corresponding to the sessions that non-trivially intersect
 /// `interval`.
-fn end_points<'a>(
+fn end_points_for_interval<'a>(
     interval: (Timestamp, Timestamp),
     sessions: &'a [Session],
     overlap_threshold: Duration,
@@ -220,7 +243,7 @@ fn end_points<'a>(
     end_points
 }
 
-fn clusters<'a>(mut end_points: Vec<EndPoint<'a>>) -> Vec<Cluster<'a>> {
+fn end_points_to_clusters<'a>(mut end_points: Vec<EndPoint<'a>>) -> Vec<Cluster<'a>> {
     quicksort(&mut end_points);
 
     let mut state = ClusterState::default();
