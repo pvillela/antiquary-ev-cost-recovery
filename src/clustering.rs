@@ -2,9 +2,6 @@ use crate::quicksort;
 use jiff::{Timestamp, Zoned, tz::TimeZone};
 use std::{collections::BTreeSet, time::Duration};
 
-pub const BREAKER_MAX_KW: f64 = 6.7;
-pub const BREAKER_MAX_KVA: f64 = 7.5;
-
 /// Sessions whose overlap with the interval of interest is less than or equal to this
 /// are excluded from the calculations.
 pub const OVERLAP_THRESHOLD: Duration = Duration::from_secs(60);
@@ -72,13 +69,13 @@ impl Ord for Session {
 }
 
 #[derive(Debug, PartialEq, PartialOrd)]
-pub enum EndPoint<'a> {
+enum EndPoint<'a> {
     Left(EndPointData<'a>),
     Right(EndPointData<'a>),
 }
 
 #[derive(Debug, Clone)]
-pub struct EndPointData<'a> {
+struct EndPointData<'a> {
     time: Timestamp,
     session: &'a Session,
 }
@@ -259,7 +256,7 @@ fn end_points_to_clusters<'a>(mut end_points: Vec<EndPoint<'a>>) -> Vec<Cluster<
 #[cfg(test)]
 // cargo test --package ev-peak-contrib --lib --all-features -- peak_contrib::test --nocapture
 mod test {
-    use crate::{EndPoint, Session, clustering::EndPointData};
+    use crate::{Session, clustering::EndPoint, clustering::EndPointData};
 
     #[test]
     fn test_end_point_kind_order() {
