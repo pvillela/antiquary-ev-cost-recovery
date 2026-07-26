@@ -99,13 +99,13 @@ impl<'a> PartialOrd for EndPointData<'a> {
 #[derive(Debug, Clone)]
 /// Collection of sessions that have non-trivial intersections with each other and with the interval
 /// of interest.
-pub struct Cluster<'a> {
+pub struct SessionGroup<'a> {
     start: Timestamp,
     end: Timestamp,
     pub(crate) sessions: BTreeSet<&'a Session>,
 }
 
-impl<'a> Default for Cluster<'a> {
+impl<'a> Default for SessionGroup<'a> {
     fn default() -> Self {
         Self {
             start: Timestamp::MIN,
@@ -115,7 +115,7 @@ impl<'a> Default for Cluster<'a> {
     }
 }
 
-impl<'a> Cluster<'a> {
+impl<'a> SessionGroup<'a> {
     fn new(data: EndPointData<'a>) -> Self {
         let mut sessions = BTreeSet::new();
         sessions.insert(data.session);
@@ -139,59 +139,59 @@ impl<'a> Cluster<'a> {
     }
 
     fn remove_sessions(&mut self, remove_list: &mut Vec<&Session>) -> Self {
-        let old_cluster = self.clone();
+        let old_group = self.clone();
         remove_list.iter().for_each(|s| {
             self.sessions.remove(*s);
         });
         self.end = Timestamp::MAX;
-        old_cluster
+        old_group
     }
 }
 
 #[derive(Default)]
-struct ClusterState<'a> {
-    clusters: Vec<Cluster<'a>>,
-    curr_cluster: Cluster<'a>,
+struct GroupState<'a> {
+    groups: Vec<SessionGroup<'a>>,
+    curr_group: SessionGroup<'a>,
     remove_list: Vec<&'a Session>,
 }
 
-impl<'a> ClusterState<'a> {
+impl<'a> GroupState<'a> {
     fn process_left_edge(&mut self, data: EndPointData<'a>) {
-        let cluster = &mut self.curr_cluster;
-        if cluster.sessions.is_empty() {
-            self.curr_cluster = Cluster::new(data);
+        let group = &mut self.curr_group;
+        if group.sessions.is_empty() {
+            self.curr_group = SessionGroup::new(data);
         } else {
-            let old_cluster = cluster.remove_sessions(&mut self.remove_list);
-            self.clusters.push(old_cluster);
-            if cluster.start == data.time {
-                cluster.sessions.insert(data.session);
+            let old_group = group.remove_sessions(&mut self.remove_list);
+            self.groups.push(old_group);
+            if group.start == data.time {
+                group.sessions.insert(data.session);
             } else {
-                let mut old_cluster = cluster.clone();
-                old_cluster.end = data.time;
-                self.clusters.push(old_cluster);
-                cluster.start = data.time;
-                cluster.end = Timestamp::MAX;
-                cluster.sessions.insert(data.session);
+                let mut old_group = group.clone();
+                old_group.end = data.time;
+                self.groups.push(old_group);
+                group.start = data.time;
+                group.end = Timestamp::MAX;
+                group.sessions.insert(data.session);
             }
         }
     }
 
     fn process_right_edge(&mut self, data: EndPointData<'a>) {
-        let cluster = &mut self.curr_cluster;
-        if cluster.sessions.is_empty() {
+        let group = &mut self.curr_group;
+        if group.sessions.is_empty() {
             panic!("illegal state");
         } else {
-            if cluster.end == Timestamp::MAX {
-                cluster.end = data.time
+            if group.end == Timestamp::MAX {
+                group.end = data.time
             }
 
-            if cluster.end == data.time {
+            if group.end == data.time {
                 self.remove_list.push(data.session);
             } else {
-                let old_cluster = cluster.remove_sessions(&mut self.remove_list);
-                cluster.start = old_cluster.end;
-                cluster.end = data.time;
-                self.clusters.push(old_cluster);
+                let old_group = group.remove_sessions(&mut self.remove_list);
+                group.start = old_group.end;
+                group.end = data.time;
+                self.groups.push(old_group);
             }
         }
     }
@@ -205,12 +205,12 @@ impl<'a> ClusterState<'a> {
 //
 //       |2-|3-----|2--|3-----|2--|1--|
 
-pub fn clusters_for_interval<'a>(
+pub fn groups_for_interval<'a>(
     interval: (Timestamp, Timestamp),
     sessions: &'a [Session],
-) -> Vec<Cluster<'a>> {
+) -> Vec<SessionGroup<'a>> {
     let end_points = end_points_for_interval(interval, sessions, OVERLAP_THRESHOLD);
-    end_points_to_clusters(end_points)
+    end_points_to_groups(end_points)
 }
 
 /// Returns an unsorted list of end-points corresponding to the sessions that non-trivially intersect
@@ -240,17 +240,17 @@ fn end_points_for_interval<'a>(
     end_points
 }
 
-fn end_points_to_clusters<'a>(mut end_points: Vec<EndPoint<'a>>) -> Vec<Cluster<'a>> {
+fn end_points_to_groups<'a>(mut end_points: Vec<EndPoint<'a>>) -> Vec<SessionGroup<'a>> {
     quicksort(&mut end_points);
 
-    let mut state = ClusterState::default();
+    let mut state = GroupState::default();
     for end_point in end_points {
         match end_point {
             EndPoint::Left(data) => state.process_left_edge(data),
             EndPoint::Right(data) => state.process_right_edge(data),
         }
     }
-    state.clusters
+    state.groups
 }
 
 #[cfg(test)]
