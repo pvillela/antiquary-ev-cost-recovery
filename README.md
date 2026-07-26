@@ -18,7 +18,7 @@ Given a time interval of interest **`I`** as described above, the estimation of 
 
 - From the Evolute monthly session report, identify all charging sessions that intersect the interval of interest `I`.
 - At any time **`t`** within the interval of interest, the set of EV charging sessions that contain `t` can be determined. Such a set may be empty, contain a single session, or contain multiple sessions.
-- The sets of EV charging sessions that are concurrently active may change a finite number of times during the interval of interest. These are called **`SessionGroup`**s.
+- The sets of EV charging sessions that are concurrently active may change a finite number of times during the interval of interest. These are called <strong>`SessionGroup`</strong>s.
 - The algorithm implemented by this software identifies all non-empty `SessionGroup`s for the given interval of interest `I`.
 - For each `SessionGroup`, the algorithm computes the following values:
   - **`avg_kw`**:  sum over all sessions in the `SessionGroup` of each session's average power demand. For each session, the average power demand is the session's total energy consumption divided by the session's charging time.
