@@ -105,7 +105,7 @@ impl<'a> PartialOrd for EndPointData<'a> {
 pub struct Cluster<'a> {
     start: Timestamp,
     end: Timestamp,
-    sessions: BTreeSet<&'a Session>,
+    pub(crate) sessions: BTreeSet<&'a Session>,
 }
 
 impl<'a> Default for Cluster<'a> {
