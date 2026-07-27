@@ -8,9 +8,15 @@ This software supports the estimation of the impact of EV charging on the buildi
 
 For a given billing period, we can identify the time intervals in which the peak kW and kVA occurred based on metering data downloads from Toronto Hydro.
 
-Given a time interval of interest, this software estimates the peak kW and kVA demand associated with EV charging activity during the interval.
+Given a time interval of interest, this software estimates the peak kW and kVA demand associated with EV charging activity during the interval. The data source for EV power demand is the Evolute monthly session report.
 
-The data source for EV power demand is the Evolute monthly session report.
+**Interval of interest boundaries** are constrained as follows:
+
+- The left and right end-points are always of the form HH:00:00 or HH:15:00 or HH:30:00 or HH:45:00.
+- The difference between the right end-point and the left end-point can be either:
+  - 1 hour -- only if the left end-point is of the form HH:00:00.
+  - 15 minutes -- in all four cases.
+- The interval is half-open: it includes the left end-point and excludes the right end-point.
 
 ### Estimation logic
 
@@ -45,6 +51,10 @@ This is the typical workflow used with this software to estimate the impact of E
   - Access the relevant Excel file and compute the peak kW and kVA brackets for the interval(s) of interest.
 
 ## Technical Notes
+
+### Session boundaries
+
+Unlike intervals of interest, which include the left end but exclude the right end, sessions are closed intervals, i.e., both end-points are included. Because reported session start and end times are truncated to whole minutes, this software calculates an adjusted session end time, by adding 59 seconds to the reported end time, to ensure the actual charge time is fully included between the session's start and end.
 
 ### Time zone
 
@@ -95,11 +105,19 @@ to the peak in both candidate hours.
 
 - Session report session start and end times do not include seconds. Therefore, the following transformations are done during data ingestion:
   - Session start time `Conn_DateTime_Start` stays the same.
-  - A new field, adjusted session end time `Adj_conn_end` is computed as: `min(Conn_DateTime_Start + 59 seconds + Conn_Duration, Conn_DateTime_End + 59 seconds)`. This formula can be simplified as `min(Conn_DateTime_Start + Conn_Duration, Conn_DateTime_End) + 59 seconds`, but its intent is more obvious in the longer form.
-  - A new field, adjusted session duration `Adj_conn_duration` is computed as: `Adj_conn_end - Conn_DateTime_Start`.
+  - A new field, adjusted session end time `Adj_conn_end`, is computed as: `Conn_DateTime_End + 59 seconds`.
+  - A new field, adjusted session duration `Adj_conn_duration`, is computed as: `Adj_conn_end - Conn_DateTime_Start`.
   - Three new fields are added: `Conn_start_UTC`, `Conn_end_UTC`, and `Adj_conn_end_UTC`, with UTC values corresponding to the corresponding local time fields.
+  - A new field, `Avg_power` in kW, is computed as: `Energy_Use / (Active_Charge_Time * 24)`.
+  - A new field, `Anomalies`, containing a comma-separated list of `AnomalyKind`, is added as the last column.
 
 ### Other
 
-- Sessions with zero `Energy_Use` are included in the transformation from CSV to Excel but are excluded from peak power contribution logic. `session_list` is where that exclusion happens: the workbook stays a faithful rendering of the session report, and filtering is left to the reading side.
-- A session with non-zero `Energy_Use` and zero `Active_Charge_Time` delivered energy in no time at all, so its average power is unbounded. The Excel `Avg_power` cell shows `#DIV/0!` — the formula is written on every row rather than being skipped, so the fault is visible in the sheet — and `session_list` returns the session as a *spike*, held apart from the sessions fed to the peak logic. Spikes are worth reviewing individually for their effect on the building's demand charge.
+- Anomalous sessions whose `Conn_DateTime_End` is less than `Conn_DateTime_Start` are excluded from the estimates. These are the only sessions excluded from the estimates.
+- Sessions with zero `Energy_Use` and non-zero `Active_Charge_Time` do not contribute to `consumption_based_kw` and `consumption_based_kva` but they do contribute to `breaker_spec_based_kw` and `breaker_spec_based_kva`.
+- A session with zero `Active_Charge_Time` delivered energy in no time at all, so its average power is unbounded or undefined.
+  - The Excel `Avg_power` cell shows `#DIV/0!` — the formula is written on every row rather than being skipped, so the fault is visible in the sheet. Function `session_list` returns the session as a *spike*, held apart from the normal sessions fed to the peak logic.
+  - Spikes are worth reviewing individually for their effect on the building's demand charge.
+  - The power estimating logic treats spikes as follows:
+    - If `Energy_Use == 0`, set `Avg_power` to 0. These sessions do not contribute to `consumption_based_kw` and `consumption_based_kva` but they do contribute to `breaker_spec_based_kw` and `breaker_spec_based_kva`.
+    - Otherwise, set `Avg_power` to the constant `EVOLUTE_BREAKER_KW_RATING`. These sessions contribute to all four estimate types.

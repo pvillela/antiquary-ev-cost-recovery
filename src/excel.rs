@@ -12,10 +12,7 @@ use jiff::{
 };
 use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
 
-use crate::Session;
-
-/// Time zone the session report's timestamps are stated in. See README.md, "Time zone".
-const TZ_NAME: &str = "America/Toronto";
+use crate::{Anomaly, AnomalyKind, Session, TIME_ZONE_NAME, time_zone};
 
 /// Excel's day-zero for the 1900 date system, as a Unix timestamp.
 /// 1899-12-30T00:00:00Z; verified by [`test::excel_epoch_constant_matches_jiff`].
@@ -38,49 +35,6 @@ pub struct ConversionReport {
     pub output_path: PathBuf,
     /// Rows that needed a judgement call. Empty for a clean conversion.
     pub anomalies: Vec<Anomaly>,
-}
-
-/// A single row that needed a judgement call. Does not abort the conversion.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Anomaly {
-    /// 1-based CSV data row, excluding the header.
-    pub row: usize,
-    pub session_id: String,
-    pub kind: AnomalyKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnomalyKind {
-    /// `Active_Charge_Time` is zero on a session that reported non-zero `Energy_Use`, so the
-    /// session delivered energy in no time at all and its `Avg_power` cell shows `#DIV/0!`.
-    ZeroActiveChargeTime,
-    /// The start fell in the DST fold and both offsets reproduce the reported end,
-    /// so the record was duplicated. See README.md, "Time zone".
-    DstAmbiguousDuplicated,
-    /// The start fell in the DST gap, i.e. a wall time that never occurred.
-    /// Resolved forward to the instant just after the gap.
-    DstGapShifted,
-    /// The start fell in the DST fold and *neither* offset reproduces the reported end.
-    /// The earlier offset was assumed.
-    DstUnresolvable,
-}
-
-impl fmt::Display for AnomalyKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Self::ZeroActiveChargeTime => "zero Active_Charge_Time with non-zero Energy_Use",
-            Self::DstAmbiguousDuplicated => "ambiguous DST fold; record duplicated as EDT and EST",
-            Self::DstGapShifted => "local time falls in the DST gap; resolved forward",
-            Self::DstUnresolvable => "DST fold matches neither offset; assumed the earlier one",
-        };
-        f.write_str(s)
-    }
-}
-
-impl fmt::Display for Anomaly {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "row {} ({}): {}", self.row, self.session_id, self.kind)
-    }
 }
 
 /// How an output column is populated.
@@ -170,9 +124,9 @@ const REQUIRED_HEADERS: &[&str] = &[
 ///   past 24 hours, and are centered.
 /// - `Adj_conn_duration` and `Avg_power` are live formulas. `Adj_conn_duration` subtracts the two
 ///   *UTC* columns, so it is true elapsed time even across a DST fold; `Avg_power` is
-///   `=IF(Energy_Use=0, 0, Energy_Use/(Active_Charge_Time*24))`, in kW, displayed to 3 decimal
+///   `=Energy_Use/(Active_Charge_Time*24)`, in kW, displayed to 3 decimal
 ///   places, matching `Energy_Use`. The formula is written on every row, so a session with
-///   non-zero energy and zero `Active_Charge_Time` shows `#DIV/0!` rather than an empty cell:
+///   zero `Active_Charge_Time` shows `#DIV/0!` rather than an empty cell:
 ///   it delivered energy in no time at all, and the sheet says so. `Total_Fee` is displayed to
 ///   2 decimal places.
 /// - The remaining columns are copied over with an explicit per-column type, so values that merely
@@ -189,7 +143,7 @@ const REQUIRED_HEADERS: &[&str] = &[
 /// workbook cannot be written. Per-row judgement calls do not abort the conversion; they are
 /// collected in [`ConversionReport::anomalies`].
 pub fn session_csv_to_xlsx(path: &Path) -> Result<ConversionReport, Box<dyn Error>> {
-    let tz = TimeZone::get(TZ_NAME)?;
+    let tz = time_zone();
     let (headers, records) = read_csv(path)?;
 
     let mut anomalies = Vec::new();
@@ -343,8 +297,7 @@ impl CsvSession {
         row: usize,
         anomalies: &mut Vec<Anomaly>,
     ) -> Result<Vec<Row>, Box<dyn Error>> {
-        // Avg_power is a division by Active_Charge_Time; zero energy short-circuits to zero in the
-        // sheet, so only a non-zero-energy session with no charge time is a problem. The sheet
+        // Avg_power is a division by Active_Charge_Time. The sheet
         // shows it as #DIV/0!; it is reported here so it is not left to be noticed by eye.
         if self.energy_use != 0.0 && self.active_charge_time.is_zero() {
             anomalies.push(Anomaly {
@@ -593,11 +546,11 @@ fn write_sheet(
                     set_duration_style(sheet, col, excel_row);
                 }
                 Source::AvgPower => {
-                    // Written unconditionally: with zero Active_Charge_Time and non-zero energy
+                    // Written unconditionally: with zero Active_Charge_Time
                     // this evaluates to #DIV/0!, which is the honest answer — energy delivered in
-                    // no time at all has no finite average power. Zero energy yields zero.
+                    // no time at all has no finite average power.
                     sheet.cell_mut((col, excel_row)).set_formula(format!(
-                        "IF({energy_col}{excel_row}=0,0,{energy_col}{excel_row}/({active_col}{excel_row}*24))"
+                        "{energy_col}{excel_row}/({active_col}{excel_row}*24)"
                     ));
                     set_format(sheet, col, excel_row, AVG_POWER_FORMAT);
                 }
@@ -796,21 +749,19 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
         }
 
         let energy_use = number(sheet, &headers, "Energy_Use", row)?;
-        if energy_use == 0.0 {
-            continue;
-        }
-
         let charge_time = duration_of(number(sheet, &headers, "Active_Charge_Time", row)?);
         let session = Session {
             id,
+            row: todo!(),
             conn_start: timestamp_of(number(sheet, &headers, "Conn_start_UTC", row)?)?,
             raw_conn_end: timestamp_of(number(sheet, &headers, "Conn_end_UTC", row)?)?,
             conn_end: timestamp_of(number(sheet, &headers, "Adj_conn_end_UTC", row)?)?,
             charge_time,
             energy_use,
-            // Zero charge time makes this infinite, which is the answer: the division is left to
+            // Zero charge time makes this infinite or NAN, which is the answer: the division is left to
             // say so rather than being guarded against.
             avg_power: energy_use / (charge_time.as_secs_f64() / 3600.0),
+            anomalies: todo!(),
         };
 
         if charge_time.is_zero() {
@@ -873,11 +824,8 @@ fn duration_of(days: f64) -> Duration {
 // cargo test --package ev-peak-contrib --lib --all-features -- excel::test --nocapture
 mod test {
     use super::*;
+    use crate::time_zone;
     use std::fs;
-
-    fn tz() -> TimeZone {
-        TimeZone::get(TZ_NAME).unwrap()
-    }
 
     fn dt(s: &str) -> civil::DateTime {
         civil::DateTime::strptime("%Y-%m-%d %H:%M", s).unwrap()
@@ -895,7 +843,7 @@ mod test {
     }
 
     fn local_of(ts: Timestamp) -> civil::DateTime {
-        ts.to_zoned(tz()).datetime()
+        ts.to_zoned(time_zone()).datetime()
     }
 
     fn utc(dt: civil::DateTime) -> Timestamp {
@@ -999,7 +947,7 @@ mod test {
 
         // end < start + duration: the reported end binds. 16:22 + 5:07:53 = 21:29:53 > 21:29.
         let rows = session("2026-06-01 16:22", "2026-06-01 21:29", "5:07:53")
-            .resolve(&tz(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1, &mut anomalies)
             .unwrap();
         assert_eq!(
             local_of(rows[0].adj_end_utc),
@@ -1008,7 +956,7 @@ mod test {
 
         // start + duration <= end: the computed end binds. 16:42 + 6:58:29 = 23:40:29.
         let rows = session("2026-06-07 16:42", "2026-06-07 23:41", "6:58:29")
-            .resolve(&tz(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1, &mut anomalies)
             .unwrap();
         assert_eq!(
             local_of(rows[0].adj_end_utc),
@@ -1031,7 +979,7 @@ mod test {
         for (start, end, conn) in cases {
             let mut anomalies = Vec::new();
             let s = session(start, end, conn);
-            let rows = s.resolve(&tz(), 1, &mut anomalies).unwrap();
+            let rows = s.resolve(&time_zone(), 1, &mut anomalies).unwrap();
             let row = &rows[0];
             assert!(
                 row.adj_end_utc >= row.end_utc,
@@ -1048,7 +996,7 @@ mod test {
     fn utc_conversion_uses_edt_in_june() {
         let mut anomalies = Vec::new();
         let rows = session("2026-06-01 16:22", "2026-06-01 21:29", "5:07:53")
-            .resolve(&tz(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1, &mut anomalies)
             .unwrap();
         assert_eq!(
             rows[0].start_utc.to_zoned(TimeZone::UTC).datetime(),
@@ -1062,7 +1010,7 @@ mod test {
         let mut anomalies = Vec::new();
         // 01:30 EDT + 3h elapsed = 03:30 EST. Starting at 01:30 EST would end at 04:30.
         let rows = session("2026-11-01 01:30", "2026-11-01 03:30", "3:00:00")
-            .resolve(&tz(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1, &mut anomalies)
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(
@@ -1078,7 +1026,7 @@ mod test {
     fn dst_fold_ambiguous_duplicates_the_record() {
         let mut anomalies = Vec::new();
         let rows = session("2026-11-01 01:10", "2026-11-01 01:40", "0:30:00")
-            .resolve(&tz(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1, &mut anomalies)
             .unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, "S1-EDT");
@@ -1097,7 +1045,7 @@ mod test {
     fn dst_gap_resolves_forward_and_reports() {
         let mut anomalies = Vec::new();
         let rows = session("2026-03-08 02:30", "2026-03-08 04:00", "0:30:00")
-            .resolve(&tz(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1, &mut anomalies)
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(local_of(rows[0].start_utc), dt("2026-03-08 03:30"));
@@ -1111,7 +1059,7 @@ mod test {
     fn fold_spanning_session_has_true_elapsed_duration() {
         let mut anomalies = Vec::new();
         let rows = session("2026-11-01 00:30", "2026-11-01 02:30", "3:00:00")
-            .resolve(&tz(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1, &mut anomalies)
             .unwrap();
         let row = &rows[0];
         let elapsed = row.adj_end_utc.duration_since(row.start_utc);
@@ -1129,11 +1077,11 @@ mod test {
     }
 
     #[test]
-    fn zero_active_charge_time_with_energy_is_reported() {
+    fn zero_active_charge_time_is_reported() {
         let mut anomalies = Vec::new();
         let mut s = session("2026-06-01 10:00", "2026-06-01 10:00", "0:00:00");
         s.energy_use = 5.0;
-        s.resolve(&tz(), 7, &mut anomalies).unwrap();
+        s.resolve(&time_zone(), 7, &mut anomalies).unwrap();
         assert_eq!(anomalies.len(), 1);
         assert_eq!(anomalies[0].kind, AnomalyKind::ZeroActiveChargeTime);
         assert_eq!(anomalies[0].row, 7);
@@ -1142,8 +1090,10 @@ mod test {
         let mut anomalies = Vec::new();
         let mut s = session("2026-06-01 10:00", "2026-06-01 10:00", "0:00:00");
         s.energy_use = 0.0;
-        s.resolve(&tz(), 7, &mut anomalies).unwrap();
-        assert!(anomalies.is_empty());
+        s.resolve(&time_zone(), 7, &mut anomalies).unwrap();
+        assert_eq!(anomalies.len(), 1);
+        assert_eq!(anomalies[0].kind, AnomalyKind::ZeroActiveChargeTime);
+        assert_eq!(anomalies[0].row, 7);
     }
 
     const FIXTURE: &str = "\

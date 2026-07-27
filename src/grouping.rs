@@ -1,76 +1,11 @@
-use crate::quicksort;
-use jiff::{Timestamp, Zoned, tz::TimeZone};
+use crate::{Anomaly, AnomalyKind, OVERLAP_THRESHOLD, RSession, Session, quicksort};
+use jiff::Timestamp;
 use std::{
-    collections::{BTreeSet, btree_set::Iter},
+    cell::{Ref, RefCell},
+    collections::{BTreeMap, BTreeSet, btree_set::Iter},
     rc::Rc,
     time::Duration,
 };
-
-/// Sessions whose overlap with the interval of interest is less than or equal to this
-/// are excluded from the calculations.
-pub const OVERLAP_THRESHOLD: Duration = Duration::from_secs(60);
-
-fn time_zone() -> TimeZone {
-    TimeZone::get("America/Toronto").expect("America/Toronto should be a valid time-zone name")
-}
-
-#[derive(Debug)]
-/// Charging session
-pub struct Session {
-    /// From `session report`.
-    pub id: String,
-    /// Conection start date-time (UTC) from `session report`.
-    pub conn_start: Timestamp,
-    /// Non-adjusted conection end date-time (UTC) from `session report`.
-    pub raw_conn_end: Timestamp,
-    /// Adjusted conection end date-time (UTC) from `session report`.
-    pub conn_end: Timestamp,
-    /// Active charge time from `session report`.
-    /// May differ from `conn_end - conn_start` due to `conn_end` for various reasons, including
-    /// ingestion adjustment.
-    pub charge_time: Duration,
-    /// From `session report`.
-    pub energy_use: f64,
-    /// `energy_use / charge_time in hours`.
-    pub avg_power: f64,
-}
-
-impl Session {
-    /// Connection start in local time (ET).
-    pub fn conn_start_local(&self) -> Zoned {
-        Zoned::new(self.conn_start, time_zone())
-    }
-
-    /// Non-adjusted conection end in local time (ET).
-    pub fn raw_conn_end_local(&self) -> Zoned {
-        Zoned::new(self.raw_conn_end, time_zone())
-    }
-
-    /// Adjusted conection end in local time (ET).
-    pub fn conn_end_local(&self) -> Zoned {
-        Zoned::new(self.conn_end, time_zone())
-    }
-}
-
-impl PartialEq for Session {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for Session {}
-
-impl PartialOrd for Session {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.id.partial_cmp(&other.id)
-    }
-}
-
-impl Ord for Session {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.id.cmp(&other.id)
-    }
-}
 
 #[derive(Debug, PartialEq, PartialOrd)]
 enum EndPoint {
@@ -81,12 +16,13 @@ enum EndPoint {
 #[derive(Debug, Clone)]
 struct EndPointData {
     time: Timestamp,
-    session: Rc<Session>,
+    session: RSession,
 }
 
 impl PartialEq for EndPointData {
     fn eq(&self, other: &Self) -> bool {
-        self.time == other.time && self.session.id == other.session.id
+        self.time == other.time
+            && self.session.as_ref().borrow().id == other.session.as_ref().borrow().id
     }
 }
 
@@ -96,7 +32,11 @@ impl PartialOrd for EndPointData {
             Some(core::cmp::Ordering::Equal) => {}
             ord => return ord,
         }
-        self.session.id.partial_cmp(&other.session.id)
+        self.session
+            .as_ref()
+            .borrow()
+            .id
+            .partial_cmp(&other.session.as_ref().borrow().id)
     }
 }
 
@@ -106,18 +46,18 @@ impl PartialOrd for EndPointData {
 pub struct SessionGroup {
     start: Timestamp,
     end: Timestamp,
-    sessions: BTreeSet<Rc<Session>>,
+    sessions: BTreeSet<RSession>,
 }
 
-pub struct SessionIter<'a>(Iter<'a, Rc<Session>>);
+pub struct SessionIter<'a>(Iter<'a, RSession>);
 
 impl<'a> Iterator for SessionIter<'a> {
-    type Item = &'a Session;
+    type Item = Ref<'a, Session>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.0.next() {
             None => None,
-            Some(rc) => Some(rc.as_ref()),
+            Some(rs) => Some(RefCell::borrow(rs)),
         }
     }
 }
@@ -134,7 +74,7 @@ impl Default for SessionGroup {
 
 impl SessionGroup {
     fn new(data: EndPointData) -> Self {
-        let mut sessions = BTreeSet::<Rc<Session>>::new();
+        let mut sessions = BTreeSet::<RSession>::new();
         sessions.insert(data.session);
         Self {
             start: data.time,
@@ -156,7 +96,10 @@ impl SessionGroup {
     }
 
     pub fn agg_avg_power(&self) -> f64 {
-        self.sessions.iter().map(|sess| sess.avg_power).sum()
+        self.sessions
+            .iter()
+            .map(|s| s.as_ref().borrow().avg_power)
+            .sum()
     }
 
     pub fn session_count(&self) -> usize {
@@ -167,7 +110,7 @@ impl SessionGroup {
         Duration::try_from(self.end - self.start).expect("span should be at most a few hours")
     }
 
-    fn remove_sessions(&mut self, remove_list: &mut Vec<Rc<Session>>) -> Self {
+    fn remove_sessions(&mut self, remove_list: &mut Vec<RSession>) -> Self {
         let old_group = self.clone();
         remove_list.iter().for_each(|s| {
             self.sessions.remove(s);
@@ -178,10 +121,16 @@ impl SessionGroup {
 }
 
 #[derive(Default)]
-struct GroupState {
+pub struct SessionGroupReport {
     groups: Vec<SessionGroup>,
+    anomalies: BTreeMap<Rc<Session>, Vec<Anomaly>>,
+}
+
+#[derive(Default)]
+struct GroupState {
+    report: SessionGroupReport,
     curr_group: SessionGroup,
-    remove_list: Vec<Rc<Session>>,
+    remove_list: Vec<RSession>,
 }
 
 impl GroupState {
@@ -191,13 +140,13 @@ impl GroupState {
             self.curr_group = SessionGroup::new(data);
         } else {
             let old_group = group.remove_sessions(&mut self.remove_list);
-            self.groups.push(old_group);
+            self.report.groups.push(old_group);
             if group.start == data.time {
                 group.sessions.insert(data.session);
             } else {
                 let mut old_group = group.clone();
                 old_group.end = data.time;
-                self.groups.push(old_group);
+                self.report.groups.push(old_group);
                 group.start = data.time;
                 group.end = Timestamp::MAX;
                 group.sessions.insert(data.session);
@@ -220,7 +169,7 @@ impl GroupState {
                 let old_group = group.remove_sessions(&mut self.remove_list);
                 group.start = old_group.end;
                 group.end = data.time;
-                self.groups.push(old_group);
+                self.report.groups.push(old_group);
             }
         }
     }
@@ -236,7 +185,7 @@ impl GroupState {
 
 pub fn groups_for_interval(
     interval: (Timestamp, Timestamp),
-    sessions: &[Rc<Session>],
+    sessions: &mut Vec<RSession>,
 ) -> Vec<SessionGroup> {
     let end_points = end_points_for_interval(interval, sessions, OVERLAP_THRESHOLD);
     end_points_to_groups(end_points)
@@ -246,24 +195,48 @@ pub fn groups_for_interval(
 /// `interval`.
 fn end_points_for_interval(
     interval: (Timestamp, Timestamp),
-    sessions: &[Rc<Session>],
+    sessions: &mut Vec<RSession>,
     overlap_threshold: Duration,
 ) -> Vec<EndPoint> {
-    let lo = interval.0 + overlap_threshold;
-    let hi = interval.1 - overlap_threshold;
+    let lo = interval.0;
+    let hi = interval.1;
+    let lo_t = lo + overlap_threshold;
+    let hi_t = hi - overlap_threshold;
     let mut end_points = Vec::<EndPoint>::new();
-    for session in sessions {
-        if session.conn_start < hi && session.conn_end >= lo {
+    for s in sessions {
+        if s.as_ref().borrow().conn_start < hi_t && s.as_ref().borrow().conn_end >= lo_t {
+            let s_mut = &mut s.borrow_mut();
+
             let left = EndPoint::Left(EndPointData {
-                time: session.conn_start.max(lo),
-                session: session.clone(),
+                time: s_mut.conn_start.max(lo_t),
+                session: s.clone(),
             });
             let right = EndPoint::Right(EndPointData {
-                time: session.conn_end.min(hi),
-                session: session.clone(),
+                time: s_mut.conn_end.min(hi_t),
+                session: s.clone(),
             });
             end_points.push(left);
             end_points.push(right);
+
+            // Anomaly checking for included sessions.
+            if s_mut.charge_time.is_zero() {
+                let row = s_mut.row;
+                let session_id = s_mut.id.clone();
+                s_mut.anomalies.push(Anomaly {
+                    row,
+                    session_id,
+                    kind: AnomalyKind::ZeroActiveChargeTime,
+                });
+            }
+        } else if s.as_ref().borrow().conn_start < hi_t && s.as_ref().borrow().conn_end >= lo_t {
+            let s_mut = &mut s.borrow_mut();
+            let row = s_mut.row;
+            let session_id = s_mut.id.clone();
+            s_mut.anomalies.push(Anomaly {
+                row,
+                session_id,
+                kind: AnomalyKind::IntersectsBelowThreshold,
+            });
         }
     }
     end_points
@@ -279,7 +252,7 @@ fn end_points_to_groups(mut end_points: Vec<EndPoint>) -> Vec<SessionGroup> {
             EndPoint::Right(data) => state.process_right_edge(data),
         }
     }
-    state.groups
+    state.report.groups
 }
 
 #[cfg(test)]
@@ -289,15 +262,17 @@ mod test {
 
     #[test]
     fn test_end_point_kind_order() {
-        let session = Rc::new(Session {
+        let session = Rc::new(RefCell::new(Session {
             id: Default::default(),
+            row: Default::default(),
             conn_start: Default::default(),
             raw_conn_end: Default::default(),
             conn_end: Default::default(),
             charge_time: Default::default(),
             energy_use: Default::default(),
             avg_power: Default::default(),
-        });
+            anomalies: Default::default(),
+        }));
         let data1 = EndPointData {
             time: Default::default(),
             session: session.clone(),
