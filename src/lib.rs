@@ -1,11 +1,11 @@
+mod excel;
+pub use excel::*;
+
 mod grouping;
 pub use grouping::*;
 
 mod peak_est;
 pub use peak_est::*;
-
-mod excel;
-pub use excel::*;
 
 #[allow(unused)]
 mod quicksort;

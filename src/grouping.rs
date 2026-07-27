@@ -110,7 +110,7 @@ impl<'a> Default for SessionGroup<'a> {
         Self {
             start: Timestamp::MIN,
             end: Timestamp::MAX,
-            sessions: Default::default(),
+            sessions: BTreeSet::new(),
         }
     }
 }

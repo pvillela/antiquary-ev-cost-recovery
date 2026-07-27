@@ -1,6 +1,5 @@
-use std::{path::PathBuf, process::ExitCode};
-
 use ev_peak_contrib::{Session, session_list};
+use std::{path::PathBuf, process::ExitCode};
 
 const USAGE: &str = "\
 Lists the charging sessions in a converted session report workbook.
