@@ -2,8 +2,7 @@ use crate::{Anomaly, AnomalyKind, OVERLAP_THRESHOLD, RSession, Session, quicksor
 use jiff::Timestamp;
 use std::{
     cell::{Ref, RefCell},
-    collections::{BTreeMap, BTreeSet, btree_set::Iter},
-    rc::Rc,
+    collections::{BTreeSet, btree_set::Iter},
     time::Duration,
 };
 
@@ -121,14 +120,8 @@ impl SessionGroup {
 }
 
 #[derive(Default)]
-pub struct SessionGroupReport {
-    groups: Vec<SessionGroup>,
-    anomalies: BTreeMap<Rc<Session>, Vec<Anomaly>>,
-}
-
-#[derive(Default)]
 struct GroupState {
-    report: SessionGroupReport,
+    groups: Vec<SessionGroup>,
     curr_group: SessionGroup,
     remove_list: Vec<RSession>,
 }
@@ -140,13 +133,13 @@ impl GroupState {
             self.curr_group = SessionGroup::new(data);
         } else {
             let old_group = group.remove_sessions(&mut self.remove_list);
-            self.report.groups.push(old_group);
+            self.groups.push(old_group);
             if group.start == data.time {
                 group.sessions.insert(data.session);
             } else {
                 let mut old_group = group.clone();
                 old_group.end = data.time;
-                self.report.groups.push(old_group);
+                self.groups.push(old_group);
                 group.start = data.time;
                 group.end = Timestamp::MAX;
                 group.sessions.insert(data.session);
@@ -169,7 +162,7 @@ impl GroupState {
                 let old_group = group.remove_sessions(&mut self.remove_list);
                 group.start = old_group.end;
                 group.end = data.time;
-                self.report.groups.push(old_group);
+                self.groups.push(old_group);
             }
         }
     }
@@ -252,13 +245,14 @@ fn end_points_to_groups(mut end_points: Vec<EndPoint>) -> Vec<SessionGroup> {
             EndPoint::Right(data) => state.process_right_edge(data),
         }
     }
-    state.report.groups
+    state.groups
 }
 
 #[cfg(test)]
 // cargo test --package ev-peak-contrib --lib --all-features -- peak_contrib::test --nocapture
 mod test {
     use super::*;
+    use std::rc::Rc;
 
     #[test]
     fn test_end_point_kind_order() {
