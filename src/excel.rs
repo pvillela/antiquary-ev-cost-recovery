@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     error::Error,
-    fmt,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -12,14 +11,22 @@ use jiff::{
 };
 use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
 
-use crate::{Anomaly, AnomalyKind, Session, TIME_ZONE_NAME, time_zone};
+use crate::{Anomaly, AnomalyKind, CONNECTION_END_ADJUSTMENT, Session, time_zone};
 
 /// Excel's day-zero for the 1900 date system, as a Unix timestamp.
 /// 1899-12-30T00:00:00Z; verified by [`test::excel_epoch_constant_matches_jiff`].
 const EXCEL_EPOCH_UNIX_SECS: i64 = -2_209_161_600;
 
-/// Seconds added to a truncated end time. See README.md, "New fields".
-const END_PADDING: SignedDuration = SignedDuration::from_secs(59);
+/// [`CONNECTION_END_ADJUSTMENT`] in the signed form the timestamp arithmetic needs.
+/// See README.md, "New fields".
+const END_PADDING: SignedDuration =
+    SignedDuration::from_secs(CONNECTION_END_ADJUSTMENT.as_secs() as i64);
+
+/// Widest gap between `Conn_start + Conn_Duration` and the reported end that truncation alone can
+/// explain. Both reported timestamps are truncated to the minute while `Conn_Duration` carries
+/// seconds, so for a consistent record the two land strictly within a minute of each other, either
+/// side. See README.md, "Time zone".
+const TRUNCATION_SLACK: SignedDuration = SignedDuration::from_secs(60);
 
 const DATETIME_FORMAT: &str = "yyyy-mm-dd hh:mm:ss ddd";
 /// Elapsed-time format: unlike `hh:mm:ss` it does not wrap a 25-hour duration to `01:00:00`.
@@ -58,6 +65,8 @@ enum Source {
     AdjConnDuration,
     /// Formula: `Energy_Use / Active_Charge_Time`, in kW.
     AvgPower,
+    /// Comma-separated [`AnomalyKind`] tokens for this row; empty when the row is clean.
+    Anomalies,
 }
 
 /// The output sheet's columns, in order. Drives both the header row and every data row,
@@ -82,8 +91,8 @@ const COLUMNS: &[(&str, Source)] = &[
     ("Conn_end_UTC", Source::ConnEndUtc),
     ("Adj_conn_end", Source::AdjConnEndLocal),
     ("Adj_conn_end_UTC", Source::AdjConnEndUtc),
-    ("Adj_conn_duration", Source::AdjConnDuration),
     ("Conn_Duration", Source::Duration("Conn_Duration")),
+    ("Adj_conn_duration", Source::AdjConnDuration),
     ("Charge_Duration", Source::Duration("Charge_Duration")),
     ("Active_Charge_Time", Source::Duration("Active_Charge_Time")),
     ("Charging_Level", Source::Text("Charging_Level")),
@@ -93,6 +102,7 @@ const COLUMNS: &[(&str, Source)] = &[
     ("Vehicle_Make", Source::Text("Vehicle_Make")),
     ("Vehicle_Model", Source::Text("Vehicle_Model")),
     ("Vehicle_Year", Source::Number("Vehicle_Year")),
+    ("Anomalies", Source::Anomalies),
 ];
 
 /// CSV columns that must be present for the conversion to mean anything.
@@ -129,12 +139,16 @@ const REQUIRED_HEADERS: &[&str] = &[
 ///   zero `Active_Charge_Time` shows `#DIV/0!` rather than an empty cell:
 ///   it delivered energy in no time at all, and the sheet says so. `Total_Fee` is displayed to
 ///   2 decimal places.
+/// - The last column, `Anomalies`, carries the [`AnomalyKind`]s found for the row as a
+///   comma-separated list of variant names. [`session_list`] reads it back, so it is the channel
+///   by which a judgement call made here reaches the peak power contribution logic.
 /// - The remaining columns are copied over with an explicit per-column type, so values that merely
 ///   look numeric — postal codes, station ids — keep their text form.
 /// - The sheet is named by [`sheet_name`].
 ///
-/// Zero-`Energy_Use` sessions are written to the workbook; they are excluded later, by the peak
-/// power contribution logic.
+/// Every session in the report is written to the workbook, anomalous ones included: the sheet is a
+/// faithful rendering of the session report, and which sessions take part in an estimate is decided
+/// on the reading side.
 ///
 /// # Errors
 ///
@@ -149,9 +163,19 @@ pub fn session_csv_to_xlsx(path: &Path) -> Result<ConversionReport, Box<dyn Erro
     let mut anomalies = Vec::new();
     let mut rows: Vec<Row> = Vec::new();
     for (i, record) in records.iter().enumerate() {
-        let row_no = i + 1;
-        let session = CsvSession::parse(&headers, record, row_no)?;
-        rows.extend(session.resolve(&tz, row_no, &mut anomalies)?);
+        let csv_row = i + 1;
+        let session = CsvSession::parse(&headers, record, csv_row)?;
+        // The workbook row is tracked separately from the CSV row: a record duplicated to resolve a
+        // DST fold occupies two workbook rows, so from there on the two counts diverge.
+        let excel_row = rows.len() + 2;
+        for (offset, row) in session.resolve(&tz, csv_row)?.into_iter().enumerate() {
+            anomalies.extend(row.anomalies.iter().map(|&kind| Anomaly {
+                row: excel_row + offset,
+                session_id: row.id.clone(),
+                kind,
+            }));
+            rows.push(row);
+        }
     }
 
     let output_path = path.with_extension("xlsx");
@@ -235,6 +259,9 @@ struct CsvSession {
     end_local: civil::DateTime,
     conn_duration: SignedDuration,
     active_charge_time: SignedDuration,
+    /// Kept for its parse: a non-numeric `Energy_Use` invalidates the row, and that is caught in
+    /// [`CsvSession::parse`]. The value itself is consumed on the reading side.
+    #[allow(dead_code)]
     energy_use: f64,
 }
 
@@ -249,6 +276,9 @@ struct Row {
     end_utc: Timestamp,
     adj_end_utc: Timestamp,
     adj_end_local: civil::DateTime,
+    /// Everything about this row that needs review. Rendered into the `Anomalies` column and,
+    /// stamped with the row's workbook number, into [`ConversionReport::anomalies`].
+    anomalies: Vec<AnomalyKind>,
 }
 
 impl CsvSession {
@@ -291,20 +321,16 @@ impl CsvSession {
     /// Returns one row normally, or two when the start falls in the DST fold and the reported end
     /// cannot tell the two offsets apart — see README.md, "Time zone", for why duplication is the
     /// policy and why the copies get distinct ids.
-    fn resolve(
-        &self,
-        tz: &TimeZone,
-        row: usize,
-        anomalies: &mut Vec<Anomaly>,
-    ) -> Result<Vec<Row>, Box<dyn Error>> {
-        // Avg_power is a division by Active_Charge_Time. The sheet
-        // shows it as #DIV/0!; it is reported here so it is not left to be noticed by eye.
-        if self.energy_use != 0.0 && self.active_charge_time.is_zero() {
-            anomalies.push(Anomaly {
-                row,
-                session_id: self.id.clone(),
-                kind: AnomalyKind::ZeroActiveChargeTime,
-            });
+    fn resolve(&self, tz: &TimeZone, row: usize) -> Result<Vec<Row>, Box<dyn Error>> {
+        // Kinds known before the DST branch runs. They describe the record itself, so on
+        // duplication both copies inherit them.
+        let mut common = Vec::new();
+
+        // Avg_power is a division by Active_Charge_Time. The sheet shows it as #DIV/0!; it is
+        // reported here so it is not left to be noticed by eye. Zero energy is no exception: 0/0
+        // is just as undefined, and the session becomes a spike either way.
+        if self.active_charge_time.is_zero() {
+            common.push(AnomalyKind::ZeroActiveChargeTime);
         }
 
         let ambiguous = tz.to_ambiguous_timestamp(self.start_local);
@@ -315,11 +341,7 @@ impl CsvSession {
             AmbiguousOffset::Gap { .. } => {
                 // A wall time that never occurred. `compatible` moves to just after the gap; the
                 // row is still written, but the shift is reported rather than silently applied.
-                anomalies.push(Anomaly {
-                    row,
-                    session_id: self.id.clone(),
-                    kind: AnomalyKind::DstGapShifted,
-                });
+                common.push(AnomalyKind::DstGapShifted);
                 vec![(ambiguous.compatible()?, None)]
             }
             AmbiguousOffset::Fold { .. } => {
@@ -333,19 +355,11 @@ impl CsvSession {
                     (true, true) => {
                         // Both offsets are consistent with the report, which happens exactly when
                         // the session is short enough to fit inside the repeated hour. Keep both.
-                        anomalies.push(Anomaly {
-                            row,
-                            session_id: self.id.clone(),
-                            kind: AnomalyKind::DstAmbiguousDuplicated,
-                        });
+                        common.push(AnomalyKind::DstAmbiguousDuplicated);
                         vec![(earlier, Some("EDT")), (later, Some("EST"))]
                     }
                     (false, false) => {
-                        anomalies.push(Anomaly {
-                            row,
-                            session_id: self.id.clone(),
-                            kind: AnomalyKind::DstUnresolvable,
-                        });
+                        common.push(AnomalyKind::DstUnresolvable);
                         vec![(earlier, None)]
                     }
                 }
@@ -356,9 +370,20 @@ impl CsvSession {
             .into_iter()
             .map(|(start_utc, suffix)| {
                 let end_utc = self.resolve_end(tz, start_utc)?;
-                // min() of the two upper bounds on the true end; see README.md, "New fields".
-                let adj_end_utc =
-                    (start_utc + END_PADDING + self.conn_duration).min(end_utc + END_PADDING);
+                // See README.md, "New fields".
+                let adj_end_utc = end_utc + END_PADDING;
+
+                let mut anomalies = common.clone();
+                // Truncation to the minute lets the implied end miss the reported one by up to
+                // END_PADDING either way, and no further. `adj_end_utc` is already the upper bound;
+                // the lower one sits the same distance below the reported end. Outside that band
+                // the three fields contradict each other by more than the reporting can explain,
+                // and the session is excluded from the estimates downstream.
+                let implied_end = start_utc + self.conn_duration;
+                if implied_end > adj_end_utc || implied_end < end_utc - END_PADDING {
+                    anomalies.push(AnomalyKind::InconsistentDuration);
+                }
+
                 Ok(Row {
                     record: row - 1,
                     id: match suffix {
@@ -371,6 +396,7 @@ impl CsvSession {
                     end_utc,
                     adj_end_utc,
                     adj_end_local: adj_end_utc.to_zoned(tz.clone()).datetime(),
+                    anomalies,
                 })
             })
             .collect()
@@ -378,13 +404,23 @@ impl CsvSession {
 
     /// Does `start` plus the reported elapsed duration land back on the reported end?
     ///
-    /// The comparison is truncated to the minute because the report's end timestamp carries no
-    /// seconds; comparing exactly would reject the correct candidate.
+    /// Both reported timestamps are truncated to the minute while `Conn_Duration` carries seconds,
+    /// so for a consistent record `start + Conn_Duration` falls strictly within a minute of the
+    /// reported end, on either side. Requiring equal minutes instead rejects roughly half of all
+    /// consistent records — 116 of the 238 rows in this project's `data` directory.
+    ///
+    /// The comparison is made on *local wall time*, not on instants. That is what lets both fold
+    /// candidates match a session short enough to fit inside the repeated hour, which is the very
+    /// ambiguity this test exists to detect. The tolerance cannot blur the two candidates together
+    /// otherwise: they lie a full hour apart.
     fn reproduces_reported_end(&self, tz: &TimeZone, start: Timestamp) -> bool {
         let end = (start + self.conn_duration).to_zoned(tz.clone()).datetime();
-        end.date() == self.end_local.date()
-            && end.hour() == self.end_local.hour()
-            && end.minute() == self.end_local.minute()
+        match (wall_clock_instant(end), wall_clock_instant(self.end_local)) {
+            (Ok(implied), Ok(reported)) => {
+                implied.duration_since(reported).abs() < TRUNCATION_SLACK
+            }
+            _ => false,
+        }
     }
 
     /// Resolves the reported end to UTC. When the end itself falls in the fold, the candidate
@@ -416,6 +452,13 @@ impl CsvSession {
 // ---------------------------------------------------------------------------
 // Excel output
 // ---------------------------------------------------------------------------
+
+/// Reads a local wall time as though it were UTC, so that two of them can be subtracted to give the
+/// wall-clock distance between them. Not a time-zone conversion: the point is to compare wall times
+/// as written, without a DST offset moving either one.
+fn wall_clock_instant(dt: civil::DateTime) -> Result<Timestamp, jiff::Error> {
+    Ok(dt.to_zoned(TimeZone::UTC)?.timestamp())
+}
 
 /// Days since Excel's day-zero, as used by the 1900 date system.
 fn excel_serial(dt: civil::DateTime) -> Result<f64, Box<dyn Error>> {
@@ -554,6 +597,15 @@ fn write_sheet(
                     ));
                     set_format(sheet, col, excel_row, AVG_POWER_FORMAT);
                 }
+                Source::Anomalies => {
+                    if !row.anomalies.is_empty() {
+                        let tokens: Vec<&str> =
+                            row.anomalies.iter().map(AnomalyKind::as_str).collect();
+                        sheet
+                            .cell_mut((col, excel_row))
+                            .set_value_string(tokens.join(","));
+                    }
+                }
             }
         }
     }
@@ -629,10 +681,9 @@ fn add_comments(sheet: &mut Worksheet) {
     let notes = [
         (
             Source::AdjConnEndLocal,
-            "Adjusted connection end. The report's timestamps carry no seconds, so the true end is \
-             only known to within a minute. This is min(Conn_DateTime_Start + 59s + Conn_Duration, \
-             Conn_DateTime_End + 59s): the tighter of the two upper bounds. See README.md, \
-             \"New fields\".",
+            "Adjusted connection end: Conn_DateTime_End + 59s. The report's timestamps carry no \
+             seconds, so the true end is only known to within a minute; padding to the end of that \
+             minute keeps the whole charge inside the session. See README.md, \"New fields\".",
         ),
         (
             Source::AdjConnDuration,
@@ -643,8 +694,15 @@ fn add_comments(sheet: &mut Worksheet) {
         (
             Source::AvgPower,
             "Energy_Use / Active_Charge_Time, in kW. Active_Charge_Time is an Excel duration, i.e. \
-             a fraction of a day, hence the *24 to convert it to hours. Zero energy yields zero \
-             power.",
+             a fraction of a day, hence the *24 to convert it to hours. A zero Active_Charge_Time \
+             yields #DIV/0!, which is the honest answer: energy delivered in no time at all has no \
+             finite average power.",
+        ),
+        (
+            Source::Anomalies,
+            "Comma-separated list of anomalies found for this row, named after the AnomalyKind \
+             variants. Empty means the row needed no judgement call. Read back by session_list, so \
+             editing this cell changes which sessions take part in the estimates. See README.md.",
         ),
     ];
     for (source, text) in notes {
@@ -669,6 +727,8 @@ fn set_widths(sheet: &mut Worksheet) {
             | Source::AdjConnEndLocal
             | Source::AdjConnEndUtc => 24.0,
             Source::Duration(_) | Source::AdjConnDuration => 13.0,
+            // Room for a couple of variant names side by side.
+            Source::Anomalies => 40.0,
             _ => (header.len() as f64 + 2.0).max(10.0),
         };
         sheet.column_dimension_mut(&letters).set_width(width);
@@ -679,30 +739,43 @@ fn set_widths(sheet: &mut Worksheet) {
 // Excel input
 // ---------------------------------------------------------------------------
 
-/// The sessions in a workbook produced by [`session_csv_to_xlsx`], split by whether their average
-/// power is a finite number. The writing direction returns a [`ConversionReport`] instead.
+/// The sessions in a workbook produced by [`session_csv_to_xlsx`], sorted by how the peak power
+/// contribution logic must treat them. The writing direction returns a [`ConversionReport`]
+/// instead.
 #[derive(Debug)]
 pub struct SessionReport {
-    /// Sessions with non-zero `Energy_Use` and non-zero `Active_Charge_Time`. This is what the
-    /// peak power contribution logic consumes.
+    /// Sessions with a finite average power. This is what the peak power contribution logic
+    /// consumes unaltered. A session with zero `Energy_Use` belongs here — its `avg_power` is
+    /// legitimately zero, and it still occupies a breaker.
     pub sessions: Vec<Session>,
-    /// Sessions that delivered non-zero `Energy_Use` in zero `Active_Charge_Time`, so
-    /// [`Session::charge_time`] is zero and [`Session::avg_power`] is infinite. Kept out of
-    /// `sessions` because an infinite average power would swamp every cluster it entered, and
-    /// surfaced rather than dropped because energy delivered in no time at all is exactly what a
-    /// demand charge bills on. See README.md, "Other".
+    /// Sessions with zero `Active_Charge_Time`, so [`Session::charge_time`] is zero and
+    /// [`Session::avg_power`] is infinite or `NaN`. Kept out of `sessions` because those values
+    /// would swamp or poison every group they entered, and surfaced rather than dropped because
+    /// energy delivered in no time at all is exactly what a demand charge bills on. The estimating
+    /// logic substitutes a finite average power for them. See README.md, "Other".
     pub spikes: Vec<Session>,
+    /// Sessions flagged [`AnomalyKind::InconsistentDuration`]: their reported start, end and duration
+    /// contradict each other, so they cannot be placed on a timeline at all. Excluded from the
+    /// estimates and returned only for review. See README.md, "Other".
+    pub excluded: Vec<Session>,
 }
 
-/// Sheet columns [`session_list`] cannot do without. The reading-side counterpart of
+/// Sheet columns that make a workbook a session report. The reading-side counterpart of
 /// [`REQUIRED_HEADERS`].
+///
+/// This is deliberately wider than the set [`session_list`] strictly consumes. A workbook missing
+/// any of these is not a rendering of a session report, and guessing at its contents would produce
+/// peak numbers that cannot be trusted. `Anomalies` in particular is load-bearing: without it every
+/// session would silently look clean, and inconsistent ones would fold back into the estimates.
 const REQUIRED_SHEET_HEADERS: &[&str] = &[
     "Charge_Session_ID",
     "Conn_start_UTC",
     "Conn_end_UTC",
     "Adj_conn_end_UTC",
+    "Conn_Duration",
     "Active_Charge_Time",
     "Energy_Use",
+    "Anomalies",
 ];
 
 /// Sheet header name to its 1-based column number. Deliberately distinct from [`Headers`], whose
@@ -716,21 +789,27 @@ type SheetHeaders = HashMap<String, u32>;
 /// columns in the sheet does not silently shift what is read. Only [`REQUIRED_SHEET_HEADERS`] are
 /// consulted; the first worksheet is used.
 ///
-/// Two rules from README.md, "Other", are applied here rather than at conversion time, because the
-/// workbook is meant to be a faithful rendering of the session report:
+/// Sorting into the three buckets of [`SessionReport`] happens here rather than at conversion time,
+/// because the workbook is meant to be a faithful rendering of the session report. The tests are
+/// applied in this order, strongest first:
 ///
-/// - Sessions with zero `Energy_Use` are excluded outright. They contribute no power.
-/// - Sessions with non-zero `Energy_Use` and zero `Active_Charge_Time` are returned separately, in
-///   [`SessionReport::spikes`].
+/// 1. Flagged [`AnomalyKind::InconsistentDuration`] — [`SessionReport::excluded`]. Such a session
+///    takes no part in the estimates whatever its charge time, and letting one through would put an
+///    inverted session in front of the grouping logic, whose endpoints would then arrive out of
+///    order.
+/// 2. Zero `Active_Charge_Time` — [`SessionReport::spikes`].
+/// 3. Everything else — [`SessionReport::sessions`].
 ///
 /// `avg_power` is recomputed here rather than read from the sheet's `Avg_power` column, which
-/// holds a formula whose cached value this crate never writes.
+/// holds a formula whose cached value this crate never writes. For a spike that leaves it infinite
+/// or `NaN`, which is the honest reading; the estimating logic substitutes a finite value.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the workbook cannot be read, a required column is missing, or any cell in a
-/// row that has a `Charge_Session_ID` does not hold the number it should. A workbook that cannot
-/// be read in full is one whose peak numbers cannot be trusted, so no row is skipped quietly.
+/// Returns `Err` if the workbook cannot be read, a required column is missing, any cell in a row
+/// that has a `Charge_Session_ID` does not hold the number it should, or the `Anomalies` column
+/// holds a token that is not an [`AnomalyKind`] variant name. A workbook that cannot be read in
+/// full is one whose peak numbers cannot be trusted, so no row is skipped quietly.
 /// Rows with no `Charge_Session_ID` at all are treated as trailing blanks and ignored.
 pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
     let book = umya_spreadsheet::reader::xlsx::read(path)?;
@@ -739,6 +818,7 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
 
     let mut sessions = Vec::new();
     let mut spikes = Vec::new();
+    let mut excluded = Vec::new();
     for row in 2..=sheet.highest_row() {
         let id = sheet
             .value((headers["Charge_Session_ID"], row))
@@ -750,28 +830,65 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
 
         let energy_use = number(sheet, &headers, "Energy_Use", row)?;
         let charge_time = duration_of(number(sheet, &headers, "Active_Charge_Time", row)?);
+        let anomalies = anomaly_kinds(sheet, &headers, row, path)?;
         let session = Session {
             id,
-            row: todo!(),
+            row: row as usize,
             conn_start: timestamp_of(number(sheet, &headers, "Conn_start_UTC", row)?)?,
             raw_conn_end: timestamp_of(number(sheet, &headers, "Conn_end_UTC", row)?)?,
             conn_end: timestamp_of(number(sheet, &headers, "Adj_conn_end_UTC", row)?)?,
+            conn_duration: duration_of(number(sheet, &headers, "Conn_Duration", row)?),
             charge_time,
             energy_use,
             // Zero charge time makes this infinite or NAN, which is the answer: the division is left to
             // say so rather than being guarded against.
             avg_power: energy_use / (charge_time.as_secs_f64() / 3600.0),
-            anomalies: todo!(),
+            anomalies,
         };
 
-        if charge_time.is_zero() {
+        if session
+            .anomalies
+            .contains(&AnomalyKind::InconsistentDuration)
+        {
+            excluded.push(session);
+        } else if charge_time.is_zero() {
             spikes.push(session);
         } else {
             sessions.push(session);
         }
     }
 
-    Ok(SessionReport { sessions, spikes })
+    Ok(SessionReport {
+        sessions,
+        spikes,
+        excluded,
+    })
+}
+
+/// Parses the `Anomalies` cell. An unrecognised token is an error rather than a shrug: it means the
+/// workbook was written by something this crate does not know, and the sessions it excludes cannot
+/// be determined.
+fn anomaly_kinds(
+    sheet: &Worksheet,
+    headers: &SheetHeaders,
+    row: u32,
+    path: &Path,
+) -> Result<Vec<AnomalyKind>, Box<dyn Error>> {
+    sheet
+        .value((headers["Anomalies"], row))
+        .split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(|token| {
+            AnomalyKind::from_token(token).ok_or_else(|| -> Box<dyn Error> {
+                format!(
+                    "{}: row {row}, column `Anomalies`: unknown anomaly {token:?}",
+                    path.display()
+                )
+                .into()
+            })
+        })
+        .collect()
 }
 
 fn sheet_headers(sheet: &Worksheet, path: &Path) -> Result<SheetHeaders, Box<dyn Error>> {
@@ -936,34 +1053,31 @@ mod test {
         assert_eq!(column_letters(1), "A");
         assert_eq!(column_letters(26), "Z");
         assert_eq!(column_letters(27), "AA");
-        assert_eq!(column_letters(COLUMNS.len()), "AA");
+        assert_eq!(column_letters(COLUMNS.len()), "AB");
     }
 
-    /// The `min(...)` rule takes the tighter of the two upper bounds. Both branches are exercised
-    /// by real sample rows.
+    /// `Adj_conn_end` is the reported end padded to the end of its minute — nothing more. Both rows
+    /// are real sample rows, and they straddle the case the old `min(...)` rule treated specially:
+    /// the second has `start + duration` (23:40:29) *before* the reported end.
     #[test]
-    fn adj_conn_end_takes_the_tighter_bound() {
-        let mut anomalies = Vec::new();
-
-        // end < start + duration: the reported end binds. 16:22 + 5:07:53 = 21:29:53 > 21:29.
+    fn adj_conn_end_pads_the_reported_end() {
         let rows = session("2026-06-01 16:22", "2026-06-01 21:29", "5:07:53")
-            .resolve(&time_zone(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1)
             .unwrap();
         assert_eq!(
             local_of(rows[0].adj_end_utc),
-            dt("2026-06-01 21:29").with().second(59).build().unwrap()
+            civil::date(2026, 6, 1).at(21, 29, 59, 0)
         );
+        assert!(rows[0].anomalies.is_empty());
 
-        // start + duration <= end: the computed end binds. 16:42 + 6:58:29 = 23:40:29.
         let rows = session("2026-06-07 16:42", "2026-06-07 23:41", "6:58:29")
-            .resolve(&time_zone(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1)
             .unwrap();
         assert_eq!(
             local_of(rows[0].adj_end_utc),
-            civil::date(2026, 6, 7).at(23, 41, 28, 0)
+            civil::date(2026, 6, 7).at(23, 41, 59, 0)
         );
-
-        assert!(anomalies.is_empty());
+        assert!(rows[0].anomalies.is_empty());
     }
 
     /// Both invariants the rule exists to guarantee, on the whole-minute durations that are the
@@ -977,9 +1091,8 @@ mod test {
             ("2026-06-15 01:45", "2026-06-15 01:55", "0:10:00"),
         ];
         for (start, end, conn) in cases {
-            let mut anomalies = Vec::new();
             let s = session(start, end, conn);
-            let rows = s.resolve(&time_zone(), 1, &mut anomalies).unwrap();
+            let rows = s.resolve(&time_zone(), 1).unwrap();
             let row = &rows[0];
             assert!(
                 row.adj_end_utc >= row.end_utc,
@@ -989,14 +1102,18 @@ mod test {
                 row.adj_end_utc.duration_since(row.start_utc) >= s.conn_duration,
                 "{start}: adjusted duration shorter than Conn_Duration"
             );
+            assert!(
+                row.anomalies.is_empty(),
+                "{start}: unexpected {:?}",
+                row.anomalies
+            );
         }
     }
 
     #[test]
     fn utc_conversion_uses_edt_in_june() {
-        let mut anomalies = Vec::new();
         let rows = session("2026-06-01 16:22", "2026-06-01 21:29", "5:07:53")
-            .resolve(&time_zone(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1)
             .unwrap();
         assert_eq!(
             rows[0].start_utc.to_zoned(TimeZone::UTC).datetime(),
@@ -1007,26 +1124,66 @@ mod test {
     /// A long session starting inside the Nov 1 fold: the reported end rules out one offset.
     #[test]
     fn dst_fold_resolved_by_reported_end() {
-        let mut anomalies = Vec::new();
         // 01:30 EDT + 3h elapsed = 03:30 EST. Starting at 01:30 EST would end at 04:30.
         let rows = session("2026-11-01 01:30", "2026-11-01 03:30", "3:00:00")
-            .resolve(&time_zone(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1)
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0].start_utc.to_zoned(TimeZone::UTC).datetime(),
             civil::date(2026, 11, 1).at(5, 30, 0, 0), // EDT is UTC-4
         );
-        assert!(anomalies.is_empty());
+        assert!(rows[0].anomalies.is_empty());
+    }
+
+    /// The mirror of the test above, and the case a one-sided `start + duration <= Adj_conn_end`
+    /// test would get wrong: here EST is correct, and the EDT candidate lands a full hour *early*.
+    /// Only a two-sided comparison rejects it; accepting it would duplicate a session that is not
+    /// ambiguous at all, double-counting its power.
+    #[test]
+    fn dst_fold_resolved_to_est_rejects_the_hour_early_candidate() {
+        // 01:30 EST + 3h elapsed = 04:30 EST. Starting at 01:30 EDT would end at 03:30.
+        let rows = session("2026-11-01 01:30", "2026-11-01 04:30", "3:00:00")
+            .resolve(&time_zone(), 1)
+            .unwrap();
+        assert_eq!(rows.len(), 1, "should not duplicate: {:?}", rows[0].id);
+        assert_eq!(
+            rows[0].start_utc.to_zoned(TimeZone::UTC).datetime(),
+            civil::date(2026, 11, 1).at(6, 30, 0, 0), // EST is UTC-5
+        );
+        assert!(rows[0].anomalies.is_empty());
+    }
+
+    /// Reported times are truncated to the minute while `Conn_Duration` carries seconds, so a
+    /// consistent record's `start + duration` lands up to a minute *either side* of the reported
+    /// end. Requiring equal minutes rejected roughly half of all real records; on a fold start that
+    /// meant a spurious `DstUnresolvable` and UTC timestamps an hour early.
+    #[test]
+    fn fold_resolves_when_start_plus_duration_falls_short_of_the_reported_minute() {
+        // 01:30 EDT + 2:59:31 = 03:29:31 local, which truncates to 03:29, not the reported 03:30.
+        // The EST candidate lands at 04:29:31, an hour out, so only EDT is consistent — but the old
+        // equal-minutes test rejected *both* and called the record unresolvable.
+        let rows = session("2026-11-01 01:30", "2026-11-01 03:30", "2:59:31")
+            .resolve(&time_zone(), 1)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            !rows[0].anomalies.contains(&AnomalyKind::DstUnresolvable),
+            "spurious DstUnresolvable: {:?}",
+            rows[0].anomalies
+        );
+        assert_eq!(
+            rows[0].start_utc.to_zoned(TimeZone::UTC).datetime(),
+            civil::date(2026, 11, 1).at(5, 30, 0, 0), // EDT is UTC-4
+        );
     }
 
     /// A short session wholly inside the repeated hour: neither offset can be ruled out, so the
     /// record is duplicated with distinct ids.
     #[test]
     fn dst_fold_ambiguous_duplicates_the_record() {
-        let mut anomalies = Vec::new();
         let rows = session("2026-11-01 01:10", "2026-11-01 01:40", "0:30:00")
-            .resolve(&time_zone(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1)
             .unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, "S1-EDT");
@@ -1036,30 +1193,29 @@ mod test {
             rows[1].start_utc.duration_since(rows[0].start_utc),
             SignedDuration::from_hours(1)
         );
-        assert_eq!(anomalies.len(), 1);
-        assert_eq!(anomalies[0].kind, AnomalyKind::DstAmbiguousDuplicated);
+        // Both copies carry the flag, so each workbook row says why it is there.
+        for row in &rows {
+            assert_eq!(row.anomalies, vec![AnomalyKind::DstAmbiguousDuplicated]);
+        }
     }
 
     /// A wall time that never occurred, on the March 8 spring-forward.
     #[test]
     fn dst_gap_resolves_forward_and_reports() {
-        let mut anomalies = Vec::new();
         let rows = session("2026-03-08 02:30", "2026-03-08 04:00", "0:30:00")
-            .resolve(&time_zone(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1)
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(local_of(rows[0].start_utc), dt("2026-03-08 03:30"));
-        assert_eq!(anomalies.len(), 1);
-        assert_eq!(anomalies[0].kind, AnomalyKind::DstGapShifted);
+        assert_eq!(rows[0].anomalies, vec![AnomalyKind::DstGapShifted]);
     }
 
     /// The case local arithmetic gets wrong: a session spanning the fold. Wall clock says 2 hours,
     /// elapsed is 3.
     #[test]
     fn fold_spanning_session_has_true_elapsed_duration() {
-        let mut anomalies = Vec::new();
         let rows = session("2026-11-01 00:30", "2026-11-01 02:30", "3:00:00")
-            .resolve(&time_zone(), 1, &mut anomalies)
+            .resolve(&time_zone(), 1)
             .unwrap();
         let row = &rows[0];
         let elapsed = row.adj_end_utc.duration_since(row.start_utc);
@@ -1076,24 +1232,56 @@ mod test {
         );
     }
 
+    /// Zero `Active_Charge_Time` is flagged whatever the energy: the cell shows `#DIV/0!` either
+    /// way, and the session becomes a spike either way.
     #[test]
     fn zero_active_charge_time_is_reported() {
-        let mut anomalies = Vec::new();
-        let mut s = session("2026-06-01 10:00", "2026-06-01 10:00", "0:00:00");
-        s.energy_use = 5.0;
-        s.resolve(&time_zone(), 7, &mut anomalies).unwrap();
-        assert_eq!(anomalies.len(), 1);
-        assert_eq!(anomalies[0].kind, AnomalyKind::ZeroActiveChargeTime);
-        assert_eq!(anomalies[0].row, 7);
+        for energy in [5.0, 0.0] {
+            let mut s = session("2026-06-01 10:00", "2026-06-01 10:00", "0:00:00");
+            s.energy_use = energy;
+            let rows = s.resolve(&time_zone(), 7).unwrap();
+            assert_eq!(
+                rows[0].anomalies,
+                vec![AnomalyKind::ZeroActiveChargeTime],
+                "energy {energy}"
+            );
+        }
+    }
 
-        // Zero energy with zero charge time is not an anomaly: Avg_power is legitimately zero.
-        let mut anomalies = Vec::new();
-        let mut s = session("2026-06-01 10:00", "2026-06-01 10:00", "0:00:00");
-        s.energy_use = 0.0;
-        s.resolve(&time_zone(), 7, &mut anomalies).unwrap();
-        assert_eq!(anomalies.len(), 1);
-        assert_eq!(anomalies[0].kind, AnomalyKind::ZeroActiveChargeTime);
-        assert_eq!(anomalies[0].row, 7);
+    /// `Conn_start + Conn_Duration` must land within 59 seconds of the reported end, on either
+    /// side; truncation to the minute explains that much and no more. Both boundaries are pinned,
+    /// because getting either off by a second would silently reclassify real records: the sample
+    /// data reaches −57s, so the band is exercised almost to its edge.
+    #[test]
+    fn inconsistent_duration_is_reported() {
+        let kinds = |start, end, conn| {
+            session(start, end, conn)
+                .resolve(&time_zone(), 1)
+                .unwrap()
+                .swap_remove(0)
+                .anomalies
+        };
+        let bad = vec![AnomalyKind::InconsistentDuration];
+
+        // Overshoot: 10:00 + 2h = 12:00, well past the 10:30:59 upper bound.
+        assert_eq!(
+            kinds("2026-06-01 10:00", "2026-06-01 10:30", "2:00:00"),
+            bad
+        );
+        // Ends before it starts — the extreme of the overshoot direction, needing no rule of its own.
+        assert_eq!(
+            kinds("2026-06-01 10:00", "2026-06-01 09:00", "0:10:00"),
+            bad
+        );
+        // Undershoot: 10:00 + 29:00 = 10:29:00, a second below the 10:29:01 lower bound.
+        assert_eq!(
+            kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:29:00"),
+            bad
+        );
+
+        // Both bounds are inclusive and both are sound.
+        assert!(kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:30:59").is_empty());
+        assert!(kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:29:01").is_empty());
     }
 
     const FIXTURE: &str = "\
@@ -1140,7 +1328,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
         );
         assert_eq!(
             sheet.cell((col(Source::AvgPower), 2)).unwrap().formula(),
-            "IF(V2=0,0,V2/(T2*24))"
+            "V2/(T2*24)"
         );
 
         // Sheet name is the output file's name, minus the .xlsx suffix and the report prefix.
@@ -1231,10 +1419,134 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
         // divide by zero shows #DIV/0! rather than nothing at all.
         assert_eq!(
             sheet.cell((col(Source::AvgPower), 3)).unwrap().formula(),
-            "IF(V3=0,0,V3/(T3*24))"
+            "V3/(T3*24)"
+        );
+
+        // Both fixture rows are clean, so the Anomalies column is empty.
+        assert_eq!(sheet.value((col(Source::Anomalies), 2)), "");
+        assert_eq!(sheet.value((col(Source::Anomalies), 3)), "");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A record whose start falls in the fold and whose end cannot discriminate the two offsets
+    /// occupies two workbook rows. Each gets its own row number, its own id and its own cell, so
+    /// the pair produces two anomaly items rather than one shared between them.
+    #[test]
+    fn duplicated_record_yields_two_rows_and_two_anomalies() {
+        const CSV: &str = "\
+Charge_Session_ID,Conn_DateTime_Start,Conn_DateTime_End,Conn_Duration,Active_Charge_Time,Energy_Use
+S1,2026-11-01 01:10,2026-11-01 01:40,0:30:00,0:29:00,3.5
+S2,2026-11-02 08:00,2026-11-02 09:00,1:00:00,0:59:00,7.0
+";
+        let xlsx = convert("duplicated", CSV);
+        let book = umya_spreadsheet::reader::xlsx::read(&xlsx).unwrap();
+        let sheet = book.sheet(0).unwrap();
+        let col = |s: Source| column_index(s) as u32;
+
+        assert_eq!(sheet.value((col(Source::SessionId), 2)), "S1-EDT");
+        assert_eq!(sheet.value((col(Source::SessionId), 3)), "S1-EST");
+        for row in [2, 3] {
+            assert_eq!(
+                sheet.value((col(Source::Anomalies), row)),
+                "DstAmbiguousDuplicated"
+            );
+        }
+
+        // The row after a duplication is one further down the sheet than its CSV position.
+        assert_eq!(sheet.value((col(Source::SessionId), 4)), "S2");
+
+        // And the reader recovers all of it.
+        let report = session_list(&xlsx).unwrap();
+        let ids: Vec<_> = report.sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["S1-EDT", "S1-EST", "S2"]);
+        assert_eq!(report.sessions[0].row, 2);
+        assert_eq!(report.sessions[1].row, 3);
+        assert_eq!(report.sessions[2].row, 4);
+        assert_eq!(
+            report.sessions[0].anomalies,
+            vec![AnomalyKind::DstAmbiguousDuplicated]
+        );
+        assert!(report.sessions[2].anomalies.is_empty());
+
+        fs::remove_dir_all(xlsx.parent().unwrap()).ok();
+    }
+
+    /// The two anomaly items in the conversion report carry *workbook* rows, not CSV rows.
+    #[test]
+    fn conversion_report_anomalies_carry_excel_rows() {
+        const CSV: &str = "\
+Charge_Session_ID,Conn_DateTime_Start,Conn_DateTime_End,Conn_Duration,Active_Charge_Time,Energy_Use
+S1,2026-11-01 01:10,2026-11-01 01:40,0:30:00,0:29:00,3.5
+S2,2026-11-02 08:00,2026-11-02 08:00,0:00:00,0:00:00,4.2
+";
+        let dir = temp_dir("excel_rows");
+        let csv_path = dir.join("Session_Report_Test.csv");
+        fs::write(&csv_path, CSV).unwrap();
+        let report = session_csv_to_xlsx(&csv_path).unwrap();
+
+        let items: Vec<_> = report
+            .anomalies
+            .iter()
+            .map(|a| (a.row, a.session_id.as_str(), a.kind))
+            .collect();
+        assert_eq!(
+            items,
+            [
+                (2, "S1-EDT", AnomalyKind::DstAmbiguousDuplicated),
+                (3, "S1-EST", AnomalyKind::DstAmbiguousDuplicated),
+                // CSV row 2, but workbook row 4: the duplication above pushed it down.
+                (4, "S2", AnomalyKind::ZeroActiveChargeTime),
+            ]
         );
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A session whose start, end and duration contradict each other cannot be placed on a
+    /// timeline. It is written to the sheet, flagged, and kept out of the estimates.
+    #[test]
+    fn inconsistent_session_is_excluded_on_read() {
+        const CSV: &str = "\
+Charge_Session_ID,Conn_DateTime_Start,Conn_DateTime_End,Conn_Duration,Active_Charge_Time,Energy_Use
+S1,2026-06-01 16:22,2026-06-01 21:29,5:07:53,5:07:52,30.6
+S2,2026-06-02 10:00,2026-06-02 09:00,0:10:00,0:09:00,1.5
+";
+        let xlsx = convert("inconsistent", CSV);
+        let report = session_list(&xlsx).unwrap();
+
+        assert_eq!(report.sessions.len(), 1);
+        assert_eq!(report.sessions[0].id, "S1");
+        assert!(report.spikes.is_empty());
+        assert_eq!(report.excluded.len(), 1);
+        assert_eq!(report.excluded[0].id, "S2");
+        assert!(
+            report.excluded[0]
+                .anomalies
+                .contains(&AnomalyKind::InconsistentDuration)
+        );
+        // The inverted session would put a Right end-point before its own Left.
+        assert!(report.excluded[0].conn_end < report.excluded[0].conn_start);
+
+        fs::remove_dir_all(xlsx.parent().unwrap()).ok();
+    }
+
+    /// An `Anomalies` cell this crate did not write is an error, not something to shrug at: it
+    /// decides which sessions take part in the estimates.
+    #[test]
+    fn unknown_anomaly_token_is_rejected() {
+        let xlsx = convert("unknown_anomaly", FIXTURE);
+        let mut book = umya_spreadsheet::reader::xlsx::read(&xlsx).unwrap();
+        let col = column_index(Source::Anomalies) as u32;
+        book.sheet_mut(0)
+            .unwrap()
+            .cell_mut((col, 2))
+            .set_value_string("SomethingElse");
+        umya_spreadsheet::writer::xlsx::write(&book, &xlsx).unwrap();
+
+        let err = session_list(&xlsx).unwrap_err().to_string();
+        assert!(err.contains("SomethingElse"), "{err}");
+        fs::remove_dir_all(xlsx.parent().unwrap()).ok();
     }
 
     /// A row whose energy arrived in no time at all, alongside an ordinary one.
@@ -1257,18 +1569,25 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00001,,2026-06-03 09:00,2026-06-0
         let xlsx = convert("session_list", FIXTURE);
         let report = session_list(&xlsx).unwrap();
 
-        // The zero-energy row is excluded, per README.md, "Other".
+        // A zero-Energy_Use session with a real charge time is an ordinary session: its average
+        // power is legitimately zero and it still occupies a breaker. See README.md, "Other".
         assert!(report.spikes.is_empty());
-        assert_eq!(report.sessions.len(), 1);
+        assert!(report.excluded.is_empty());
+        assert_eq!(report.sessions.len(), 2);
+        assert_eq!(report.sessions[1].id, "S13577");
+        assert_eq!(report.sessions[1].avg_power, 0.0);
 
         let s = &report.sessions[0];
         assert_eq!(s.id, "S69865");
+        assert_eq!(s.row, 2);
+        assert!(s.anomalies.is_empty());
         // 16:22 EDT is 20:22 UTC.
         assert_eq!(s.conn_start, utc(civil::date(2026, 6, 1).at(20, 22, 0, 0)));
         // The reported end, 21:29 EDT, unadjusted.
         assert_eq!(s.raw_conn_end, utc(civil::date(2026, 6, 2).at(1, 29, 0, 0)));
         // The adjusted end: 21:29:59 EDT.
         assert_eq!(s.conn_end, utc(civil::date(2026, 6, 2).at(1, 29, 59, 0)));
+        assert_eq!(s.conn_duration, Duration::from_secs(5 * 3600 + 7 * 60 + 53));
         assert_eq!(s.charge_time, Duration::from_secs(5 * 3600 + 7 * 60 + 52));
         assert!((s.energy_use - 30.6).abs() < 1e-9);
 

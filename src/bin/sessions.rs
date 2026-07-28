@@ -7,9 +7,11 @@ Lists the charging sessions in a converted session report workbook.
 Usage: sessions <SESSION_REPORT.xlsx>...
 
 One line per session: id, connection start (UTC), energy use in kWh, average power in kW.
-Sessions with zero Energy_Use are omitted. A session that delivered energy in zero
-Active_Charge_Time has no finite average power and is listed separately, under SPIKES; those are
-worth reviewing for their effect on the building's demand charge. See README.md.";
+
+A session with zero Active_Charge_Time has no finite average power and is listed separately, under
+SPIKES; those are worth reviewing for their effect on the building's demand charge. A session whose
+reported start, end and duration contradict each other is listed under EXCLUDED and takes no part
+in any estimate. See README.md.";
 
 fn main() -> ExitCode {
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
@@ -34,6 +36,12 @@ fn main() -> ExitCode {
                     println!("\nSPIKES (zero Active_Charge_Time):");
                     for spike in &report.spikes {
                         println!("{}", line(spike));
+                    }
+                }
+                if !report.excluded.is_empty() {
+                    println!("\nEXCLUDED (inconsistent start, end and duration):");
+                    for session in &report.excluded {
+                        println!("{}", line(session));
                     }
                 }
             }

@@ -56,6 +56,10 @@ This is the typical workflow used with this software to estimate the impact of E
 
 Unlike intervals of interest, which include the left end but exclude the right end, sessions are closed intervals, i.e., both end-points are included. Because reported session start and end times are truncated to whole minutes, this software calculates an adjusted session end time, by adding 59 seconds to the reported end time, to ensure the actual charge time is fully included between the session's start and end.
 
+The interval of interest has a **boundary margin** of `OVERLAP_THRESHOLD`, 60 seconds. Because reported session times are truncated to whole minutes, a session whose only overlap with the interval falls inside that margin cannot be trusted to overlap the interval at all, so it is excluded from the estimates and flagged `IntersectsBoundaryMarginOnly`. Equivalently: a session takes part only if it is active somewhere in the interval reduced by 60 seconds at each end.
+
+The margin applies *only* at the boundaries. A session lying inside the interval is included however short it is — a 10-second session counts, and so does a spike, whose `Active_Charge_Time` is zero. The margin also decides membership *only*: once a session is included, its `SessionGroup` end-points are clamped to the real interval, so the groups tile it and a reported peak window is a wall-clock window that can be matched against the metering data.
+
 ### Time zone
 
 - The session report's timestamps are stated in local time, i.e., ET. We need to convert them to UTC.
@@ -66,11 +70,17 @@ Unlike intervals of interest, which include the left end but exclude the right e
 
 #### The inference, in detail
 
-**The assumption it rests on.** `Conn_Duration` is *physical elapsed time*, so
-`Conn_start_UTC + Conn_Duration == Conn_end_UTC` always. This is what makes the inference possible.
-Were `Conn_Duration` instead a naive subtraction of local clock values, a session spanning the fold
-would under-report by exactly the repeated hour, and the reported end could not distinguish the two
+**The assumption it rests on.** `Conn_Duration` is *physical elapsed time*, so it spans the true
+start and the true end of the connection. This is what makes the inference possible. Were
+`Conn_Duration` instead a naive subtraction of local clock values, a session spanning the fold would
+under-report by exactly the repeated hour, and the reported end could not distinguish the two
 candidate offsets from each other.
+
+Note the assumption holds of the *true* instants, not of the reported ones. Because the report
+truncates start and end to whole minutes, `Conn_start_UTC + Conn_Duration` does not land on
+`Conn_end_UTC` — it misses by up to 59 seconds, in either direction, on a perfectly sound record.
+Every test below is stated as a tolerance for that reason, and the exact size of the discrepancy is
+derived in step 2.
 
 **The procedure**, applied to `Conn_DateTime_Start`:
 
@@ -79,8 +89,19 @@ candidate offsets from each other.
 2. If it falls in the **fold** — the repeated 01:00:00-01:59:59 hour — there are two candidate
    instants, one at the EDT offset (UTC-4) and one at the EST offset (UTC-5). Take each candidate
    in turn, add `Conn_Duration`, convert back to local time, and check whether the result matches
-   the reported `Conn_DateTime_End`. **The comparison is truncated to the minute**, because the
-   report's timestamps carry no seconds; comparing exactly would reject the correct candidate.
+   the reported `Conn_DateTime_End`. **A candidate matches when the two are less than 60 seconds
+   apart**, not when they are equal. Both reported timestamps are truncated to the whole minute
+   while `Conn_Duration` carries seconds, so for a consistent record `Conn_start + Conn_Duration`
+   lands within a minute of the reported end *on either side*: writing the true start as
+   `S + α` and the true end as `E + β` with `α, β ∈ [0, 60)`, the implied end is `E + (β − α)`.
+   Demanding equal minutes therefore rejects every record with `β < α` — roughly half of them, and
+   116 of the 238 rows in this project's `data` directory. The tolerance cannot blur the two
+   candidates together: they lie a full hour apart.
+
+   The comparison is made on *local wall time*, which is what lets both candidates match a session
+   short enough to fit inside the repeated hour — the very ambiguity being tested for. It must also
+   stay two-sided: a one-sided test would accept a candidate landing an hour *early* and duplicate a
+   session that is not ambiguous at all.
    - *Exactly one candidate matches* — that offset is the session's; the ambiguity is resolved.
    - *Both candidates match* — the reported end cannot discriminate, so the record is duplicated
      per the policy above. This is precisely the "duration of less than 1 hour" case: both
@@ -109,11 +130,14 @@ to the peak in both candidate hours.
   - A new field, adjusted session duration `Adj_conn_duration`, is computed as: `Adj_conn_end - Conn_DateTime_Start`.
   - Three new fields are added: `Conn_start_UTC`, `Conn_end_UTC`, and `Adj_conn_end_UTC`, with UTC values corresponding to the corresponding local time fields.
   - A new field, `Avg_power` in kW, is computed as: `Energy_Use / (Active_Charge_Time * 24)`.
-  - A new field, `Anomalies`, containing a comma-separated list of `AnomalyKind`, is added as the last column.
+  - A new field, `Anomalies`, containing a comma-separated list of `AnomalyKind` **variant names**, is added as the last column. This is a wire format, read back by `session_list`: it is how a judgement call made during ingestion reaches the power estimating logic. The `Display` strings are prose for humans and are deliberately not used here.
 
 ### Other
 
-- Anomalous sessions whose `Conn_DateTime_End` is less than `Conn_DateTime_Start` are excluded from the estimates. These are the only sessions excluded from the estimates.
+- Every session in the report is written to the workbook, anomalous ones included: the sheet is a faithful rendering of the session report, and which sessions take part in an estimate is decided on the reading side.
+- Each session is checked for internal consistency: `Conn_start + Conn_Duration` must land within 59 seconds of `Conn_DateTime_End`, on either side. The upper bound is exactly `Adj_conn_end`, which already carries those 59 seconds; the lower bound sits the same distance below the reported end. The band is not slack — it is precisely what truncation to whole minutes accounts for, as derived under *The inference, in detail*, and the sample data reaches −57 seconds of it.
+- A session outside that band is flagged `InconsistentDuration` and excluded from the estimates. Both directions are faults: if a record's own fields disagree by more than the reporting can explain, neither its duration nor the span the grouping logic would place it on can be relied on. The overshoot direction subsumes the case of a session ending before it starts, since with `Conn_DateTime_End` a minute or more before `Conn_DateTime_Start` no non-negative duration can satisfy the test.
+- Together with the boundary margin described under *Session boundaries*, these are the only sessions excluded from the estimates.
 - Sessions with zero `Energy_Use` and non-zero `Active_Charge_Time` do not contribute to `consumption_based_kw` and `consumption_based_kva` but they do contribute to `breaker_spec_based_kw` and `breaker_spec_based_kva`.
 - A session with zero `Active_Charge_Time` delivered energy in no time at all, so its average power is unbounded or undefined.
   - The Excel `Avg_power` cell shows `#DIV/0!` — the formula is written on every row rather than being skipped, so the fault is visible in the sheet. Function `session_list` returns the session as a *spike*, held apart from the normal sessions fed to the peak logic.

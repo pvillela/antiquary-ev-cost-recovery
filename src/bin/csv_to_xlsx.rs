@@ -8,8 +8,10 @@ Converts a charging session report from CSV to .xlsx.
 Usage: csv_to_xlsx <SESSION_REPORT.csv>...
 
 Each workbook is written beside its input with the extension replaced. Rows needing a judgement
-call — an ambiguous DST fold, a wall time in the DST gap, a session with no charge time but
-non-zero energy — are reported on stderr; they do not stop the conversion. See README.md.";
+call — an ambiguous DST fold, a wall time in the DST gap, a session with no charge time, one whose
+reported duration runs past its reported end — are reported on stderr and recorded in the
+workbook's Anomalies column; they do not stop the conversion. Row numbers are workbook rows, so a
+record duplicated to resolve a DST fold is reported twice, once per copy. See README.md.";
 
 fn main() -> ExitCode {
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
