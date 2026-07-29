@@ -80,11 +80,14 @@ This software is written for a single Evolute panel. Such a panel holds 20 break
 
 Provided that the smart breakers across all panels have the same kW/kVA ratings (specified as constants in the software), the software can be used with Evolute installations containing any number of panels. When there is more than one, however, the results may be distorted, because the session report carries no panel ID and the software therefore cannot tell whether two overlapping sessions ran on the same panel or on different ones.
 
-To keep a single panel's estimate physically possible, a `SessionGroup` holding more than 10 sessions is **clamped**: the estimates are computed over 10 of them rather than all. Which 10 is decided in two tiers.
+To keep a single panel's estimate physically possible, a `SessionGroup` holding more than 10 sessions is **clamped**: the estimates are computed over 10 of them rather than all. Which 10 is decided in two tiers, ranked on how far a session's `Adj_conn_end` reaches past the group's start.
 
-- A session ending within one `SESSION_BOUNDARY_RESOLUTION` of the group's start may not have overlapped the group at all. Reported times are truncated to minutes, so a session that in fact *abutted* the next one is indistinguishable from one that overlapped it. These **short-overlap** sessions are the first to be dropped, lowest average power first.
-- Only if dropping every short-overlap session still leaves the group above 10 are **long-overlap** sessions dropped, again lowest average power first. Those demonstrably did overlap, so they go last.
-- A short-overlap session can only arise in a group no longer than one `SESSION_BOUNDARY_RESOLUTION`, because every session in a group outlasts the group by construction. The first tier therefore fires exactly where the truncation artefact lives, and nowhere else.
+1. **Short-overlap** — `Adj_conn_end` is within one `SESSION_BOUNDARY_RESOLUTION` of the group's start. These are dropped first, lowest average power first.
+2. **Long-overlap** — everything else. These are dropped only if emptying tier 1 still leaves the group above 10, again lowest average power first.
+
+The tier boundary is derived rather than chosen. `Adj_conn_end` is the reported end padded to the exclusive end of the minute it fell in, so the session's true end lies somewhere in `[Adj_conn_end - 60s, Adj_conn_end)`. For a short-overlap session that window starts at or before the group does, so the session may have truly ended before the group began and contributed nothing to it. For a long-overlap session the true end is strictly after the group's start, so it was still connected once the group was under way. The comparison is strict because the intervals are half-open: at exactly one resolution the true end can *be* the group's start, which is no overlap at all.
+
+Tier 2 establishes presence in the group's span — which is what the grouping means by concurrency — rather than verified pairwise overlap with any particular member, since reported start times carry the same one-minute uncertainty. And tier 1 can only be non-empty in a group no longer than one `SESSION_BOUNDARY_RESOLUTION`, because every session in a group outlasts the group by construction. The rule therefore fires only where the uncertainty it answers to actually lives, and nowhere else.
 
 The sessions themselves are never removed from the group: clamping affects only the derived figures, so a group's reported size stays truthful and carries the `ClampedSessionGroup` anomaly.
 
@@ -108,7 +111,9 @@ Half-open is what makes session groups **tile** the interval of interest: consec
 
 The padding is 60 seconds rather than 59 for the same reason. A session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`, so `16:35:00` — exclusive — is the bound that contains it wherever it fell.
 
-The interval of interest has a **boundary margin** equal to `SESSION_BOUNDARY_RESOLUTION`. Because reported session times are truncated to whole minutes, a session whose only overlap with the interval falls inside that margin cannot be trusted to overlap the interval at all, so it is excluded from the estimates and flagged `IntersectsBoundaryMarginOnly`. Equivalently: a session takes part only if it is active somewhere in the interval reduced by 60 seconds at each end.
+The interval of interest has a **boundary margin** equal to `SESSION_BOUNDARY_RESOLUTION`: a session takes part only if it is active somewhere in the interval reduced by 60 seconds at each end. A session whose only overlap with the interval falls inside that margin is excluded from the estimates and flagged `IntersectsBoundaryMarginOnly`.
+
+The margin's width is the width of the reporting uncertainty. The true start lies in `[Conn_start, Conn_start + 60s)` and the true end in `[Adj_conn_end - 60s, Adj_conn_end)`, so requiring `Adj_conn_end` to be more than 60 seconds past the interval's start is exactly the condition that the true end is after that start whatever it turns out to be — at exactly 60 seconds the true end may be the interval's start itself, which under half-open intervals is no overlap. The test at the other end is the mirror image, and marginally stronger than it need be: a session whose reported start is exactly 60 seconds before the interval ends does provably begin before the interval ends, but the overlap that buys is under a minute and may be arbitrarily small, so it goes with the rest.
 
 The margin applies *only* at the boundaries. A session lying inside the interval is included however short. This includes any spikes, i.e., sessions whose `Active_Charge_Time` is zero. The margin also decides membership *only*: once a session is included, its `SessionGroup` end-points are clamped to the real interval, so the groups tile it and a reported peak window is a wall-clock window that can be matched against the metering data.
 

@@ -199,7 +199,11 @@ fn collect_session_anomalies(
         });
 
     let mut anomalies: Vec<Anomaly> = from_rsessions.chain(from_excluded).collect();
-    anomalies.sort_by(|a, b| a.row.cmp(&b.row).then_with(|| a.session_id.cmp(&b.session_id)));
+    anomalies.sort_by(|a, b| {
+        a.row
+            .cmp(&b.row)
+            .then_with(|| a.session_id.cmp(&b.session_id))
+    });
     anomalies
 }
 
@@ -374,7 +378,10 @@ mod test {
         for n in [1, 5, 10] {
             let groups = concurrent(n);
             let estimates = estimates_for_groups(&groups).expect("a group exists");
-            assert_eq!(estimates.direct.consumption_based_kw.value, n as f64, "n={n}");
+            assert_eq!(
+                estimates.direct.consumption_based_kw.value, n as f64,
+                "n={n}"
+            );
             assert!(estimates.clamped.is_none(), "n={n}");
         }
     }
@@ -391,8 +398,7 @@ mod test {
 
             assert_eq!(direct.consumption_based_kw.value, n as f64, "n={n}");
             assert_eq!(
-                clamped.consumption_based_kw.value,
-                EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS as f64,
+                clamped.consumption_based_kw.value, EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS as f64,
                 "n={n}"
             );
             assert!(

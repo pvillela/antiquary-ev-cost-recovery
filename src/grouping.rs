@@ -247,22 +247,36 @@ impl SessionGroup {
     /// The sessions the clamped figures are computed over: all of them while the group holds no
     /// more than [`EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`], and otherwise exactly that many.
     ///
-    /// Which ones go is decided in two tiers. A session ending within one
-    /// [`SESSION_BOUNDARY_RESOLUTION`] of the group's start may not have overlapped the group at
-    /// all: the report truncates end times to the minute, so a session that in fact *abutted* the
-    /// next one is indistinguishable from one that overlapped it. These **short-overlap** sessions
-    /// are dropped first, lowest average power first. Only when dropping all of them still leaves
-    /// the group oversized are **long-overlap** sessions dropped, again lowest power first — those
-    /// demonstrably did overlap, so they are the last to go. Ties are broken on session id, so the
-    /// result never depends on iteration order.
+    /// Which ones go is decided in two tiers, ranked on how far a session's `conn_end` reaches
+    /// past the group's start:
     ///
-    /// The first tier can only be non-empty for a group no longer than one
-    /// [`SESSION_BOUNDARY_RESOLUTION`], and that is what makes the rule sound rather than
-    /// arbitrary. Every session in a group outlasts the group — [`end_points_to_groups`] emits the
-    /// run `[run_start, time)` *before* applying any end-point at `time` — so
+    /// 1. **Short-overlap** — `conn_end - start <= SESSION_BOUNDARY_RESOLUTION`. Dropped first,
+    ///    lowest average power first.
+    /// 2. **Long-overlap** — everything else. Dropped only when emptying tier 1 still leaves the
+    ///    group oversized, again lowest power first.
+    ///
+    /// Ties are broken on session id, so the result never depends on iteration order.
+    ///
+    /// The tier boundary is derived, not chosen. `conn_end` is `Adj_conn_end`: the reported end
+    /// padded to the exclusive end of the minute it fell in, so the true end lies somewhere in
+    /// `[conn_end - SESSION_BOUNDARY_RESOLUTION, conn_end)`. A short-overlap session has
+    /// `conn_end - SESSION_BOUNDARY_RESOLUTION <= start`, so it may have truly ended at or before
+    /// the group began, contributing nothing to it. A long-overlap session's true end is strictly
+    /// after `start`, so it was still connected once the group was under way. The comparison is
+    /// strict because the intervals are half-open: at exactly one resolution the true end can *be*
+    /// `start`, and that is no overlap at all.
+    ///
+    /// Tier 2 establishes presence in the group's span — which is what the sweep means by
+    /// concurrency — and not verified pairwise overlap with any particular member: the group's
+    /// start may itself be another session's reported start, whose true start lies up to one
+    /// resolution later.
+    ///
+    /// Tier 1 can only be non-empty for a group no longer than one [`SESSION_BOUNDARY_RESOLUTION`].
+    /// Every session in a group outlasts the group — [`end_points_to_groups`] emits the run
+    /// `[run_start, time)` *before* applying any end-point at `time` — so
     /// `conn_end - start >= self.duration()` for every member. A short-overlap session therefore
-    /// implies a group of at most one tick, which is precisely where the truncation artefact
-    /// lives and nowhere else.
+    /// implies a group of at most one tick, so the rule fires only where the uncertainty it answers
+    /// to actually lives, and nowhere else.
     fn eligible_sessions(&self) -> Vec<RSession> {
         let mut ranked: Vec<(bool, f64, String, RSession)> = self
             .sessions
@@ -277,7 +291,12 @@ impl SessionGroup {
                         )
                     });
                 let long_overlap = overlap > SESSION_BOUNDARY_RESOLUTION;
-                (long_overlap, session.avg_power, session.id.clone(), s.clone())
+                (
+                    long_overlap,
+                    session.avg_power,
+                    session.id.clone(),
+                    s.clone(),
+                )
             })
             .collect();
 
@@ -333,15 +352,24 @@ pub fn groups_for_interval(
 /// `interval`.
 ///
 /// A session takes part only if it is active somewhere in `interval` reduced by `boundary_margin`
-/// at each end: reported times are truncated to whole minutes, so an overlap confined to a boundary
-/// margin cannot be trusted. The margin decides *membership* only — end-points are clamped to the
-/// real interval, so the groups tile it and a reported peak window is a wall-clock window that can
-/// be matched against the metering data. A session whose overlap falls entirely within a margin is
-/// flagged [`AnomalyKind::IntersectsBoundaryMarginOnly`].
+/// at each end. That reduction is what the reporting uncertainty costs, and it is derived from the
+/// two windows the uncertainty leaves — assuming, as every call site does, that `boundary_margin`
+/// is one [`SESSION_BOUNDARY_RESOLUTION`]. `conn_start` is truncated to the minute, so the true
+/// start lies in `[conn_start, conn_start + margin)`; `conn_end` is `Adj_conn_end`, the reported
+/// end padded to the exclusive end of its minute, so the true end lies in
+/// `[conn_end - margin, conn_end)`.
 ///
-/// Both tests are strict, on both sides. Sessions and intervals alike are half-open, so a session
-/// whose exclusive `conn_end` *is* the reduced interval's start does not overlap it at all, and one
-/// starting exactly at the reduced interval's end likewise does not.
+/// `conn_end > lo + margin` is then exactly the condition that the true end is after `lo` whatever
+/// it turns out to be: at `conn_end == lo + margin` the true end may be `lo` itself, and under
+/// half-open intervals that is no overlap. The mirror test, `conn_start < hi - margin`, is a hair
+/// stronger than it need be — `conn_start == hi - margin` already puts the true start before `hi` —
+/// but the overlap that case buys is under one margin and may be arbitrarily small, so it goes with
+/// the rest.
+///
+/// The margin decides *membership* only — end-points are clamped to the real interval, so the
+/// groups tile it and a reported peak window is a wall-clock window that can be matched against the
+/// metering data. A session whose overlap falls entirely within a margin is flagged
+/// [`AnomalyKind::IntersectsBoundaryMarginOnly`].
 fn end_points_for_interval(
     interval: (Timestamp, Timestamp),
     sessions: &mut Vec<RSession>,
@@ -681,7 +709,11 @@ mod test {
             let g = &groups[0];
 
             assert_eq!(g.size(), n, "n={n}");
-            assert_eq!(g.clamped_size(), EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS, "n={n}");
+            assert_eq!(
+                g.clamped_size(),
+                EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS,
+                "n={n}"
+            );
             // Powers are 1.0..=n, so the survivors are the top ten and their sum is known.
             let kept: f64 = ((n - EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS + 1)..=n)
                 .map(|i| i as f64)
@@ -695,10 +727,11 @@ mod test {
         }
     }
 
-    /// The tiers, which are the point of the rule. Eleven sessions end one tick into the group, so
-    /// the truncation cannot tell whether they overlapped it or merely abutted it; one session
-    /// spans the group outright and demonstrably did overlap. Two must go, and both come from the
-    /// suspect tier — even though the session that spans the group is the weakest in it.
+    /// The tiers, which are the point of the rule. Eleven sessions have an adjusted end exactly one
+    /// tick past the group's start, so each of them may in truth have ended before the group began;
+    /// one session spans the group outright and was certainly still connected. Two must go, and
+    /// both come from the suspect tier — even though the session that spans the group is the
+    /// weakest in it.
     #[test]
     fn short_overlap_sessions_are_dropped_before_long_overlap_ones() {
         let mut sessions: Vec<RSession> = (1..=11)
