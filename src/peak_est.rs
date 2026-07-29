@@ -1,6 +1,6 @@
 use crate::{
     Anomaly, EV_POWER_FACTOR, EVOLUTE_BREAKER_KVA_RATING, EVOLUTE_BREAKER_KW_RATING, GroupAnomaly,
-    RSession, SessionGroup, SessionReport, groups_for_interval, session_list,
+    RSession, Session, SessionGroup, SessionReport, View, groups_for_interval, session_list,
 };
 use jiff::Timestamp;
 use std::{
@@ -33,7 +33,7 @@ impl PowerEstimate {
     }
 }
 
-/// The four estimates, under one assumption about how many panels are installed.
+/// The four estimates, under one [`View`] of the session groups.
 pub struct EstimateSet {
     pub consumption_based_kw: PowerEstimate,
     pub consumption_based_kva: PowerEstimate,
@@ -41,32 +41,59 @@ pub struct EstimateSet {
     pub breaker_specs_based_kva: PowerEstimate,
 }
 
-/// The estimates for an interval of interest.
+impl EstimateSet {
+    /// The four figures, in the order the report tabulates them.
+    ///
+    /// Deduplication compares these exactly, floats and all, which is sound here rather than
+    /// sloppy: a set that differs from another does so because a different subset of the *same*
+    /// `avg_power` values was summed, and dropping a member that contributed 0.0 leaves the sum
+    /// bit-identical. Nothing reaching a group is NaN — a spike's infinite average power is
+    /// substituted before grouping.
+    pub fn values(&self) -> [f64; 4] {
+        [
+            self.consumption_based_kw.value,
+            self.consumption_based_kva.value,
+            self.breaker_specs_based_kw.value,
+            self.breaker_specs_based_kva.value,
+        ]
+    }
+}
+
+/// The estimates for an interval of interest, over the 2×2 of [`crate::Boundary`] and
+/// [`crate::Clamping`].
 ///
-/// `direct` is computed from the session groups exactly as the report gives them, assuming no
-/// constraint on how many sessions can run at once — which is what more than one panel would mean.
-/// It is always present.
+/// `direct` is the tiling exactly as reported: every session that might have been running, and no
+/// constraint on how many can run at once. It is always present, and it is deliberately the
+/// over-inclusive corner — understating a maximum is the unsafe error, so the headline figure is
+/// drawn from everything that could have contributed and the doubt is reported beside it.
 ///
 /// `clamped` assumes instead the single panel this software is written for, whose PLC will not run
 /// more than [`crate::EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`] sessions at once, so a larger group
-/// is cut down to that. It is `Some` only when some group actually exceeded the limit; otherwise
-/// clamping is a no-op and the figures would merely repeat `direct`.
+/// is cut down to that. It is `Some` exactly when some group was actually cut down — equivalently,
+/// when some group carries [`GroupAnomaly::ClampedSessionGroup`], which is the invariant the
+/// report's asterisk rests on. The two formulations coincide: the group `direct` draws
+/// `breaker_specs_based_*` from is by definition the largest, so if it is oversized its clamped
+/// size falls to the limit and the figures differ, and if it is not, no group anywhere is.
 ///
-/// Testing *any* group is the same as testing the peak ones, so nothing turns on the choice: the
-/// group `direct` draws `breaker_specs_based_*` from is by definition the largest, so it exceeds
-/// the limit exactly when some group does. A clamped group that never peaks cannot arise.
+/// `direct_narrow` and `clamped_narrow` drop the sessions flagged
+/// [`crate::AnomalyKind::IntersectsBoundaryMarginOnly`], whose overlap with the interval is not
+/// provable. Each is `Some` only when its four figures differ from every set printed before it, so
+/// no report ever shows the same numbers twice.
 ///
-/// What clamping can still do, when the peaking group is itself oversized, is *move* the peak —
-/// lowering that group's figures may drop it below one that was never clamped. So `clamped` and
-/// `direct` may cite different `session_group_idx`.
+/// Clamping can *move* a peak as well as lower it — cutting the peaking group down may drop it
+/// below one that was never clamped — so two sets may cite different `session_group_idx`.
 ///
-/// When both are present `clamped <= direct` throughout — the clamped figures sum over a subset
-/// and count no more — so the pair nests, and `[clamped.consumption_based_kw,
-/// direct.breaker_specs_based_kw]` is the widest honest bracket on the true peak. No report seen
-/// so far produces a `clamped` at all; the June sample peaks at three concurrent sessions.
+/// **The four do not nest.** `clamped <= direct` and `direct_narrow <= direct` both hold, since
+/// each sums over a subset and counts no more. But `clamped_narrow` can *exceed* `clamped`: see
+/// [`SessionGroup::eligible_sessions`] for why narrowing a group can raise its clamped total. Any
+/// bracket must therefore be an actual min and max over whichever sets are present, never a corner
+/// picked in advance. No report seen so far produces a `clamped` at all; the June sample peaks at
+/// three concurrent sessions.
 pub struct PowerEstimates {
     pub direct: EstimateSet,
+    pub direct_narrow: Option<EstimateSet>,
     pub clamped: Option<EstimateSet>,
+    pub clamped_narrow: Option<EstimateSet>,
 }
 
 pub struct PowerEstimatesReport {
@@ -79,13 +106,26 @@ pub struct PowerEstimatesReport {
     pub interval: (Timestamp, Timestamp),
     pub estimates: Option<PowerEstimates>,
     pub session_groups: Vec<Rc<SessionGroup>>,
-    /// Every anomaly carried by every session that intersects this interval, excluded ones
-    /// included. Sessions elsewhere in the workbook are not reported: they say nothing about this
-    /// estimate. Without this the caller has a number and no way to judge it: sessions dropped for
-    /// [`crate::AnomalyKind::InconsistentDuration`] or
-    /// [`crate::AnomalyKind::IntersectsBoundaryMarginOnly`] appear in no group, and a spike's
-    /// substituted average power is invisible in the total it feeds.
+    /// Every anomaly carried by every session that took part in this interval's groups. Sessions
+    /// elsewhere in the workbook are not reported: they say nothing about this estimate. Without
+    /// this the caller has a number and no way to judge it — a session flagged
+    /// [`crate::AnomalyKind::IntersectsBoundaryMarginOnly`] is counted in `direct` though it may
+    /// never have been running, and a spike's substituted average power is invisible in the total
+    /// it feeds.
+    ///
+    /// Sessions excluded outright are *not* here; they are in
+    /// [`PowerEstimatesReport::excluded_sessions`], which is reported in full and separately.
     pub session_anomalies: Vec<Anomaly>,
+    /// Every session excluded from the estimates for
+    /// [`crate::AnomalyKind::InconsistentDuration`] — the whole workbook's worth, not only those
+    /// near this interval.
+    ///
+    /// Unfiltered on purpose. Such a record's own fields contradict each other, so asking whether
+    /// it intersects the interval is asking a question of the very timestamps that are in doubt: a
+    /// session that belongs in this window may well test as falling outside it. The report states
+    /// which ones appear to touch the interval and lists the rest anyway, leaving the judgement to
+    /// a reader who can go back to the source rows.
+    pub excluded_sessions: Vec<Session>,
 }
 
 /// Produces EV maximum power estimates for the interval of interest `interval` and the session
@@ -123,10 +163,10 @@ pub fn max_power_estimates_for_interval(
         .collect();
     let groups = groups_for_interval(interval, &mut rsessions);
 
-    // After grouping, not before: `groups_for_interval` appends
-    // `IntersectsBoundaryMarginOnly` to sessions it rejects, and those sessions belong to no group,
-    // so `rsessions` is the only place they survive.
-    let session_anomalies = collect_session_anomalies(interval, &rsessions, &excluded);
+    // After grouping, not before: `groups_for_interval` appends `IntersectsBoundaryMarginOnly` to
+    // the sessions whose overlap it could not establish, and that flag is half of what makes this
+    // list worth reading.
+    let session_anomalies = collect_session_anomalies(interval, &rsessions);
 
     let estimates = estimates_for_groups(&groups);
     Ok(PowerEstimatesReport {
@@ -135,27 +175,50 @@ pub fn max_power_estimates_for_interval(
         estimates,
         session_groups: groups,
         session_anomalies,
+        excluded_sessions: excluded,
     })
 }
 
 /// Assembles the estimates for an already-computed tiling, or `None` when no session reached the
 /// interval and there are no groups.
 ///
-/// `clamped` is produced only when some group was actually cut down to one panel's worth —
-/// `clamped_size() < size()` is exactly that test. If it holds nowhere, clamping is a no-op and the
-/// set would merely repeat `direct`.
+/// `clamped` is gated structurally: it is produced only when some group was actually cut down to
+/// one panel's worth, which `size_in(CLAMPED) < size()` tests exactly. Testing every group is
+/// equivalent to testing only the ones `direct` peaks at, because the size-peak group is the
+/// largest there is — but the `any` form is preferred, because it keeps the invariant that a
+/// `clamped` set is present exactly when some group carries
+/// [`GroupAnomaly::ClampedSessionGroup`], which is what the report's asterisk promises.
 ///
-/// Testing every group is equivalent to testing only the ones `direct` peaks at, because the
-/// size-peak group is the largest there is: if *it* is within the limit then so is everything else.
-/// The `any` form is preferred for keeping the invariant that a `clamped` set is present exactly
-/// when some group carries [`GroupAnomaly::ClampedSessionGroup`].
+/// The narrow sets are gated on their figures instead. There is no structural test for them: a
+/// flagged session may sit in a group that never peaks, in which case narrowing changes no reported
+/// number and a second table would only repeat the first. Each is kept only if it differs from
+/// every set already destined for the report, in print order, so no two tables can coincide.
 pub(crate) fn estimates_for_groups(groups: &[Rc<SessionGroup>]) -> Option<PowerEstimates> {
-    let any_clamped = groups.iter().any(|g| g.clamped_size() < g.size());
-    estimate_set(groups, Clamping::Direct).map(|direct| PowerEstimates {
+    let direct = estimate_set(groups, View::DIRECT)?;
+
+    let clamped = groups
+        .iter()
+        .any(|g| g.size_in(View::CLAMPED) < g.size())
+        .then(|| estimate_set(groups, View::CLAMPED))
+        .flatten();
+
+    let mut shown = vec![direct.values()];
+    shown.extend(clamped.as_ref().map(EstimateSet::values));
+
+    let mut keep = |set: Option<EstimateSet>| -> Option<EstimateSet> {
+        let set = set?;
+        if shown.contains(&set.values()) {
+            return None;
+        }
+        shown.push(set.values());
+        Some(set)
+    };
+
+    Some(PowerEstimates {
+        direct_narrow: keep(estimate_set(groups, View::DIRECT_NARROW)),
+        clamped_narrow: keep(estimate_set(groups, View::CLAMPED_NARROW)),
         direct,
-        clamped: any_clamped
-            .then(|| estimate_set(groups, Clamping::Clamped))
-            .flatten(),
+        clamped,
     })
 }
 
@@ -163,42 +226,33 @@ pub(crate) fn estimates_for_groups(groups: &[Rc<SessionGroup>]) -> Option<PowerE
 ///
 /// Restricted to sessions intersecting the interval, because the workbook covers a whole billing
 /// period while a report covers one window in it: a spike three weeks away says nothing about this
-/// estimate and would only bury the findings that do. Intersection is the plain overlap test, with
-/// no boundary margin — a session excluded by the margin is exactly one worth reporting.
+/// estimate and would only bury the findings that do. That restriction is safe here and not for
+/// [`PowerEstimatesReport::excluded_sessions`], because these sessions' timestamps are the ones the
+/// grouping already trusted.
 ///
 /// Deliberately blind to [`crate::AnomalyKind`]: it matches on nothing, so a kind added later
 /// surfaces here without anyone having to remember to wire it up.
 fn collect_session_anomalies(
     interval: (Timestamp, Timestamp),
     rsessions: &[RSession],
-    excluded: &[crate::Session],
 ) -> Vec<Anomaly> {
-    let from_rsessions = rsessions.iter().flat_map(|rs| {
-        let s = rs.as_ref().borrow();
-        if !s.intersects(interval) {
-            return Vec::new();
-        }
-        s.anomalies
-            .iter()
-            .map(|kind| Anomaly {
-                row: s.row,
-                session_id: s.id.clone(),
-                kind: *kind,
-            })
-            .collect::<Vec<_>>()
-    });
-    let from_excluded = excluded
+    let mut anomalies: Vec<Anomaly> = rsessions
         .iter()
-        .filter(|s| s.intersects(interval))
-        .flat_map(|s| {
-            s.anomalies.iter().map(|kind| Anomaly {
-                row: s.row,
-                session_id: s.id.clone(),
-                kind: *kind,
-            })
-        });
-
-    let mut anomalies: Vec<Anomaly> = from_rsessions.chain(from_excluded).collect();
+        .flat_map(|rs| {
+            let s = rs.as_ref().borrow();
+            if !s.intersects(interval) {
+                return Vec::new();
+            }
+            s.anomalies
+                .iter()
+                .map(|kind| Anomaly {
+                    row: s.row,
+                    session_id: s.id.clone(),
+                    kind: *kind,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
     anomalies.sort_by(|a, b| {
         a.row
             .cmp(&b.row)
@@ -207,41 +261,16 @@ fn collect_session_anomalies(
     anomalies
 }
 
-/// Which view of an oversized group an [`EstimateSet`] is computed under.
-#[derive(Clone, Copy)]
-enum Clamping {
-    /// One panel: a group above the PLC limit is cut down to it.
-    Clamped,
-    /// The groups as the report gives them, with no panel constraint applied.
-    Direct,
-}
-
-impl Clamping {
-    fn agg_avg_power(self, group: &SessionGroup) -> f64 {
-        match self {
-            Self::Clamped => group.clamped_agg_avg_power(),
-            Self::Direct => group.agg_avg_power(),
-        }
-    }
-
-    fn size(self, group: &SessionGroup) -> usize {
-        match self {
-            Self::Clamped => group.clamped_size(),
-            Self::Direct => group.size(),
-        }
-    }
-}
-
-/// The four estimates for `groups` under one [`Clamping`], or `None` when there are no groups.
+/// The four estimates for `groups` under one [`View`], or `None` when there are no groups.
 ///
-/// Each figure selects its own peak group *through the same `clamping`* it reports. Selecting by
-/// one view and reporting the other would name a group that did not peak.
-fn estimate_set(groups: &[Rc<SessionGroup>], clamping: Clamping) -> Option<EstimateSet> {
-    let power_idx = max_group_by(groups, |g| clamping.agg_avg_power(g))?;
-    let size_idx = max_group_by(groups, |g| clamping.size(g))?;
+/// Each figure selects its own peak group *through the same `view`* it reports. Selecting by one
+/// view and reporting another would name a group that did not peak.
+fn estimate_set(groups: &[Rc<SessionGroup>], view: View) -> Option<EstimateSet> {
+    let power_idx = max_group_by(groups, |g| g.agg_avg_power_in(view))?;
+    let size_idx = max_group_by(groups, |g| g.size_in(view))?;
 
-    let max_kw = clamping.agg_avg_power(&groups[power_idx]);
-    let max_size = clamping.size(&groups[size_idx]) as f64;
+    let max_kw = groups[power_idx].agg_avg_power_in(view);
+    let max_size = groups[size_idx].size_in(view) as f64;
 
     let at = |value: f64, idx: usize| PowerEstimate {
         value,
@@ -350,6 +379,65 @@ mod test {
     #[test]
     fn no_groups_yields_no_estimates() {
         assert!(estimates_for_groups(&[]).is_none());
+    }
+
+    /// The interval the boundary-axis tests work in. `M` below ends exactly one
+    /// `SESSION_BOUNDARY_RESOLUTION` into it, so its true end may be `20:00:00` itself and its
+    /// overlap is unprovable — the flag `Boundary::Narrow` reads.
+    const LO: &str = "2026-06-01T20:00:00Z";
+    const HI: &str = "2026-06-01T21:00:00Z";
+
+    /// A flagged session in the peaking group: the narrow set says something different, so it is
+    /// given. `clamped_narrow` would repeat it exactly, nothing being oversized, so it is not.
+    #[test]
+    fn narrow_set_is_given_when_a_doubtful_session_peaks() {
+        let mut sessions = vec![
+            rsession("M", "2026-06-01T19:50:00Z", "2026-06-01T20:01:00Z", 5.0),
+            rsession("A", "2026-06-01T19:55:00Z", "2026-06-01T20:30:00Z", 1.0),
+        ];
+        let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
+        let est = estimates_for_groups(&groups).expect("groups exist");
+
+        // Both sessions run over the first group; only `A` survives narrowing.
+        assert_eq!(groups[0].size(), 2);
+        assert_eq!(groups[0].size_in(View::DIRECT_NARROW), 1);
+
+        assert_eq!(est.direct.consumption_based_kw.value, 6.0);
+        let narrow = est
+            .direct_narrow
+            .expect("the figures differ, so it is given");
+        assert_eq!(narrow.consumption_based_kw.value, 1.0);
+        assert_eq!(
+            narrow.breaker_specs_based_kw.value,
+            EVOLUTE_BREAKER_KW_RATING
+        );
+
+        assert!(est.clamped.is_none(), "nothing is oversized");
+        assert!(
+            est.clamped_narrow.is_none(),
+            "it would only repeat `direct_narrow`"
+        );
+    }
+
+    /// A flagged session away from every peak changes no figure, so no second table is produced —
+    /// the case a structural gate would get wrong. Its group narrows to nothing at all, which is
+    /// reported honestly as zero and simply never wins a maximum.
+    #[test]
+    fn narrow_set_is_withheld_when_the_doubtful_session_never_peaks() {
+        let mut sessions = vec![
+            rsession("M", "2026-06-01T19:50:00Z", "2026-06-01T20:01:00Z", 1.0),
+            rsession("A", "2026-06-01T20:10:00Z", "2026-06-01T20:50:00Z", 5.0),
+        ];
+        let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
+
+        assert_eq!(groups[0].size(), 1);
+        assert_eq!(groups[0].size_in(View::DIRECT_NARROW), 0);
+        assert_eq!(groups[0].agg_avg_power_in(View::DIRECT_NARROW), 0.0);
+
+        let est = estimates_for_groups(&groups).expect("groups exist");
+        assert_eq!(est.direct.consumption_based_kw.value, 5.0);
+        assert!(est.direct_narrow.is_none());
+        assert!(est.clamped_narrow.is_none());
     }
 
     /// `n` sessions running concurrently over the whole interval, each drawing 1 kW, so one group

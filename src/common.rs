@@ -98,10 +98,16 @@ pub enum AnomalyKind {
     /// Only fold starts are checked this way; the same inconsistency on any other date is caught,
     /// if at all, by [`AnomalyKind::InconsistentDuration`]. See README.md, "Time zone".
     DstUnresolvable,
-    /// Session intersects the interval of interest, but only within
-    /// [`SESSION_BOUNDARY_RESOLUTION`] of a boundary. Reported times are truncated to whole
-    /// minutes, so an overlap that small cannot be trusted; the session is excluded from the
-    /// estimates.
+    /// Session intersects the interval of interest, but its overlap cannot be established from the
+    /// reported times: it is confined to within one [`SESSION_BOUNDARY_RESOLUTION`] of a boundary,
+    /// which is the precision those times are stated to. The session may have been running
+    /// throughout, or not at all.
+    ///
+    /// It counts all the same. The session takes part in the groups and in the headline estimates,
+    /// because understating a maximum is the unsafe error. [`crate::Boundary::Narrow`] is the view
+    /// that leaves it out, and the report gives those figures alongside whenever they differ. This
+    /// kind does not exclude a session from anything — only
+    /// [`AnomalyKind::InconsistentDuration`] does that.
     ///
     /// Unlike every other kind, this one depends on which interval of interest was chosen, so it
     /// cannot be recorded in the workbook's `Anomalies` column. It is added by the grouping logic.
@@ -121,20 +127,6 @@ impl AnomalyKind {
             Self::DstUnresolvable => "DstUnresolvable",
             Self::IntersectsBoundaryMarginOnly => "IntersectsBoundaryMarginOnly",
         }
-    }
-
-    /// Whether carrying this kind keeps a session out of the estimates entirely.
-    ///
-    /// Only two kinds do. Both mean the session's overlap with the interval cannot be trusted:
-    /// [`AnomalyKind::InconsistentDuration`] because the record's own fields contradict each
-    /// other, and [`AnomalyKind::IntersectsBoundaryMarginOnly`] because the overlap is smaller
-    /// than the precision the times are reported to. Every other kind is a judgement call that was
-    /// made and recorded; the session still counts. See README.md, "Other".
-    pub fn excludes_from_estimates(&self) -> bool {
-        matches!(
-            self,
-            Self::InconsistentDuration | Self::IntersectsBoundaryMarginOnly
-        )
     }
 
     /// Inverse of [`AnomalyKind::as_str`]. `None` for an unrecognised token.
@@ -182,7 +174,9 @@ impl fmt::Display for AnomalyKind {
             }
             Self::IntersectsBoundaryMarginOnly => {
                 "session overlaps the interval of interest only within a minute of a boundary, \
-                 which is the precision the report's session times are stated to"
+                 which is the precision the report's session times are stated to, so it may not \
+                 have been running in this window at all. It is counted in the main estimates; \
+                 the \"Narrow\" ones leave it out"
             }
         };
         f.write_str(s)

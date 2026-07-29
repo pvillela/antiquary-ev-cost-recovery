@@ -8,11 +8,13 @@ Interval   2026-06-15 16:00 - 17:00 EDT  (1 hour)
 Estimates
 ---------
 
-Some group was reported with more concurrent sessions than a single panel
-can run, so two sets are given. Either a second panel is installed, or the
-report is wrong.
+More than one reading of the data is defensible here, because some group was
+reported with more concurrent sessions than a single panel can run, so
+either a second panel is installed or the report is wrong. Each is given
+below. The first counts every session and constrains nothing, so it is the
+one to quote if only one figure is wanted.
 
-"Direct" - the groups exactly as reported:
+"Direct" - every session counted, no panel constraint:
 
 | Estimate           |     kW |    kVA | Group |
 |:-------------------|-------:|-------:|------:|

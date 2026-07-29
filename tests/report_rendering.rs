@@ -125,15 +125,24 @@ fn golden_reports_are_readable_as_plain_text() {
                 !line.starts_with('#'),
                 "{at}: hash heading; setext underlines read better raw: {line:?}"
             );
-            assert!(!line.contains("<br"), "{at}: HTML break shows literally: {line:?}");
+            assert!(
+                !line.contains("<br"),
+                "{at}: HTML break shows literally: {line:?}"
+            );
             assert!(
                 line.chars().count() <= 90,
                 "{at}: {} columns, too wide to read raw: {line:?}",
                 line.chars().count()
             );
         }
-        assert!(!md.contains("**"), "{stem}: bold markers are noise in plain text");
-        assert!(!md.contains('`'), "{stem}: backticks are noise in plain text");
+        assert!(
+            !md.contains("**"),
+            "{stem}: bold markers are noise in plain text"
+        );
+        assert!(
+            !md.contains('`'),
+            "{stem}: backticks are noise in plain text"
+        );
     }
 }
 

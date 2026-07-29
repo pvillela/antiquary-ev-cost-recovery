@@ -16,7 +16,7 @@
 //!   a single line and a group of twelve sessions cannot be wrapped inside one.
 
 use crate::{
-    AnomalyKind, EstimateSet, GroupAnomaly, PowerEstimatesReport, SessionGroup, time_zone,
+    AnomalyKind, EstimateSet, GroupAnomaly, PowerEstimatesReport, SessionGroup, View, time_zone,
 };
 use jiff::{Timestamp, Zoned};
 use std::{fmt, time::Duration};
@@ -128,6 +128,14 @@ fn hms(ts: Timestamp) -> String {
     local(ts).strftime("%H:%M:%S").to_string()
 }
 
+/// Dated, and to the minute. The excluded list covers the whole workbook, so its dates cannot be
+/// left implicit the way they can inside a single interval of interest — and unlike a group
+/// boundary, which the interval can clamp to any instant, a session's reported times are always
+/// whole minutes, so seconds here would only imply a precision the workbook does not have.
+fn ymd_hm(ts: Timestamp) -> String {
+    local(ts).strftime("%Y-%m-%d %H:%M").to_string()
+}
+
 /// Group number, with the anomaly marker in a slot of its own so the digits stay in a column:
 /// `0 `, `1*`, `2 ` align, whereas `0`, `1*`, `2` stagger under right alignment.
 ///
@@ -184,6 +192,7 @@ impl PowerEstimatesReport {
         push(String::new());
 
         self.push_estimates(&mut out);
+        self.push_excluded(&mut out);
         self.push_groups(&mut out);
         self.push_membership(&mut out);
         self.push_anomalies(&mut out);
@@ -208,69 +217,208 @@ impl PowerEstimatesReport {
             return;
         };
 
-        let direct = &estimates.direct;
-        match &estimates.clamped {
-            None => {
-                out.push(table(
-                    &ESTIMATE_HEADERS,
-                    &estimate_rows(direct),
-                    &ESTIMATE_ALIGN,
-                ));
-                out.push(String::new());
-                out.push(wrap(
-                    &format!(
-                        "The likely kW values are in the range from {:.3} kW \
-                         (consumption-based) to {:.3} kW (breaker-spec-based). The likely kVA \
-                         values are in the range from {:.3} kVA (consumption-based) to {:.3} kVA \
-                         (breaker-spec-based).",
-                        direct.consumption_based_kw.value,
-                        direct.breaker_specs_based_kw.value,
-                        direct.consumption_based_kva.value,
-                        direct.breaker_specs_based_kva.value,
-                    ),
-                    "",
-                ));
-            }
-            Some(clamped) => {
-                out.push(wrap(
-                    "Some group was reported with more concurrent sessions than a single panel \
-                     can run, so two sets are given. Either a second panel is installed, or the \
-                     report is wrong.",
-                    "",
-                ));
-                out.push(String::new());
-                out.push("\"Direct\" - the groups exactly as reported:".to_owned());
-                out.push(String::new());
-                out.push(table(
-                    &ESTIMATE_HEADERS,
-                    &estimate_rows(direct),
-                    &ESTIMATE_ALIGN,
-                ));
-                out.push(String::new());
-                out.push(format!(
-                    "\"Clamped\" - assuming one panel, capped at {} concurrent sessions:",
+        // Print order, omitting any set suppressed for repeating an earlier one. The name is
+        // quoted and the gloss is not, per the module docs: a label has to read as a label in
+        // plain text, and quotation marks are the only device available.
+        let mut sets: Vec<(&str, String, &EstimateSet)> = vec![(
+            "Direct",
+            "every session counted, no panel constraint".to_owned(),
+            &estimates.direct,
+        )];
+        if let Some(set) = &estimates.clamped {
+            sets.push((
+                "Clamped",
+                format!(
+                    "assuming one panel, capped at {} concurrent sessions",
                     crate::EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS
-                ));
+                ),
+                set,
+            ));
+        }
+        if let Some(set) = &estimates.direct_narrow {
+            sets.push((
+                "Direct, narrow",
+                "counting only sessions whose overlap is certain".to_owned(),
+                set,
+            ));
+        }
+        if let Some(set) = &estimates.clamped_narrow {
+            sets.push((
+                "Clamped, narrow",
+                "both restrictions at once".to_owned(),
+                set,
+            ));
+        }
+
+        if sets.len() > 1 {
+            let mut why: Vec<&str> = Vec::new();
+            if estimates.clamped.is_some() {
+                why.push(
+                    "some group was reported with more concurrent sessions than a single panel \
+                     can run, so either a second panel is installed or the report is wrong",
+                );
+            }
+            if estimates.direct_narrow.is_some() || estimates.clamped_narrow.is_some() {
+                why.push(
+                    "some session overlaps the interval by less than the precision its times are \
+                     reported to, so it may not have been running in this window at all",
+                );
+            }
+            out.push(wrap(
+                &format!(
+                    "More than one reading of the data is defensible here, because {}. Each is \
+                     given below. The first counts every session and constrains nothing, so it is \
+                     the one to quote if only one figure is wanted.",
+                    why.join(", and "),
+                ),
+                "",
+            ));
+            out.push(String::new());
+        }
+
+        for (name, gloss, set) in &sets {
+            if sets.len() > 1 {
+                out.push(wrap(&format!("\"{name}\" - {gloss}:"), "  "));
                 out.push(String::new());
-                out.push(table(
-                    &ESTIMATE_HEADERS,
-                    &estimate_rows(clamped),
-                    &ESTIMATE_ALIGN,
-                ));
-                out.push(String::new());
-                out.push(wrap(
-                    &format!(
-                        "The likely kW values are in the range from {:.3} kW (\"Clamped\", \
-                         consumption-based) to {:.3} kW (\"Direct\", breaker-spec-based). The \
-                         likely kVA values are in the range from {:.3} kVA (\"Clamped\", \
-                         consumption-based) to {:.3} kVA (\"Direct\", breaker-spec-based).",
-                        clamped.consumption_based_kw.value,
-                        direct.breaker_specs_based_kw.value,
-                        clamped.consumption_based_kva.value,
-                        direct.breaker_specs_based_kva.value,
-                    ),
-                    "",
-                ));
+            }
+            out.push(table(
+                &ESTIMATE_HEADERS,
+                &estimate_rows(set),
+                &ESTIMATE_ALIGN,
+            ));
+            out.push(String::new());
+        }
+
+        // The bracket is an actual min and max over the sets present, never a corner picked in
+        // advance: the four do not nest, because narrowing a group can lift it back under the
+        // panel limit and so raise its clamped figures. See `PowerEstimates`.
+        //
+        // Selecting on kW serves kVA too. kVA is kW over a fixed power factor on the consumption
+        // side, and a fixed per-breaker rating times the same count on the other, so both are
+        // strictly increasing in whatever kW ranks on and the argmin and argmax cannot differ.
+        let low = sets
+            .iter()
+            .min_by(|a, b| {
+                a.2.consumption_based_kw
+                    .value
+                    .total_cmp(&b.2.consumption_based_kw.value)
+            })
+            .expect("`direct` is always present");
+        let high = sets
+            .iter()
+            .max_by(|a, b| {
+                a.2.breaker_specs_based_kw
+                    .value
+                    .total_cmp(&b.2.breaker_specs_based_kw.value)
+            })
+            .expect("`direct` is always present");
+        // The gloss belongs over its table, not in a sentence that may name four sets; and with
+        // only one set there is nothing to name at all.
+        let name = |name: &str| {
+            if sets.len() > 1 {
+                format!("\"{name}\", ")
+            } else {
+                String::new()
+            }
+        };
+        out.push(wrap(
+            &format!(
+                "The likely kW values are in the range from {:.3} kW ({}consumption-based) to \
+                 {:.3} kW ({}breaker-spec-based). The likely kVA values are in the range from \
+                 {:.3} kVA ({}consumption-based) to {:.3} kVA ({}breaker-spec-based).",
+                low.2.consumption_based_kw.value,
+                name(low.0),
+                high.2.breaker_specs_based_kw.value,
+                name(high.0),
+                low.2.consumption_based_kva.value,
+                name(low.0),
+                high.2.breaker_specs_based_kva.value,
+                name(high.0),
+            ),
+            "",
+        ));
+
+        if !self.excluded_sessions.is_empty() {
+            out.push(String::new());
+            let n = self.excluded_sessions.len();
+            out.push(wrap(
+                &format!(
+                    "{} in the workbook {} excluded from every figure above, having reported \
+                     times that contradict each other. They are listed under Excluded sessions.",
+                    if n == 1 {
+                        "One session".to_owned()
+                    } else {
+                        format!("{n} sessions")
+                    },
+                    if n == 1 { "was" } else { "were" },
+                ),
+                "",
+            ));
+        }
+
+        out.push(String::new());
+        out.push(String::new());
+    }
+
+    /// Every session excluded from the estimates, whether or not it appears to touch the interval.
+    ///
+    /// Listed in full rather than filtered to the interval, because the filter would be applied to
+    /// exactly the timestamps that are in doubt. A session whose fields contradict each other may
+    /// belong in this window and still test as falling outside it, so "In window" is reported as
+    /// what it is — a reading of the same unreliable times — and no row is dropped on its say-so.
+    fn push_excluded(&self, out: &mut Vec<String>) {
+        if self.excluded_sessions.is_empty() {
+            return;
+        }
+        out.push(h2("Excluded sessions"));
+        out.push(String::new());
+
+        let rows: Vec<Vec<String>> = self
+            .excluded_sessions
+            .iter()
+            .map(|s| {
+                vec![
+                    s.row.to_string(),
+                    s.id.clone(),
+                    ymd_hm(s.conn_start),
+                    ymd_hm(s.conn_end),
+                    if s.intersects(self.interval) {
+                        "yes"
+                    } else {
+                        "no"
+                    }
+                    .to_owned(),
+                    s.anomalies
+                        .iter()
+                        .map(|k| k.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ]
+            })
+            .collect();
+        out.push(table(
+            &["Row", "Session", "From", "To", "Window", "Anomaly"],
+            &rows,
+            &[Right, Left, Left, Left, Left, Left],
+        ));
+        out.push(String::new());
+        out.push(wrap(
+            "These sessions take no part in any estimate. Times are local (ET), and the list \
+             covers the whole workbook rather than the interval of interest. \"Window\" is whether \
+             the session appears to fall in that interval - appears only, because a record whose \
+             own fields contradict each other cannot be trusted to say which window it belongs \
+             in. It reads the same doubtful times, so no row was dropped on its say-so.",
+            "",
+        ));
+        out.push(String::new());
+
+        let mut seen: Vec<AnomalyKind> = Vec::new();
+        for s in &self.excluded_sessions {
+            for kind in &s.anomalies {
+                if !seen.contains(kind) {
+                    seen.push(*kind);
+                    out.push(wrap(&format!("- {} - {}.", kind.as_str(), kind), "  "));
+                }
             }
         }
         out.push(String::new());
@@ -288,7 +436,10 @@ impl PowerEstimatesReport {
             return;
         }
 
-        let any_flagged = self.session_groups.iter().any(|g| !g.anomalies().is_empty());
+        let any_flagged = self
+            .session_groups
+            .iter()
+            .any(|g| !g.anomalies().is_empty());
         let rows: Vec<Vec<String>> = self
             .session_groups
             .iter()
@@ -377,19 +528,13 @@ impl PowerEstimatesReport {
                         a.row.to_string(),
                         a.session_id.clone(),
                         a.kind.as_str().to_owned(),
-                        if a.kind.excludes_from_estimates() {
-                            "yes"
-                        } else {
-                            "no"
-                        }
-                        .to_owned(),
                     ]
                 })
                 .collect();
             out.push(table(
-                &["Row", "Session", "Anomaly", "Excluded"],
+                &["Row", "Session", "Anomaly"],
                 &rows,
-                &[Right, Left, Left, Left],
+                &[Right, Left, Left],
             ));
             out.push(String::new());
             out.push(wrap(
@@ -440,7 +585,7 @@ impl PowerEstimatesReport {
                         hms(g.start()),
                         hms(g.end()),
                         g.size().to_string(),
-                        g.clamped_size().to_string(),
+                        g.size_in(View::CLAMPED).to_string(),
                         a.as_str().to_owned(),
                     ]
                 })
@@ -513,7 +658,9 @@ impl fmt::Display for PowerEstimatesReport {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{Anomaly, RSession, Session, groups_for_interval, max_power_estimates_for_interval};
+    use crate::{
+        Anomaly, RSession, Session, groups_for_interval, max_power_estimates_for_interval,
+    };
     use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
     const LO: &str = "2026-06-01T20:00:00Z";
@@ -545,6 +692,7 @@ mod test {
         let mut sessions = sessions;
         let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
         PowerEstimatesReport {
+            excluded_sessions: Vec::new(),
             source: PathBuf::from("/tmp/Session_Report_Test.xlsx"),
             interval: (ts(LO), ts(HI)),
             estimates: crate::peak_est::estimates_for_groups(&groups),
@@ -590,7 +738,10 @@ mod test {
             );
         }
         // Emphasis markers would collide with the asterisk that marks an anomalous group.
-        assert!(!md.contains("**"), "bold markers render as noise in plain text");
+        assert!(
+            !md.contains("**"),
+            "bold markers render as noise in plain text"
+        );
         assert!(!md.contains('`'), "backticks render as noise in plain text");
     }
 
@@ -603,7 +754,10 @@ mod test {
 
         assert!(md.starts_with("EV Peak Power Contribution\n=========================="));
         assert!(md.contains("Source     Session_Report_Test.xlsx"));
-        assert!(md.contains("Interval   2026-06-01 16:00 - 17:00 EDT  (1 hour)"), "{md}");
+        assert!(
+            md.contains("Interval   2026-06-01 16:00 - 17:00 EDT  (1 hour)"),
+            "{md}"
+        );
         // Three sessions at 1 kW: consumption 3.000, breaker 3 x 6.7.
         assert!(md.contains("| Consumption-based  |  3.000 |"), "{md}");
         assert!(md.contains("| Breaker-spec-based | 20.100 |"), "{md}");
@@ -621,11 +775,16 @@ mod test {
         let md = report.to_markdown();
         assert_plain_text_safe(&md);
 
-        assert!(md.contains("\"Direct\" - the groups exactly as reported:"), "{md}");
         assert!(
-            md.contains("\"Clamped\" - assuming one panel, capped at 10 concurrent sessions:"),
+            md.contains("\"Direct\" - every session counted, no panel constraint:"),
             "{md}"
         );
+        assert!(
+            md.contains("\"Clamped\" - assuming one panel, capped at 10 concurrent"),
+            "{md}"
+        );
+        // No session's overlap is in doubt here, so the boundary axis contributes nothing.
+        assert!(!md.contains("narrow"), "{md}");
         // Direct sums all 12; clamped sums 10.
         assert!(md.contains("| Consumption-based  | 12.000 |"), "{md}");
         assert!(md.contains("| Consumption-based  | 10.000 |"), "{md}");
@@ -636,8 +795,7 @@ mod test {
         assert!(md.contains("| Group | From"), "{md}");
     }
 
-    /// Every anomaly kind present gets a table row and exactly one legend entry, and the Excluded
-    /// column follows `excludes_from_estimates`.
+    /// Every anomaly kind present gets a table row and exactly one legend entry.
     #[test]
     fn anomalies_are_tabulated_and_explained_once_each() {
         let anomalies = vec![
@@ -661,14 +819,15 @@ mod test {
         let md = report.to_markdown();
         assert_plain_text_safe(&md);
 
-        // Exact rows, so the padding is pinned too: InconsistentDuration excludes the session,
-        // ZeroActiveChargeTime does not.
+        // Exact rows, so the padding is pinned too. There is no "Excluded" column: a session that
+        // is excluded outright appears under Excluded sessions instead, so every row here would
+        // read the same and the column carried no information.
         assert!(
-            md.contains("|  47 | S31882  | InconsistentDuration | yes      |"),
+            md.contains("|  47 | S31882  | InconsistentDuration |"),
             "{md}"
         );
         assert!(
-            md.contains("| 152 | S70933  | ZeroActiveChargeTime | no       |"),
+            md.contains("| 152 | S70933  | ZeroActiveChargeTime |"),
             "{md}"
         );
         // Two rows share a kind, but it is explained once.
@@ -693,6 +852,7 @@ mod test {
         )];
         let groups = groups_for_interval((lo, hi), &mut sessions);
         let report = PowerEstimatesReport {
+            excluded_sessions: Vec::new(),
             source: PathBuf::from("Fold.xlsx"),
             interval: (lo, hi),
             estimates: crate::peak_est::estimates_for_groups(&groups),
@@ -745,7 +905,8 @@ mod test {
         std::fs::create_dir_all(&dir).unwrap();
         let csv = dir.join("Session_Report_Diagram.csv");
         std::fs::copy(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/Session_Report_Diagram.csv"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/Session_Report_Diagram.csv"),
             &csv,
         )
         .unwrap();
@@ -759,12 +920,27 @@ mod test {
         let md = report.to_markdown();
         assert_plain_text_safe(&md);
 
-        assert!(md.contains("Source     Session_Report_Diagram.xlsx"), "{md}");
-        assert!(md.contains("Interval   2026-06-15 16:00 - 17:00 EDT  (1 hour)"), "{md}");
+        assert!(
+            md.contains("Source     Session_Report_Diagram.xlsx"),
+            "{md}"
+        );
+        assert!(
+            md.contains("Interval   2026-06-15 16:00 - 17:00 EDT  (1 hour)"),
+            "{md}"
+        );
         // The diagram's peak: five sessions, 31.4 kW, in group 5.
-        assert!(md.contains("| Consumption-based  | 31.400 | 33.053 |     5 |"), "{md}");
-        assert!(md.contains("| Breaker-spec-based | 33.500 | 37.500 |     5 |"), "{md}");
-        assert!(md.contains("| 5 | 16:34:00 | 16:35:00 |   1:00 |     5 | 31.400 |"), "{md}");
+        assert!(
+            md.contains("| Consumption-based  | 31.400 | 33.053 |     5 |"),
+            "{md}"
+        );
+        assert!(
+            md.contains("| Breaker-spec-based | 33.500 | 37.500 |     5 |"),
+            "{md}"
+        );
+        assert!(
+            md.contains("| 5 | 16:34:00 | 16:35:00 |   1:00 |     5 | 31.400 |"),
+            "{md}"
+        );
         assert!(md.contains("- Group 5 - A, C, D, E, F"), "{md}");
 
         std::fs::remove_dir_all(&dir).ok();

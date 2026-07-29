@@ -157,12 +157,8 @@ fn resolve_local(dt: civil::DateTime, designator: Option<&str>) -> Result<Timest
         })
         .collect();
 
-    let names = |cs: &[(&str, Timestamp)]| {
-        cs.iter()
-            .map(|(n, _)| *n)
-            .collect::<Vec<_>>()
-            .join(" or ")
-    };
+    let names =
+        |cs: &[(&str, Timestamp)]| cs.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(" or ");
 
     match (designator, candidates.as_slice()) {
         (_, []) => Err(format!(
@@ -290,7 +286,10 @@ mod test {
     /// Case does not matter, and a bare timestamp is never mistaken for carrying one.
     #[test]
     fn designator_splitting_is_unambiguous() {
-        assert_eq!(split_designator("2026-11-01 01:00"), ("2026-11-01 01:00", None));
+        assert_eq!(
+            split_designator("2026-11-01 01:00"),
+            ("2026-11-01 01:00", None)
+        );
         assert_eq!(
             split_designator("2026-11-01 01:00 edt"),
             ("2026-11-01 01:00", Some("edt"))

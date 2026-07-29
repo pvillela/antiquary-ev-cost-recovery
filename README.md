@@ -91,9 +91,20 @@ Tier 2 establishes presence in the group's span — which is what the grouping m
 
 The sessions themselves are never removed from the group: clamping affects only the derived figures, so a group's reported size stays truthful and carries the `ClampedSessionGroup` anomaly.
 
-Because clamping rests on the single-panel assumption, the software does not choose. The **`direct`** estimates — computed from the groups as reported, with no panel constraint applied — are always given. The **`clamped`** estimates are given *in addition*, and only when some group actually exceeded the limit; where no group did, clamping changes nothing and a second identical set would say nothing.
+### The four estimate sets
 
-A `clamped` set therefore carries information by its mere presence: it means the report claims more concurrent sessions than one panel can run, so either a second panel is installed or the data is wrong. The affected groups also carry the `ClampedSessionGroup` anomaly. When both sets are present the clamped figures never exceed the direct ones, so the two nest, and the widest honest bracket on the true peak runs from the clamped `consumption_based_kw` to the direct `breaker_spec_based_kw`.
+Two questions admit more than one defensible answer — how many sessions a panel can run, and whether a session near a boundary was running at all — and the software does not settle either one on the reader's behalf. Each is a binary axis, and `PowerEstimates` reports the 2×2:
+
+| | every session | provable overlap only |
+|:--|:--|:--|
+| **no panel constraint** | `direct` | `direct_narrow` |
+| **one panel** | `clamped` | `clamped_narrow` |
+
+**`direct`** is always given. It counts every session that might have been running and constrains nothing, which makes it the figure to quote when only one is wanted.
+
+The other three appear only when they say something `direct` does not. **`clamped`** appears when some group actually exceeded the limit, so its mere presence carries information: the report claims more concurrent sessions than one panel can run, so either a second panel is installed or the data is wrong. The **`narrow`** sets appear when dropping the sessions flagged `IntersectsBoundaryMarginOnly` changes a reported figure — which it does not always, since a doubtful session may sit in a group that never peaks.
+
+**The four do not nest.** `clamped` and `direct_narrow` are each bounded above by `direct`, since both sum over a subset and count no more. But `clamped_narrow` can *exceed* `clamped`, because clamping is not monotone under removing a member: the tiers drop short-overlap sessions ahead of low-power ones, so narrowing away a long-overlap session can lift a group back under the limit and raise its clamped total. Any bracket on the true peak is therefore an actual minimum and maximum over the sets present, not a corner chosen in advance — which is how the report states its range.
 
 Testing *any* group is the same as testing only the groups the `direct` estimates were drawn from, so nothing turns on the choice: the group behind `breaker_spec_based_kw` is by definition the largest there is, so if it is within the limit then every group is. A clamped group that is not one of the peaks cannot arise.
 
@@ -111,11 +122,19 @@ Half-open is what makes session groups **tile** the interval of interest: consec
 
 The padding is 60 seconds rather than 59 for the same reason. A session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`, so `16:35:00` — exclusive — is the bound that contains it wherever it fell.
 
-The interval of interest has a **boundary margin** equal to `SESSION_BOUNDARY_RESOLUTION`: a session takes part only if it is active somewhere in the interval reduced by 60 seconds at each end. A session whose only overlap with the interval falls inside that margin is excluded from the estimates and flagged `IntersectsBoundaryMarginOnly`.
+A session takes part in the groups if it *might* have been running: `Conn_start < hi` and `Adj_conn_end > lo`. Understating a maximum is the unsafe error, so nothing that could have contributed is thrown away.
 
-The margin's width is the width of the reporting uncertainty. The true start lies in `[Conn_start, Conn_start + 60s)` and the true end in `[Adj_conn_end - 60s, Adj_conn_end)`, so requiring `Adj_conn_end` to be more than 60 seconds past the interval's start is exactly the condition that the true end is after that start whatever it turns out to be — at exactly 60 seconds the true end may be the interval's start itself, which under half-open intervals is no overlap. The test at the other end is the mirror image, and marginally stronger than it need be: a session whose reported start is exactly 60 seconds before the interval ends does provably begin before the interval ends, but the overlap that buys is under a minute and may be arbitrarily small, so it goes with the rest.
+Whether it *provably* overlapped is a stricter question, and the interval of interest carries a **boundary margin** equal to `SESSION_BOUNDARY_RESOLUTION` to answer it. A session that takes part but cannot be shown to have overlapped is flagged `IntersectsBoundaryMarginOnly`. It still counts in the main estimates; the `narrow` estimates are the ones that leave it out.
 
-The margin applies *only* at the boundaries. A session lying inside the interval is included however short. This includes any spikes, i.e., sessions whose `Active_Charge_Time` is zero. The margin also decides membership *only*: once a session is included, its `SessionGroup` end-points are clamped to the real interval, so the groups tile it and a reported peak window is a wall-clock window that can be matched against the metering data.
+The margin's width is the width of the reporting uncertainty. The true start lies in `[Conn_start, Conn_start + 60s)` and the true end in `[Adj_conn_end - 60s, Adj_conn_end)`, so overlap is provable exactly when
+
+```
+Adj_conn_end  >  lo + 60s     and     Conn_start  <=  hi - 60s
+```
+
+The strictness differs between the two ends because the windows are open at opposite ends. The true end can attain `Adj_conn_end - 60s`, so at exactly 60 seconds past `lo` it may be `lo` itself, which under half-open intervals is no overlap — hence the strict `>`. The true start never attains `Conn_start + 60s`, so a session starting exactly 60 seconds before `hi` still begins before `hi` in every admissible case — hence the non-strict `<=`.
+
+The margin applies *only* at the boundaries. A session lying inside the interval is beyond doubt however short, spikes included. And it decides which *figures* count a session, never whether it is placed: end-points are clamped to the real interval regardless, so the groups tile it and a reported peak window is a wall-clock window that can be matched against the metering data.
 
 ### Time zone
 
@@ -202,7 +221,8 @@ to the peak in both candidate hours.
 
   Both bounds are strict, because both windows are half-open at the same end. That makes this the one band in the design that is open rather than half-open — an instance of the convention rather than an exception to it, since it is the *intersection* condition of two half-open windows and not an interval anyone chose. The band is not slack: it is precisely what truncation to whole minutes accounts for, and the sample data reaches to within 3 seconds of its lower edge.
 - A session outside that band is flagged `InconsistentDuration` and excluded from the estimates. Both directions are faults: if a record's own fields disagree by more than the reporting can explain, neither its duration nor the span the grouping logic would place it on can be relied on. The overshoot direction subsumes the case of a session ending before it starts, since with `Conn_DateTime_End` a minute or more before `Conn_DateTime_Start` no non-negative duration can satisfy the test.
-- Together with the boundary margin described under *Session boundaries*, these are the only sessions excluded from the estimates.
+- These are the *only* sessions excluded from the estimates. The boundary margin described under *Session boundaries* flags a session rather than excluding it: a doubtful session still counts in `direct`, and only the `narrow` sets leave it out.
+- Excluded sessions get a section of their own in the report, listing **every** one in the workbook rather than only those near the interval of interest, with a column saying whether each appears to fall in that interval. Appears only: a record whose own fields contradict each other cannot be trusted to say which window it belongs in, so filtering on that judgement could hide exactly the session a reader most needs to see.
 - Sessions with zero `Energy_Use` and non-zero `Active_Charge_Time` do not contribute to `consumption_based_kw` and `consumption_based_kva` but they do contribute to `breaker_spec_based_kw` and `breaker_spec_based_kva`.
 - A session with zero `Active_Charge_Time` delivered energy in no time at all, so its average power is unbounded or undefined.
   - The Excel `Avg_power` cell shows `#DIV/0!` — the formula is written on every row rather than being skipped, so the fault is visible in the sheet. Function `session_list` returns the session as a *spike*, held apart from the normal sessions fed to the peak logic.

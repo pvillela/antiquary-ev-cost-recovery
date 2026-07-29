@@ -105,13 +105,89 @@ impl PartialEq for EndPointData {
     }
 }
 
-#[derive(Debug, Clone)]
-struct SessionGroupCache {
+/// Which members of a group a figure is computed over, on the boundary axis.
+///
+/// A session flagged [`AnomalyKind::IntersectsBoundaryMarginOnly`] may not have overlapped the
+/// interval of interest at all — the reported times leave it undecidable. It counts under
+/// [`Boundary::Wide`] and not under [`Boundary::Narrow`], and that is the whole of the difference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Boundary {
+    /// Every member, including those whose overlap with the interval is not provable.
+    Wide,
+    /// Only members that provably overlapped the interval of interest.
+    Narrow,
+}
+
+/// Which view of an oversized group a figure is computed under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Clamping {
+    /// The group as reported, with no panel constraint applied.
+    Direct,
+    /// One panel: a group above the PLC limit is cut down to it.
+    Clamped,
+}
+
+/// A point on the 2×2 of [`Boundary`] and [`Clamping`]. Every figure a [`SessionGroup`] reports is
+/// reported under one of these, and all four are cached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct View {
+    pub boundary: Boundary,
+    pub clamping: Clamping,
+}
+
+impl View {
+    /// The group exactly as reported: every member, no panel constraint. What the no-argument
+    /// [`SessionGroup::size`] and [`SessionGroup::agg_avg_power`] answer.
+    pub const DIRECT: Self = Self {
+        boundary: Boundary::Wide,
+        clamping: Clamping::Direct,
+    };
+    pub const CLAMPED: Self = Self {
+        boundary: Boundary::Wide,
+        clamping: Clamping::Clamped,
+    };
+    pub const DIRECT_NARROW: Self = Self {
+        boundary: Boundary::Narrow,
+        clamping: Clamping::Direct,
+    };
+    pub const CLAMPED_NARROW: Self = Self {
+        boundary: Boundary::Narrow,
+        clamping: Clamping::Clamped,
+    };
+
+    /// All four, in the order the report prints them — which is also [`View::index`] order, so
+    /// `ALL[i].index() == i`. [`SessionGroup::initialize_cache`] relies on that.
+    pub const ALL: [Self; 4] = [
+        Self::DIRECT,
+        Self::CLAMPED,
+        Self::DIRECT_NARROW,
+        Self::CLAMPED_NARROW,
+    ];
+
+    fn index(self) -> usize {
+        let boundary = match self.boundary {
+            Boundary::Wide => 0,
+            Boundary::Narrow => 1,
+        };
+        let clamping = match self.clamping {
+            Clamping::Direct => 0,
+            Clamping::Clamped => 1,
+        };
+        boundary * 2 + clamping
+    }
+}
+
+/// The figures a group reports under one [`View`].
+#[derive(Debug, Clone, Copy)]
+struct Figures {
     size: usize,
     agg_avg_power: f64,
-    clamped_size: usize,
-    clamped_agg_avg_power: f64,
 }
+
+/// The 2×2 of [`Figures`], indexed by [`View::index`]. Computed once, when the sweep closes the
+/// group: each entry is a fold over the members, and the report asks for several of them.
+#[derive(Debug, Clone)]
+struct SessionGroupCache([Figures; 4]);
 
 #[derive(Debug)]
 /// Collection of sessions that have non-trivial intersections with each other and with the interval
@@ -149,45 +225,44 @@ impl SessionGroup {
         SessionIter(self.sessions.iter())
     }
 
-    fn read_cache<T>(&self, f: impl FnOnce(&SessionGroupCache) -> T) -> T {
+    fn figures(&self, view: View) -> Figures {
         match &self.cache {
-            Some(cache) => f(cache),
+            Some(cache) => cache.0[view.index()],
             None => panic!("SessionGroup cache not initialized"),
         }
     }
 
-    /// Returns the unclamped aggregate average power for the group.
+    /// Aggregate average power over the members `view` counts.
+    pub fn agg_avg_power_in(&self, view: View) -> f64 {
+        self.figures(view).agg_avg_power
+    }
+
+    /// Number of members `view` counts.
+    pub fn size_in(&self, view: View) -> usize {
+        self.figures(view).size
+    }
+
+    /// Aggregate average power of the group exactly as reported. Shorthand for [`View::DIRECT`],
+    /// which is what the report's Session groups table shows.
     pub fn agg_avg_power(&self) -> f64 {
-        self.read_cache(|c| c.agg_avg_power)
+        self.agg_avg_power_in(View::DIRECT)
     }
 
-    /// Returns the aggregate average power of sessions in the group, excluding those that end
-    /// early in the group's span to the extent that those early-ending sessions put the total
-    /// session count above [`EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`].
-    pub fn clamped_agg_avg_power(&self) -> f64 {
-        self.read_cache(|c| c.clamped_agg_avg_power)
-    }
-
-    /// Returns the unclamped number of sessions in the group.
+    /// Number of sessions in the group as reported. Shorthand for [`View::DIRECT`].
     pub fn size(&self) -> usize {
-        self.read_cache(|c| c.size)
+        self.size_in(View::DIRECT)
     }
 
-    /// Returns the number of sessions in the group, clamped to [`EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`].
-    pub fn clamped_size(&self) -> usize {
-        self.read_cache(|c| c.clamped_size)
-    }
-
-    /// Anomalies this group carries. The group's `sessions` are never filtered — clamping lives
-    /// entirely in the derived figures — so [`SessionGroup::size`] keeps reporting the real count
-    /// and the anomaly can carry it.
+    /// Anomalies this group carries. The group's `sessions` are never filtered — neither clamping
+    /// nor narrowing does more than change which members a figure folds over — so
+    /// [`SessionGroup::size`] keeps reporting the real count and the anomaly can carry it.
     ///
     /// A clamped group means more sessions were reported as concurrent than one panel's PLC will
     /// run at once, so either a second panel is installed or the report is wrong. Either way the
     /// clamped estimates understate this group and the `direct` ones should be read alongside
     /// them. See [`crate::PowerEstimates`].
     pub fn anomalies(&self) -> Vec<GroupAnomaly> {
-        if self.clamped_size() < self.size() {
+        if self.size_in(View::CLAMPED) < self.size() {
             vec![GroupAnomaly::ClampedSessionGroup(self.size())]
         } else {
             Vec::new()
@@ -222,30 +297,54 @@ impl SessionGroup {
         })
     }
 
-    fn pure_agg_avg_power(&self) -> f64 {
-        self.sessions
-            .iter()
+    /// The members `boundary` counts.
+    ///
+    /// [`Boundary::Narrow`] drops those flagged [`AnomalyKind::IntersectsBoundaryMarginOnly`],
+    /// which may not have overlapped the interval of interest at all. Tested with `contains`
+    /// rather than by counting, because [`groups_for_interval`] appends the flag afresh on every
+    /// call and a caller that grouped the same sessions twice would carry it twice.
+    fn members(&self, boundary: Boundary) -> impl Iterator<Item = &RSession> {
+        self.sessions.iter().filter(move |s| match boundary {
+            Boundary::Wide => true,
+            Boundary::Narrow => !s
+                .as_ref()
+                .borrow()
+                .anomalies
+                .contains(&AnomalyKind::IntersectsBoundaryMarginOnly),
+        })
+    }
+
+    fn pure_agg_avg_power(&self, boundary: Boundary) -> f64 {
+        self.members(boundary)
             .map(|s| s.as_ref().borrow().avg_power)
             .sum()
     }
 
-    fn pure_size(&self) -> usize {
-        self.sessions.len()
+    fn pure_size(&self, boundary: Boundary) -> usize {
+        self.members(boundary).count()
     }
 
-    /// Returns the number of sessions in the group, not to exceed
+    /// Returns the number of sessions `boundary` counts, not to exceed
     /// [`EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`], since a panel's PLC will not run more than that
     /// at once.
     ///
     /// This is `min(size, MAX)`, and [`SessionGroup::eligible_sessions`] always yields exactly that
     /// many — the two are the count and the sum over the *same* set. Pinned by
     /// [`test::clamped_size_matches_the_eligible_set`].
-    pub(crate) fn pure_clamped_size(&self) -> usize {
-        self.pure_size().min(EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS)
+    fn pure_clamped_size(&self, boundary: Boundary) -> usize {
+        self.pure_size(boundary)
+            .min(EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS)
     }
 
-    /// The sessions the clamped figures are computed over: all of them while the group holds no
-    /// more than [`EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`], and otherwise exactly that many.
+    /// The sessions the clamped figures are computed over: all the members `boundary` counts while
+    /// they number no more than [`EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`], and otherwise exactly
+    /// that many.
+    ///
+    /// Narrowing happens first and clamping second, over what narrowing left. The two do not
+    /// commute, and the composition is not monotone: because the tiers below drop short-overlap
+    /// sessions ahead of low-power ones, narrowing away a long-overlap member can lift a group
+    /// back under the limit and so *raise* its clamped total. [`crate::PowerEstimates`] therefore
+    /// assumes no ordering between its four sets.
     ///
     /// Which ones go is decided in two tiers, ranked on how far a session's `conn_end` reaches
     /// past the group's start:
@@ -277,10 +376,9 @@ impl SessionGroup {
     /// `conn_end - start >= self.duration()` for every member. A short-overlap session therefore
     /// implies a group of at most one tick, so the rule fires only where the uncertainty it answers
     /// to actually lives, and nowhere else.
-    fn eligible_sessions(&self) -> Vec<RSession> {
+    fn eligible_sessions(&self, boundary: Boundary) -> Vec<RSession> {
         let mut ranked: Vec<(bool, f64, String, RSession)> = self
-            .sessions
-            .iter()
+            .members(boundary)
             .map(|s| {
                 let session = s.as_ref().borrow();
                 let overlap = Duration::try_from(session.conn_end.duration_since(self.start))
@@ -316,30 +414,35 @@ impl SessionGroup {
 
     /// Calculates the aggregate average power over [`SessionGroup::eligible_sessions`], i.e. over
     /// one panel's worth of the group at most.
-    pub(crate) fn pure_clamped_agg_avg_power(&self) -> f64 {
-        self.eligible_sessions()
+    fn pure_clamped_agg_avg_power(&self, boundary: Boundary) -> f64 {
+        self.eligible_sessions(boundary)
             .iter()
             .map(|s| s.as_ref().borrow().avg_power)
             .sum()
     }
 
+    /// Fills the 2×2 of [`Figures`]. `View::ALL` is in [`View::index`] order, so the array `map`
+    /// lands each entry where `figures` will look for it.
     pub(crate) fn initialize_cache(&mut self) {
-        let size = self.pure_size();
-        let clamped_size = self.pure_clamped_size();
-        let agg_avg_power = self.pure_agg_avg_power();
-        let clamped_agg_avg_power = self.pure_clamped_agg_avg_power();
-        self.cache = Some(SessionGroupCache {
-            size,
-            agg_avg_power,
-            clamped_size,
-            clamped_agg_avg_power,
-        });
+        let cache = SessionGroupCache(View::ALL.map(|view| match view.clamping {
+            Clamping::Direct => Figures {
+                size: self.pure_size(view.boundary),
+                agg_avg_power: self.pure_agg_avg_power(view.boundary),
+            },
+            Clamping::Clamped => Figures {
+                size: self.pure_clamped_size(view.boundary),
+                agg_avg_power: self.pure_clamped_agg_avg_power(view.boundary),
+            },
+        }));
+        self.cache = Some(cache);
     }
 }
 
-/// Note this mutates `sessions`: those whose overlap with `interval` falls entirely within a
-/// boundary margin have [`AnomalyKind::IntersectsBoundaryMarginOnly`] appended. Calling it twice
-/// with the same sessions appends it twice.
+/// Note this mutates `sessions`: those that intersect `interval` but whose overlap with it is not
+/// provable have [`AnomalyKind::IntersectsBoundaryMarginOnly`] appended. They still take part in
+/// the groups — the flag is what [`Boundary::Narrow`] reads to leave them out of a figure. Calling
+/// this twice with the same sessions appends the flag twice, which is why every reader tests for
+/// it with `contains`.
 pub fn groups_for_interval(
     interval: (Timestamp, Timestamp),
     sessions: &mut Vec<RSession>,
@@ -348,28 +451,36 @@ pub fn groups_for_interval(
     end_points_to_groups(end_points)
 }
 
-/// Returns an unsorted list of end-points corresponding to the sessions that non-trivially intersect
-/// `interval`.
+/// Returns an unsorted list of end-points corresponding to the sessions that intersect `interval`,
+/// flagging those whose overlap with it is not provable.
 ///
-/// A session takes part only if it is active somewhere in `interval` reduced by `boundary_margin`
-/// at each end. That reduction is what the reporting uncertainty costs, and it is derived from the
-/// two windows the uncertainty leaves — assuming, as every call site does, that `boundary_margin`
-/// is one [`SESSION_BOUNDARY_RESOLUTION`]. `conn_start` is truncated to the minute, so the true
-/// start lies in `[conn_start, conn_start + margin)`; `conn_end` is `Adj_conn_end`, the reported
-/// end padded to the exclusive end of its minute, so the true end lies in
-/// `[conn_end - margin, conn_end)`.
+/// Membership is the *possible*-overlap test, `conn_start < hi && conn_end > lo` — a session takes
+/// part if it might have been running. Understating a maximum is the unsafe error, so the estimates
+/// are drawn from every session that could have contributed and the doubt is reported rather than
+/// silently resolved.
 ///
-/// `conn_end > lo + margin` is then exactly the condition that the true end is after `lo` whatever
-/// it turns out to be: at `conn_end == lo + margin` the true end may be `lo` itself, and under
-/// half-open intervals that is no overlap. The mirror test, `conn_start < hi - margin`, is a hair
-/// stronger than it need be — `conn_start == hi - margin` already puts the true start before `hi` —
-/// but the overlap that case buys is under one margin and may be arbitrarily small, so it goes with
-/// the rest.
+/// What the doubt costs is derived from the two windows the reporting uncertainty leaves, assuming
+/// — as every call site does — that `boundary_margin` is one [`SESSION_BOUNDARY_RESOLUTION`].
+/// `conn_start` is truncated to the minute, so the true start lies in
+/// `[conn_start, conn_start + margin)`; `conn_end` is `Adj_conn_end`, the reported end padded to
+/// the exclusive end of its minute, so the true end lies in `[conn_end - margin, conn_end)`.
+/// Overlap is therefore *provable* exactly when
 ///
-/// The margin decides *membership* only — end-points are clamped to the real interval, so the
-/// groups tile it and a reported peak window is a wall-clock window that can be matched against the
-/// metering data. A session whose overlap falls entirely within a margin is flagged
-/// [`AnomalyKind::IntersectsBoundaryMarginOnly`].
+/// ```text
+/// conn_end > lo + margin   and   conn_start <= hi - margin
+/// ```
+///
+/// The strictness differs between the two because the windows are open at opposite ends. The true
+/// end can attain `conn_end - margin`, so at `conn_end == lo + margin` it may be `lo` itself, which
+/// under half-open intervals is no overlap — hence the strict `>`. The true start never attains
+/// `conn_start + margin`, so `conn_start == hi - margin` still puts it before `hi` — hence the
+/// non-strict `<=`.
+///
+/// A session that is admitted but fails that test is flagged
+/// [`AnomalyKind::IntersectsBoundaryMarginOnly`]; [`Boundary::Narrow`] is the view that leaves it
+/// out. The test decides only which *figures* count it — end-points are clamped to the real
+/// interval whatever the outcome, so the groups tile it and a reported peak window is a wall-clock
+/// window that can be matched against the metering data.
 fn end_points_for_interval(
     interval: (Timestamp, Timestamp),
     sessions: &mut Vec<RSession>,
@@ -381,27 +492,31 @@ fn end_points_for_interval(
     let hi_t = hi - boundary_margin;
     let mut end_points = Vec::<EndPoint>::new();
     for s in sessions {
-        if s.as_ref().borrow().conn_start < hi_t && s.as_ref().borrow().conn_end > lo_t {
-            let s_mut = &mut s.borrow_mut();
+        let (conn_start, conn_end) = {
+            let session = s.as_ref().borrow();
+            (session.conn_start, session.conn_end)
+        };
 
-            let left = EndPoint::Left(EndPointData {
-                time: s_mut.conn_start.max(lo),
-                session: s.clone(),
-            });
-            let right = EndPoint::Right(EndPointData {
-                time: s_mut.conn_end.min(hi),
-                session: s.clone(),
-            });
-            end_points.push(left);
-            end_points.push(right);
-        } else if s.as_ref().borrow().intersects(interval) {
+        if conn_start >= hi || conn_end <= lo {
+            continue;
+        }
+
+        if !(conn_start <= hi_t && conn_end > lo_t) {
             // Every other kind is settled at conversion time and arrives on the session already.
             // This one cannot be: it depends on which interval of interest was chosen.
-            let s_mut = &mut s.borrow_mut();
-            s_mut
+            s.borrow_mut()
                 .anomalies
                 .push(AnomalyKind::IntersectsBoundaryMarginOnly);
         }
+
+        end_points.push(EndPoint::Left(EndPointData {
+            time: conn_start.max(lo),
+            session: s.clone(),
+        }));
+        end_points.push(EndPoint::Right(EndPointData {
+            time: conn_end.min(hi),
+            session: s.clone(),
+        }));
     }
     end_points
 }
@@ -520,12 +635,18 @@ mod test {
     const LO: &str = "2026-06-01T20:00:00Z";
     const HI: &str = "2026-06-01T20:15:00Z";
 
-    /// The margin is a boundary rule, not a minimum-overlap rule: a short session inside the
-    /// interval counts, while one whose only overlap sits in a margin does not.
+    /// The margin flags rather than excludes, and it is a boundary rule rather than a
+    /// minimum-overlap one: a short session wholly inside the interval is beyond doubt, while one
+    /// whose only overlap sits in a margin is not.
+    ///
+    /// The last two cases sit exactly on the derived line, which is where the two ends stop being
+    /// symmetric. `conn_end == lo + margin` leaves the true end possibly at `lo`, which is no
+    /// overlap, so it is flagged; `conn_start == hi - margin` still puts the true start before
+    /// `hi`, so it is not.
     #[test]
-    fn boundary_margin_excludes_only_overlap_at_the_edges() {
+    fn boundary_margin_flags_overlap_it_cannot_establish() {
         let cases = [
-            // (id, start, end, included?)
+            // (id, start, end, certain?)
             (
                 "inside",
                 "2026-06-01T20:05:00Z",
@@ -546,26 +667,63 @@ mod test {
                 "2026-06-01T20:20:00Z",
                 false,
             ),
-            // Reaches past the leading margin, so it counts.
+            // Reaches past the leading margin, so it is beyond doubt.
             (
                 "spans",
                 "2026-06-01T19:50:00Z",
                 "2026-06-01T20:02:00Z",
                 true,
             ),
+            // Ends exactly one margin into the interval: the true end may be `lo` itself.
+            (
+                "ends_at_margin",
+                "2026-06-01T19:50:00Z",
+                "2026-06-01T20:01:00Z",
+                false,
+            ),
+            // Starts exactly one margin before the end: the true start is before `hi` regardless.
+            (
+                "starts_at_margin",
+                "2026-06-01T20:14:00Z",
+                "2026-06-01T20:30:00Z",
+                true,
+            ),
         ];
-        for (id, start, end, included) in cases {
+        for (id, start, end, certain) in cases {
             let s = rsession(id, start, end);
             let mut sessions = vec![s.clone()];
             let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
-            assert_eq!(!groups.is_empty(), included, "{id}");
+            // Flagged or not, the session takes part.
+            assert!(!groups.is_empty(), "{id}");
             assert_eq!(
                 s.borrow()
                     .anomalies
                     .contains(&AnomalyKind::IntersectsBoundaryMarginOnly),
-                !included,
+                !certain,
                 "{id}"
             );
+            // The narrow view is exactly the flag's consequence.
+            assert_eq!(
+                groups.iter().any(|g| g.size_in(View::DIRECT_NARROW) > 0),
+                certain,
+                "{id}"
+            );
+        }
+    }
+
+    /// A session that misses the interval entirely takes no part and earns no flag: the margin
+    /// speaks only about sessions that do reach it.
+    #[test]
+    fn sessions_outside_the_interval_are_not_flagged() {
+        for (id, start, end) in [
+            ("before", "2026-06-01T19:00:00Z", "2026-06-01T20:00:00Z"),
+            ("after", "2026-06-01T20:15:00Z", "2026-06-01T20:30:00Z"),
+        ] {
+            let s = rsession(id, start, end);
+            let mut sessions = vec![s.clone()];
+            let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
+            assert!(groups.is_empty(), "{id}");
+            assert!(s.borrow().anomalies.is_empty(), "{id}");
         }
     }
 
@@ -694,8 +852,12 @@ mod test {
             let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
             assert_eq!(groups.len(), 1, "n={n}");
             let g = &groups[0];
-            assert_eq!(g.clamped_size(), g.size(), "n={n}");
-            assert_eq!(g.clamped_agg_avg_power(), g.agg_avg_power(), "n={n}");
+            assert_eq!(g.size_in(View::CLAMPED), g.size(), "n={n}");
+            assert_eq!(
+                g.agg_avg_power_in(View::CLAMPED),
+                g.agg_avg_power(),
+                "n={n}"
+            );
             assert!(g.anomalies().is_empty(), "n={n}");
         }
     }
@@ -710,7 +872,7 @@ mod test {
 
             assert_eq!(g.size(), n, "n={n}");
             assert_eq!(
-                g.clamped_size(),
+                g.size_in(View::CLAMPED),
                 EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS,
                 "n={n}"
             );
@@ -718,7 +880,7 @@ mod test {
             let kept: f64 = ((n - EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS + 1)..=n)
                 .map(|i| i as f64)
                 .sum();
-            assert_eq!(g.clamped_agg_avg_power(), kept, "n={n}");
+            assert_eq!(g.agg_avg_power_in(View::CLAMPED), kept, "n={n}");
             assert_eq!(
                 g.anomalies(),
                 vec![GroupAnomaly::ClampedSessionGroup(n)],
@@ -763,7 +925,7 @@ mod test {
         assert_eq!(g.size(), 12);
 
         let kept: Vec<String> = g
-            .eligible_sessions()
+            .eligible_sessions(Boundary::Wide)
             .iter()
             .map(|s| s.as_ref().borrow().id.clone())
             .collect();
@@ -771,7 +933,7 @@ mod test {
         assert!(!kept.contains(&"S01".to_owned()), "{kept:?}");
         assert!(!kept.contains(&"S02".to_owned()), "{kept:?}");
         // Nine short-overlap survivors at 9.0, plus the spanning session at 0.5.
-        assert_eq!(g.clamped_agg_avg_power(), 9.0 * 9.0 + 0.5);
+        assert_eq!(g.agg_avg_power_in(View::CLAMPED), 9.0 * 9.0 + 0.5);
     }
 
     /// The invariant `pure_clamped_size` relies on: it is `min(size, MAX)` computed independently,
@@ -782,7 +944,11 @@ mod test {
             let mut sessions = long_overlap_group(n);
             let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
             let g = &groups[0];
-            assert_eq!(g.eligible_sessions().len(), g.clamped_size(), "n={n}");
+            assert_eq!(
+                g.eligible_sessions(Boundary::Wide).len(),
+                g.size_in(View::CLAMPED),
+                "n={n}"
+            );
         }
     }
 

@@ -151,14 +151,15 @@ fn diagram_scenario_produces_the_expected_tiling_and_estimates() {
     assert!((direct.consumption_based_kw.value - 31.4).abs() < 1e-9);
     assert!((direct.consumption_based_kva.value - 31.4 / EV_POWER_FACTOR).abs() < 1e-9);
     assert!((direct.breaker_specs_based_kw.value - 5.0 * EVOLUTE_BREAKER_KW_RATING).abs() < 1e-9);
-    assert!(
-        (direct.breaker_specs_based_kva.value - 5.0 * EVOLUTE_BREAKER_KVA_RATING).abs() < 1e-9
-    );
+    assert!((direct.breaker_specs_based_kva.value - 5.0 * EVOLUTE_BREAKER_KVA_RATING).abs() < 1e-9);
 
     // An estimate can name the group it came from, and say whether that group was cut down. The
     // biggest group here holds five sessions, half the panel limit, so nothing is.
     assert_eq!(direct.consumption_based_kw.group().size(), 5);
-    assert_eq!(direct.consumption_based_kw.group().start(), groups[5].start());
+    assert_eq!(
+        direct.consumption_based_kw.group().start(),
+        groups[5].start()
+    );
     assert!(direct.consumption_based_kw.group_anomalies().is_empty());
 
     // No group reaches the panel limit, so clamping would change nothing and no clamped set is
