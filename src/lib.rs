@@ -10,6 +10,8 @@ pub use grouping::*;
 mod peak_est;
 pub use peak_est::*;
 
+mod report;
+
 #[allow(unused)]
 mod quicksort;
 pub(crate) use quicksort::*;

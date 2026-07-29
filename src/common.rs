@@ -4,20 +4,33 @@ use std::{cell::RefCell, fmt, rc::Rc, time::Duration};
 /// Time zone the session report's timestamps are stated in. See README.md, "Time zone".
 pub const TIME_ZONE_NAME: &str = "America/Toronto";
 
-/// Added to the reported session end time. See README.md, "Session boundaries".
-pub const CONNECTION_END_ADJUSTMENT: Duration = Duration::from_secs(59);
-
-/// Boundary margin of the interval of interest. Reported session times are truncated to whole
-/// minutes, so a session whose only overlap with the interval falls within this distance of a
-/// boundary cannot be trusted to overlap it at all. A session takes part in the estimates only if
-/// it is active somewhere in the interval reduced by this amount at each end; the margin applies
-/// *only* at the boundaries, so a short session lying inside the interval is included.
+/// Resolution the session report states session boundaries at: `Conn_DateTime_Start` and
+/// `Conn_DateTime_End` are truncated to whole minutes. `Conn_Duration` and `Active_Charge_Time`
+/// are *not* — they carry seconds, which is what makes the DST fold inference possible.
+///
+/// Every allowance the software makes for that truncation is this one value, so all of them move
+/// together should Evolute ever report seconds:
+///
+/// - Added to the reported session end to give `Adj_conn_end`, the session's exclusive end.
+/// - The boundary margin of the interval of interest: a session whose only overlap falls within
+///   this distance of a boundary cannot be trusted to overlap it at all, so it takes part only if
+///   it is active somewhere in the interval reduced by this amount at each end. The margin applies
+///   *only* at the boundaries.
+/// - The half-width of the band a sound record's `Conn_start + Conn_Duration` must land in.
+/// - The span within which a session ending at the head of a group may be a truncation artefact
+///   rather than a genuine overlap.
+///
 /// See README.md, "Session boundaries".
-pub const OVERLAP_THRESHOLD: Duration = Duration::from_secs(60);
+pub const SESSION_BOUNDARY_RESOLUTION: Duration = Duration::from_secs(60);
 
 pub const EV_POWER_FACTOR: f64 = 0.95;
 pub const EVOLUTE_BREAKER_KW_RATING: f64 = 6.7;
 pub const EVOLUTE_BREAKER_KVA_RATING: f64 = 7.5;
+
+/// Sessions an Evolute panel can charge at once. The panel holds 20 breakers, but its PLC runs a
+/// queued time-sharing algorithm that keeps at most this many cars drawing power at any instant —
+/// so a group larger than this cannot be one panel's worth, whatever the report says.
+pub const EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS: usize = 10;
 
 pub(crate) fn time_zone() -> TimeZone {
     TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid time-zone name")
@@ -31,16 +44,26 @@ pub(crate) fn time_zone() -> TimeZone {
 pub enum AnomalyKind {
     /// `Active_Charge_Time` is zero so its `Avg_power` cell shows `#DIV/0!`.
     ZeroActiveChargeTime,
-    /// `Conn_start + Conn_Duration` misses the reported `Conn_DateTime_End` by 60 seconds or more,
-    /// in one direction or the other, so the reported start, end and duration are mutually
-    /// inconsistent.
+    /// `Conn_start + Conn_Duration` misses the reported `Conn_DateTime_End` by a full
+    /// [`SESSION_BOUNDARY_RESOLUTION`] or more, in one direction or the other, so the reported
+    /// start, end and duration are mutually inconsistent.
     ///
-    /// The tolerance is what makes this a real test rather than a formality. Writing the true start
-    /// as `S + α` and the true end as `E + β`, with `α, β ∈ [0, 60)` because the report truncates
-    /// both to the whole minute, an honest `Conn_Duration` gives `S + Conn_Duration = E + (β − α)`.
-    /// So a sound record lands anywhere in `[E − 59s, E + 59s]` and never outside it. The upper
-    /// bound is `Adj_conn_end`, which already carries those 59 seconds; the lower bound is the same
-    /// distance below the reported end.
+    /// The tolerance is what makes this a real test rather than a formality, and it is not chosen
+    /// — it is forced. Truncation puts the true start somewhere in `[Conn_start, Adj_conn_start)`
+    /// and the true end somewhere in `[Conn_end, Adj_conn_end)`: two half-open windows one
+    /// [`SESSION_BOUNDARY_RESOLUTION`] wide, the same convention the software uses everywhere
+    /// else. An honest `Conn_Duration` spans some instant of the first to some instant of the
+    /// second, so the record is sound exactly when the first window, shifted by `Conn_Duration`,
+    /// still meets the second:
+    ///
+    /// ```text
+    /// sound  <=>  Conn_start + Conn_Duration  <  Adj_conn_end
+    ///        and  Conn_start + Conn_Duration  >  Conn_end - SESSION_BOUNDARY_RESOLUTION
+    /// ```
+    ///
+    /// The band is open at both ends, unlike every other interval here, because both windows are
+    /// half-open at the same end — it is an instance of the convention, not an exception to it.
+    /// `Adj_conn_end` is the upper bound, now as the exclusive one.
     ///
     /// Both directions are faults, and both exclude the session from the estimates: if a record's
     /// own fields disagree by more than the reporting can explain, neither its duration nor the
@@ -62,7 +85,8 @@ pub enum AnomalyKind {
     /// The test is a tolerance rather than an equality, and that is what makes failing it mean
     /// something. The reported timestamps are truncated to the whole minute while `Conn_Duration`
     /// carries seconds, so even for a sound record the implied end misses the reported one — by up
-    /// to 59 seconds, in either direction. Missing it is therefore normal; missing it by *a minute
+    /// to but never reaching one [`SESSION_BOUNDARY_RESOLUTION`], in either direction. Missing it
+    /// is therefore normal; missing it by *a minute
     /// or more under both readings* is not, especially as the two readings sit a full hour apart,
     /// so one of them is ordinarily well inside the tolerance. When neither is, the record's own
     /// fields disagree by more than truncation can account for: whatever `Conn_Duration` measures
@@ -74,9 +98,10 @@ pub enum AnomalyKind {
     /// Only fold starts are checked this way; the same inconsistency on any other date is caught,
     /// if at all, by [`AnomalyKind::InconsistentDuration`]. See README.md, "Time zone".
     DstUnresolvable,
-    /// Session intersects the interval of interest, but only within [`OVERLAP_THRESHOLD`] of a
-    /// boundary. Reported times are truncated to whole minutes, so an overlap that small cannot be
-    /// trusted; the session is excluded from the estimates.
+    /// Session intersects the interval of interest, but only within
+    /// [`SESSION_BOUNDARY_RESOLUTION`] of a boundary. Reported times are truncated to whole
+    /// minutes, so an overlap that small cannot be trusted; the session is excluded from the
+    /// estimates.
     ///
     /// Unlike every other kind, this one depends on which interval of interest was chosen, so it
     /// cannot be recorded in the workbook's `Anomalies` column. It is added by the grouping logic.
@@ -98,6 +123,20 @@ impl AnomalyKind {
         }
     }
 
+    /// Whether carrying this kind keeps a session out of the estimates entirely.
+    ///
+    /// Only two kinds do. Both mean the session's overlap with the interval cannot be trusted:
+    /// [`AnomalyKind::InconsistentDuration`] because the record's own fields contradict each
+    /// other, and [`AnomalyKind::IntersectsBoundaryMarginOnly`] because the overlap is smaller
+    /// than the precision the times are reported to. Every other kind is a judgement call that was
+    /// made and recorded; the session still counts. See README.md, "Other".
+    pub fn excludes_from_estimates(&self) -> bool {
+        matches!(
+            self,
+            Self::InconsistentDuration | Self::IntersectsBoundaryMarginOnly
+        )
+    }
+
     /// Inverse of [`AnomalyKind::as_str`]. `None` for an unrecognised token.
     pub fn from_token(s: &str) -> Option<Self> {
         Some(match s {
@@ -112,7 +151,9 @@ impl AnomalyKind {
     }
 }
 
-/// A single row that needs review. Does not abort the conversion.
+/// A single row that needs review. Never fatal: the conversion still writes the row, and the
+/// estimating logic still produces a figure. Used by both sides — see
+/// [`crate::ConversionReport`] and [`crate::PowerEstimatesReport`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anomaly {
     /// Excel row number.
@@ -124,7 +165,11 @@ pub struct Anomaly {
 impl fmt::Display for AnomalyKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            Self::ZeroActiveChargeTime => "zero Active_Charge_Time",
+            Self::ZeroActiveChargeTime => {
+                "zero Active_Charge_Time, so the session delivered its energy in no time at all \
+                 and has no finite average power; the estimating logic substitutes one, and the \
+                 session is worth reviewing individually"
+            }
             Self::InconsistentDuration => {
                 "Conn_start + Conn_Duration misses Conn_DateTime_End by a minute or more; start, \
                  end and duration are inconsistent"
@@ -136,7 +181,8 @@ impl fmt::Display for AnomalyKind {
                  inconsistent; assumed EDT, timestamps may be an hour early"
             }
             Self::IntersectsBoundaryMarginOnly => {
-                "session overlaps the interval of interest only within OVERLAP_THRESHOLD of a boundary"
+                "session overlaps the interval of interest only within a minute of a boundary, \
+                 which is the precision the report's session times are stated to"
             }
         };
         f.write_str(s)
@@ -186,6 +232,22 @@ pub struct Session {
 }
 
 impl Session {
+    /// Whether the session overlaps `interval` at all, both being half-open.
+    ///
+    /// This is the plain overlap test, with no boundary margin: it asks whether the session has
+    /// anything to do with the interval, not whether it may take part in the estimates. The
+    /// grouping logic applies the margin on top of this.
+    ///
+    /// The span is normalised, so a record whose reported end precedes its start still counts as
+    /// touching the window it straddles. Such a record exists — it is precisely what
+    /// [`AnomalyKind::InconsistentDuration`] catches — and it is the last one that should quietly
+    /// disappear from a report, being the one most in need of review.
+    pub fn intersects(&self, interval: (Timestamp, Timestamp)) -> bool {
+        let start = self.conn_start.min(self.conn_end);
+        let end = self.conn_start.max(self.conn_end);
+        start < interval.1 && end > interval.0
+    }
+
     /// Connection start in local time (ET).
     pub fn conn_start_local(&self) -> Zoned {
         Zoned::new(self.conn_start, time_zone())

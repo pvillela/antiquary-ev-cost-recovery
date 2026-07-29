@@ -1,11 +1,48 @@
-use crate::{AnomalyKind, OVERLAP_THRESHOLD, RSession, Session, quicksort};
+use crate::{
+    AnomalyKind, EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS, RSession, SESSION_BOUNDARY_RESOLUTION,
+    Session, quicksort,
+};
 use jiff::Timestamp;
 use std::{
     cell::{Ref, RefCell},
     cmp::Ordering,
     collections::{BTreeSet, btree_set::Iter},
+    fmt,
+    rc::Rc,
     time::Duration,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Anomalies that may be reported for [`SessionGroup`]
+pub enum GroupAnomaly {
+    /// The session group size exceeded [`crate::EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`] and was
+    /// clamped to it. Contains the original group size.
+    ClampedSessionGroup(usize),
+}
+
+impl GroupAnomaly {
+    /// The variant name, matching [`crate::AnomalyKind::as_str`]'s role: a stable identifier,
+    /// distinct from the free-form prose of [`fmt::Display`].
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ClampedSessionGroup(_) => "ClampedSessionGroup",
+        }
+    }
+}
+
+impl fmt::Display for GroupAnomaly {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ClampedSessionGroup(_) => write!(
+                f,
+                "the report claims more sessions were charging at once than a single panel \
+                 should allow. The \"Clamped\" estimates use only the {} the panel could have \
+                 run; the \"Direct\" estimates use all of them",
+                EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS
+            ),
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 enum EndPoint {
@@ -69,12 +106,21 @@ impl PartialEq for EndPointData {
 }
 
 #[derive(Debug, Clone)]
+struct SessionGroupCache {
+    size: usize,
+    agg_avg_power: f64,
+    clamped_size: usize,
+    clamped_agg_avg_power: f64,
+}
+
+#[derive(Debug)]
 /// Collection of sessions that have non-trivial intersections with each other and with the interval
 /// of interest.
 pub struct SessionGroup {
     start: Timestamp,
     end: Timestamp,
     sessions: BTreeSet<RSession>,
+    cache: Option<SessionGroupCache>,
 }
 
 pub struct SessionIter<'a>(Iter<'a, RSession>);
@@ -103,15 +149,49 @@ impl SessionGroup {
         SessionIter(self.sessions.iter())
     }
 
-    pub fn agg_avg_power(&self) -> f64 {
-        self.sessions
-            .iter()
-            .map(|s| s.as_ref().borrow().avg_power)
-            .sum()
+    fn read_cache<T>(&self, f: impl FnOnce(&SessionGroupCache) -> T) -> T {
+        match &self.cache {
+            Some(cache) => f(cache),
+            None => panic!("SessionGroup cache not initialized"),
+        }
     }
 
-    pub fn session_count(&self) -> usize {
-        self.sessions.len()
+    /// Returns the unclamped aggregate average power for the group.
+    pub fn agg_avg_power(&self) -> f64 {
+        self.read_cache(|c| c.agg_avg_power)
+    }
+
+    /// Returns the aggregate average power of sessions in the group, excluding those that end
+    /// early in the group's span to the extent that those early-ending sessions put the total
+    /// session count above [`EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`].
+    pub fn clamped_agg_avg_power(&self) -> f64 {
+        self.read_cache(|c| c.clamped_agg_avg_power)
+    }
+
+    /// Returns the unclamped number of sessions in the group.
+    pub fn size(&self) -> usize {
+        self.read_cache(|c| c.size)
+    }
+
+    /// Returns the number of sessions in the group, clamped to [`EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`].
+    pub fn clamped_size(&self) -> usize {
+        self.read_cache(|c| c.clamped_size)
+    }
+
+    /// Anomalies this group carries. The group's `sessions` are never filtered — clamping lives
+    /// entirely in the derived figures — so [`SessionGroup::size`] keeps reporting the real count
+    /// and the anomaly can carry it.
+    ///
+    /// A clamped group means more sessions were reported as concurrent than one panel's PLC will
+    /// run at once, so either a second panel is installed or the report is wrong. Either way the
+    /// clamped estimates understate this group and the `direct` ones should be read alongside
+    /// them. See [`crate::PowerEstimates`].
+    pub fn anomalies(&self) -> Vec<GroupAnomaly> {
+        if self.clamped_size() < self.size() {
+            vec![GroupAnomaly::ClampedSessionGroup(self.size())]
+        } else {
+            Vec::new()
+        }
     }
 
     /// Elapsed time the group spans.
@@ -141,15 +221,102 @@ impl SessionGroup {
             )
         })
     }
-}
 
-//  |------------------------------------|
-//      |----------|
-//          |---------------------|
-//                     |------|
-//       I============================I
-//
-//       |2-|3-----|2--|3-----|2--|1--|
+    fn pure_agg_avg_power(&self) -> f64 {
+        self.sessions
+            .iter()
+            .map(|s| s.as_ref().borrow().avg_power)
+            .sum()
+    }
+
+    fn pure_size(&self) -> usize {
+        self.sessions.len()
+    }
+
+    /// Returns the number of sessions in the group, not to exceed
+    /// [`EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`], since a panel's PLC will not run more than that
+    /// at once.
+    ///
+    /// This is `min(size, MAX)`, and [`SessionGroup::eligible_sessions`] always yields exactly that
+    /// many — the two are the count and the sum over the *same* set. Pinned by
+    /// [`test::clamped_size_matches_the_eligible_set`].
+    pub(crate) fn pure_clamped_size(&self) -> usize {
+        self.pure_size().min(EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS)
+    }
+
+    /// The sessions the clamped figures are computed over: all of them while the group holds no
+    /// more than [`EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`], and otherwise exactly that many.
+    ///
+    /// Which ones go is decided in two tiers. A session ending within one
+    /// [`SESSION_BOUNDARY_RESOLUTION`] of the group's start may not have overlapped the group at
+    /// all: the report truncates end times to the minute, so a session that in fact *abutted* the
+    /// next one is indistinguishable from one that overlapped it. These **short-overlap** sessions
+    /// are dropped first, lowest average power first. Only when dropping all of them still leaves
+    /// the group oversized are **long-overlap** sessions dropped, again lowest power first — those
+    /// demonstrably did overlap, so they are the last to go. Ties are broken on session id, so the
+    /// result never depends on iteration order.
+    ///
+    /// The first tier can only be non-empty for a group no longer than one
+    /// [`SESSION_BOUNDARY_RESOLUTION`], and that is what makes the rule sound rather than
+    /// arbitrary. Every session in a group outlasts the group — [`end_points_to_groups`] emits the
+    /// run `[run_start, time)` *before* applying any end-point at `time` — so
+    /// `conn_end - start >= self.duration()` for every member. A short-overlap session therefore
+    /// implies a group of at most one tick, which is precisely where the truncation artefact
+    /// lives and nowhere else.
+    fn eligible_sessions(&self) -> Vec<RSession> {
+        let mut ranked: Vec<(bool, f64, String, RSession)> = self
+            .sessions
+            .iter()
+            .map(|s| {
+                let session = s.as_ref().borrow();
+                let overlap = Duration::try_from(session.conn_end.duration_since(self.start))
+                    .unwrap_or_else(|_| {
+                        panic!(
+                            "session ends at {} before session group starts at {}",
+                            session.conn_end, self.start
+                        )
+                    });
+                let long_overlap = overlap > SESSION_BOUNDARY_RESOLUTION;
+                (long_overlap, session.avg_power, session.id.clone(), s.clone())
+            })
+            .collect();
+
+        if ranked.len() > EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS {
+            // Drop order: short-overlap first, then ascending average power, then id. Sorting by
+            // that puts the first session to drop at the front, so the survivors are the tail.
+            ranked.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then_with(|| a.1.total_cmp(&b.1))
+                    .then_with(|| a.2.cmp(&b.2))
+            });
+            ranked = ranked.split_off(ranked.len() - EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS);
+        }
+
+        ranked.into_iter().map(|(_, _, _, s)| s).collect()
+    }
+
+    /// Calculates the aggregate average power over [`SessionGroup::eligible_sessions`], i.e. over
+    /// one panel's worth of the group at most.
+    pub(crate) fn pure_clamped_agg_avg_power(&self) -> f64 {
+        self.eligible_sessions()
+            .iter()
+            .map(|s| s.as_ref().borrow().avg_power)
+            .sum()
+    }
+
+    pub(crate) fn initialize_cache(&mut self) {
+        let size = self.pure_size();
+        let clamped_size = self.pure_clamped_size();
+        let agg_avg_power = self.pure_agg_avg_power();
+        let clamped_agg_avg_power = self.pure_clamped_agg_avg_power();
+        self.cache = Some(SessionGroupCache {
+            size,
+            agg_avg_power,
+            clamped_size,
+            clamped_agg_avg_power,
+        });
+    }
+}
 
 /// Note this mutates `sessions`: those whose overlap with `interval` falls entirely within a
 /// boundary margin have [`AnomalyKind::IntersectsBoundaryMarginOnly`] appended. Calling it twice
@@ -157,32 +324,36 @@ impl SessionGroup {
 pub fn groups_for_interval(
     interval: (Timestamp, Timestamp),
     sessions: &mut Vec<RSession>,
-) -> Vec<SessionGroup> {
-    let end_points = end_points_for_interval(interval, sessions, OVERLAP_THRESHOLD);
+) -> Vec<Rc<SessionGroup>> {
+    let end_points = end_points_for_interval(interval, sessions, SESSION_BOUNDARY_RESOLUTION);
     end_points_to_groups(end_points)
 }
 
 /// Returns an unsorted list of end-points corresponding to the sessions that non-trivially intersect
 /// `interval`.
 ///
-/// A session takes part only if it is active somewhere in `interval` reduced by `overlap_threshold`
+/// A session takes part only if it is active somewhere in `interval` reduced by `boundary_margin`
 /// at each end: reported times are truncated to whole minutes, so an overlap confined to a boundary
 /// margin cannot be trusted. The margin decides *membership* only — end-points are clamped to the
 /// real interval, so the groups tile it and a reported peak window is a wall-clock window that can
 /// be matched against the metering data. A session whose overlap falls entirely within a margin is
 /// flagged [`AnomalyKind::IntersectsBoundaryMarginOnly`].
+///
+/// Both tests are strict, on both sides. Sessions and intervals alike are half-open, so a session
+/// whose exclusive `conn_end` *is* the reduced interval's start does not overlap it at all, and one
+/// starting exactly at the reduced interval's end likewise does not.
 fn end_points_for_interval(
     interval: (Timestamp, Timestamp),
     sessions: &mut Vec<RSession>,
-    overlap_threshold: Duration,
+    boundary_margin: Duration,
 ) -> Vec<EndPoint> {
     let lo = interval.0;
     let hi = interval.1;
-    let lo_t = lo + overlap_threshold;
-    let hi_t = hi - overlap_threshold;
+    let lo_t = lo + boundary_margin;
+    let hi_t = hi - boundary_margin;
     let mut end_points = Vec::<EndPoint>::new();
     for s in sessions {
-        if s.as_ref().borrow().conn_start < hi_t && s.as_ref().borrow().conn_end >= lo_t {
+        if s.as_ref().borrow().conn_start < hi_t && s.as_ref().borrow().conn_end > lo_t {
             let s_mut = &mut s.borrow_mut();
 
             let left = EndPoint::Left(EndPointData {
@@ -195,7 +366,7 @@ fn end_points_for_interval(
             });
             end_points.push(left);
             end_points.push(right);
-        } else if s.as_ref().borrow().conn_start < hi && s.as_ref().borrow().conn_end >= lo {
+        } else if s.as_ref().borrow().intersects(interval) {
             // Every other kind is settled at conversion time and arrives on the session already.
             // This one cannot be: it depends on which interval of interest was chosen.
             let s_mut = &mut s.borrow_mut();
@@ -215,7 +386,11 @@ fn end_points_for_interval(
 /// emitted, so a group's session set is exactly the set active throughout it — not the set on
 /// either side of a change. Zero-length runs are never emitted, which is what stops a session that
 /// ends exactly where another begins from producing an empty sliver between them.
-fn end_points_to_groups(mut end_points: Vec<EndPoint>) -> Vec<SessionGroup> {
+///
+/// Groups come out behind an [`Rc`] because a [`crate::PowerEstimate`] names the group it was drawn
+/// from and the report holds the whole tiling; sharing beats either copying or threading a lifetime
+/// through both.
+fn end_points_to_groups(mut end_points: Vec<EndPoint>) -> Vec<Rc<SessionGroup>> {
     quicksort(&mut end_points);
 
     let mut groups = Vec::new();
@@ -229,11 +404,14 @@ fn end_points_to_groups(mut end_points: Vec<EndPoint>) -> Vec<SessionGroup> {
         // Close the run that was running up to this instant. `active` is empty before the first
         // left edge and between sessions, and those gaps are not groups.
         if !active.is_empty() && run_start < time {
-            groups.push(SessionGroup {
+            let mut group = SessionGroup {
                 start: run_start,
                 end: time,
                 sessions: active.clone(),
-            });
+                cache: None,
+            };
+            group.initialize_cache();
+            groups.push(Rc::new(group));
         }
 
         while i < end_points.len() && end_points[i].time() == time {
@@ -257,6 +435,8 @@ fn end_points_to_groups(mut end_points: Vec<EndPoint>) -> Vec<SessionGroup> {
 #[cfg(test)]
 // cargo test --package ev-peak-contrib --lib --all-features -- peak_contrib::test --nocapture
 mod test {
+    use crate::AnomalyKind;
+
     use super::*;
     use std::rc::Rc;
 
@@ -362,7 +542,7 @@ mod test {
     }
 
     /// Renders the groups as `(start_offset_secs, end_offset_secs, ids)` relative to [`LO`].
-    fn tiling(groups: &[SessionGroup]) -> Vec<(i64, i64, Vec<String>)> {
+    fn tiling(groups: &[Rc<SessionGroup>]) -> Vec<(i64, i64, Vec<String>)> {
         groups
             .iter()
             .map(|g| {
@@ -397,7 +577,7 @@ mod test {
         for pair in groups.windows(2) {
             assert_eq!(pair[0].end(), pair[1].start());
         }
-        assert_eq!(groups[1].session_count(), 2);
+        assert_eq!(groups[1].size(), 2);
         assert_eq!(groups[1].duration(), Duration::from_secs(240));
     }
 
@@ -438,7 +618,7 @@ mod test {
                 (300, 540, vec!["B".to_owned()]),
             ]
         );
-        assert!(groups.iter().all(|g| g.session_count() == 1));
+        assert!(groups.iter().all(|g| g.size() == 1));
     }
 
     /// Three sessions starting at the same instant: one group, not three.
@@ -452,8 +632,125 @@ mod test {
         let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
 
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].session_count(), 3);
+        assert_eq!(groups[0].size(), 3);
         assert_eq!(groups[0].agg_avg_power(), 3.0);
+    }
+
+    /// As [`rsession`], with an explicit average power. The clamping rule ranks on it.
+    fn rsession_kw(id: &str, start: &str, end: &str, avg_power: f64) -> RSession {
+        let s = rsession(id, start, end);
+        s.borrow_mut().avg_power = avg_power;
+        s
+    }
+
+    /// `n` sessions spanning `20:02:00`–`20:10:00`, so every one of them outlasts the single group
+    /// they induce and all land in the long-overlap tier. Powers are `1.0, 2.0, …`.
+    fn long_overlap_group(n: usize) -> Vec<RSession> {
+        (1..=n)
+            .map(|i| {
+                rsession_kw(
+                    &format!("L{i:02}"),
+                    "2026-06-01T20:02:00Z",
+                    "2026-06-01T20:10:00Z",
+                    i as f64,
+                )
+            })
+            .collect()
+    }
+
+    /// Below the panel limit nothing is dropped, and the clamped figures equal the plain ones.
+    #[test]
+    fn clamping_is_inert_at_or_below_the_panel_limit() {
+        for n in [1, 5, EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS] {
+            let mut sessions = long_overlap_group(n);
+            let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
+            assert_eq!(groups.len(), 1, "n={n}");
+            let g = &groups[0];
+            assert_eq!(g.clamped_size(), g.size(), "n={n}");
+            assert_eq!(g.clamped_agg_avg_power(), g.agg_avg_power(), "n={n}");
+            assert!(g.anomalies().is_empty(), "n={n}");
+        }
+    }
+
+    /// Over the limit, the lowest-power sessions are the ones that go, and exactly enough of them.
+    #[test]
+    fn oversized_group_drops_the_weakest_sessions() {
+        for n in [11, 12, 14] {
+            let mut sessions = long_overlap_group(n);
+            let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
+            let g = &groups[0];
+
+            assert_eq!(g.size(), n, "n={n}");
+            assert_eq!(g.clamped_size(), EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS, "n={n}");
+            // Powers are 1.0..=n, so the survivors are the top ten and their sum is known.
+            let kept: f64 = ((n - EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS + 1)..=n)
+                .map(|i| i as f64)
+                .sum();
+            assert_eq!(g.clamped_agg_avg_power(), kept, "n={n}");
+            assert_eq!(
+                g.anomalies(),
+                vec![GroupAnomaly::ClampedSessionGroup(n)],
+                "n={n}"
+            );
+        }
+    }
+
+    /// The tiers, which are the point of the rule. Eleven sessions end one tick into the group, so
+    /// the truncation cannot tell whether they overlapped it or merely abutted it; one session
+    /// spans the group outright and demonstrably did overlap. Two must go, and both come from the
+    /// suspect tier — even though the session that spans the group is the weakest in it.
+    #[test]
+    fn short_overlap_sessions_are_dropped_before_long_overlap_ones() {
+        let mut sessions: Vec<RSession> = (1..=11)
+            .map(|i| {
+                let kw = match i {
+                    1 => 1.0,
+                    2 => 2.0,
+                    _ => 9.0,
+                };
+                rsession_kw(
+                    &format!("S{i:02}"),
+                    "2026-06-01T20:02:00Z",
+                    "2026-06-01T20:03:00Z",
+                    kw,
+                )
+            })
+            .collect();
+        sessions.push(rsession_kw(
+            "Lspan",
+            "2026-06-01T20:02:00Z",
+            "2026-06-01T20:10:00Z",
+            0.5,
+        ));
+
+        let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
+        let g = &groups[0];
+        assert_eq!(g.start(), ts("2026-06-01T20:02:00Z"));
+        assert_eq!(g.duration(), SESSION_BOUNDARY_RESOLUTION);
+        assert_eq!(g.size(), 12);
+
+        let kept: Vec<String> = g
+            .eligible_sessions()
+            .iter()
+            .map(|s| s.as_ref().borrow().id.clone())
+            .collect();
+        assert!(kept.contains(&"Lspan".to_owned()), "{kept:?}");
+        assert!(!kept.contains(&"S01".to_owned()), "{kept:?}");
+        assert!(!kept.contains(&"S02".to_owned()), "{kept:?}");
+        // Nine short-overlap survivors at 9.0, plus the spanning session at 0.5.
+        assert_eq!(g.clamped_agg_avg_power(), 9.0 * 9.0 + 0.5);
+    }
+
+    /// The invariant `pure_clamped_size` relies on: it is `min(size, MAX)` computed independently,
+    /// and must always equal the size of the set the clamped power is summed over.
+    #[test]
+    fn clamped_size_matches_the_eligible_set() {
+        for n in [1, 9, 10, 11, 14] {
+            let mut sessions = long_overlap_group(n);
+            let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
+            let g = &groups[0];
+            assert_eq!(g.eligible_sessions().len(), g.clamped_size(), "n={n}");
+        }
     }
 
     /// The margin decides membership only. End-points are clamped to the real interval, so a

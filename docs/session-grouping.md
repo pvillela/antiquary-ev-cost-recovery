@@ -28,6 +28,9 @@ between 5.9 and 6.7 kW — what Evolute's smart breakers allow — so none of th
 Two coincidences carry most of the interest. **D and E both report ending at 16:34, the same minute
 F reports starting.** And **C and F both report ending at 16:42.**
 
+No group here reaches the panel's concurrency limit of ten, so only the `direct` estimates are
+reported and no `clamped` set is produced. See README.md, "Limitations".
+
 ## The groups
 
 A session group is a maximal stretch of time over which the set of active sessions does not change.
@@ -37,36 +40,42 @@ end to end.
 | # | From | To | Length | Sessions | Count | Aggregate |
 |---|---|---|---|---|---|---|
 | 0 | 16:00:00 | 16:08:00 | 8:00 | A, B | 2 | 12.4 kW |
-| 1 | 16:08:00 | 16:15:59 | 7:59 | A, B, C | 3 | 18.6 kW |
-| 2 | 16:15:59 | 16:20:00 | 4:01 | A, C | 2 | 12.2 kW |
+| 1 | 16:08:00 | 16:16:00 | 8:00 | A, B, C | 3 | 18.6 kW |
+| 2 | 16:16:00 | 16:20:00 | 4:00 | A, C | 2 | 12.2 kW |
 | 3 | 16:20:00 | 16:24:00 | 4:00 | A, C, E | 3 | 18.1 kW |
 | 4 | 16:24:00 | 16:34:00 | 10:00 | A, C, D, E | 4 | 24.7 kW |
-| **5** | **16:34:00** | **16:34:59** | **0:59** | **A, C, D, E, F** | **5** | **31.4 kW** |
-| 6 | 16:34:59 | 16:42:59 | 8:00 | A, C, F | 3 | 18.9 kW |
-| 7 | 16:42:59 | 16:48:00 | 5:01 | A | 1 | 6.0 kW |
-| 8 | 16:48:00 | 16:55:59 | 7:59 | A, G | 2 | 12.1 kW |
-| 9 | 16:55:59 | 17:00:00 | 4:01 | A | 1 | 6.0 kW |
+| **5** | **16:34:00** | **16:35:00** | **1:00** | **A, C, D, E, F** | **5** | **31.4 kW** |
+| 6 | 16:35:00 | 16:43:00 | 8:00 | A, C, F | 3 | 18.9 kW |
+| 7 | 16:43:00 | 16:48:00 | 5:00 | A | 1 | 6.0 kW |
+| 8 | 16:48:00 | 16:56:00 | 8:00 | A, G | 2 | 12.1 kW |
+| 9 | 16:56:00 | 17:00:00 | 4:00 | A | 1 | 6.0 kW |
 
-## Why group 5 lasts 59 seconds
+Groups, sessions and the interval of interest are all **half-open**: each runs from its start
+inclusive to its end exclusive. That is what lets the lengths above sum to exactly 60:00 with no
+instant counted twice and none left out — closed intervals could not tile the hour at all, since
+adjacent groups would either share an instant or leave a gap between them.
+
+## Why group 5 lasts a minute
 
 The session report gives start and end times to the minute, with no seconds. A session reported to
-end at 16:34 actually ended at some unknown instant within that minute. The ingestion step therefore
-computes `Adj_conn_end` as the reported end plus 59 seconds, so that whatever the true end was, it
-falls inside the session as recorded. See README.md, "Session boundaries".
+end at 16:34 actually ended at some unknown instant in `[16:34:00, 16:35:00)`. The ingestion step
+therefore computes `Adj_conn_end` as the reported end plus 60 seconds — the *exclusive* end of the
+window the true end lies in — so that wherever in that minute the session really stopped, it falls
+inside the session as recorded. See README.md, "Session boundaries".
 
-That padding is what produces group 5. D and E are recorded as running to 16:34:59, while F is
-recorded as starting at 16:34:00 — so for 59 seconds all five sessions are drawing at once:
+That padding is what produces group 5. D and E are recorded as running until 16:35:00, while F is
+recorded as starting at 16:34:00 — so for that whole minute all five sessions are drawing at once:
 
 ```
               16:33          16:34          16:35          16:36
                 |              |              |              |
-   D  ==========================|                      D, E end 16:34 -> padded to 16:34:59
-   E  ==========================|
+   D  ===========================>                D, E end 16:34 -> run until 16:35:00
+   E  ===========================>
    F                |=========================================>    F starts 16:34:00
-                    |          |
-   groups     4     |    5     |          3
-                    +----------+
-                      59 s
+                    |           |
+   groups     4     |     5     |         3
+                    +-----------+
+                        60 s
 ```
 
 This is not an artefact to be smoothed away. Those five cars really may have been drawing
@@ -74,8 +83,9 @@ simultaneously, and a demand charge is billed on the peak, however brief. The al
 a session as ending at the start of its final minute — would silently discard the overlap and
 under-report the peak.
 
-It also explains the `:59` boundaries running down the table. Every group boundary that comes from a
-session *ending* falls at `:59`; every boundary that comes from a session *starting* falls at `:00`.
+The group is exactly one minute long because a minute is the whole of the uncertainty: it is the
+resolution the report states session boundaries at, and the software carries that one figure as
+`SESSION_BOUNDARY_RESOLUTION`.
 
 ## The estimates
 

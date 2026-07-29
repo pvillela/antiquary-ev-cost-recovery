@@ -11,16 +11,16 @@ use jiff::{
 };
 use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
 
-use crate::{Anomaly, AnomalyKind, CONNECTION_END_ADJUSTMENT, Session, time_zone};
+use crate::{Anomaly, AnomalyKind, SESSION_BOUNDARY_RESOLUTION, Session, time_zone};
 
 /// Excel's day-zero for the 1900 date system, as a Unix timestamp.
 /// 1899-12-30T00:00:00Z; verified by [`test::excel_epoch_constant_matches_jiff`].
 const EXCEL_EPOCH_UNIX_SECS: i64 = -2_209_161_600;
 
-/// [`CONNECTION_END_ADJUSTMENT`] in the signed form the timestamp arithmetic needs.
+/// [`SESSION_BOUNDARY_RESOLUTION`] in the signed form the timestamp arithmetic needs.
 /// See README.md, "New fields".
 const END_PADDING: SignedDuration =
-    SignedDuration::from_secs(CONNECTION_END_ADJUSTMENT.as_secs() as i64);
+    SignedDuration::from_secs(SESSION_BOUNDARY_RESOLUTION.as_secs() as i64);
 
 /// Widest gap between `Conn_start + Conn_Duration` and the reported end that truncation alone can
 /// explain. Both reported timestamps are truncated to the minute while `Conn_Duration` carries
@@ -374,13 +374,16 @@ impl CsvSession {
                 let adj_end_utc = end_utc + END_PADDING;
 
                 let mut anomalies = common.clone();
-                // Truncation to the minute lets the implied end miss the reported one by up to
-                // END_PADDING either way, and no further. `adj_end_utc` is already the upper bound;
-                // the lower one sits the same distance below the reported end. Outside that band
-                // the three fields contradict each other by more than the reporting can explain,
-                // and the session is excluded from the estimates downstream.
+                // Truncation puts the true start in `[start_utc, start_utc + END_PADDING)` and the
+                // true end in `[end_utc, adj_end_utc)`. An honest `Conn_Duration` carries some
+                // instant of the first window to some instant of the second, so the record is
+                // sound exactly while the first window, shifted by the duration, still meets the
+                // second. Both bounds are strict because both windows are half-open at the same
+                // end. Outside the band the three fields contradict each other by more than the
+                // reporting can explain, and the session is excluded from the estimates
+                // downstream. See `AnomalyKind::InconsistentDuration`.
                 let implied_end = start_utc + self.conn_duration;
-                if implied_end > adj_end_utc || implied_end < end_utc - END_PADDING {
+                if implied_end >= adj_end_utc || implied_end <= end_utc - END_PADDING {
                     anomalies.push(AnomalyKind::InconsistentDuration);
                 }
 
@@ -681,9 +684,12 @@ fn add_comments(sheet: &mut Worksheet) {
     let notes = [
         (
             Source::AdjConnEndLocal,
-            "Adjusted connection end: Conn_DateTime_End + 59s. The report's timestamps carry no \
-             seconds, so the true end is only known to within a minute; padding to the end of that \
-             minute keeps the whole charge inside the session. See README.md, \"New fields\".",
+            "Adjusted connection end: Conn_DateTime_End + 60s, and EXCLUSIVE. The report's \
+             timestamps carry no seconds, so the true end is only known to fall somewhere in the \
+             reported minute; the session is recorded as the half-open span [Conn_DateTime_Start, \
+             Adj_conn_end), which contains it wherever in that minute it fell. Because the end is \
+             excluded, a session starting at this exact time does NOT overlap this one. See \
+             README.md, \"New fields\".",
         ),
         (
             Source::AdjConnDuration,
@@ -1056,7 +1062,8 @@ mod test {
         assert_eq!(column_letters(COLUMNS.len()), "AB");
     }
 
-    /// `Adj_conn_end` is the reported end padded to the end of its minute — nothing more. Both rows
+    /// `Adj_conn_end` is the reported end padded past the end of its minute — the exclusive end of
+    /// the window the true end lies in, so `21:29` pads to `21:30:00` and not `21:29:59`. Both rows
     /// are real sample rows, and they straddle the case the old `min(...)` rule treated specially:
     /// the second has `start + duration` (23:40:29) *before* the reported end.
     #[test]
@@ -1066,7 +1073,7 @@ mod test {
             .unwrap();
         assert_eq!(
             local_of(rows[0].adj_end_utc),
-            civil::date(2026, 6, 1).at(21, 29, 59, 0)
+            civil::date(2026, 6, 1).at(21, 30, 0, 0)
         );
         assert!(rows[0].anomalies.is_empty());
 
@@ -1075,7 +1082,7 @@ mod test {
             .unwrap();
         assert_eq!(
             local_of(rows[0].adj_end_utc),
-            civil::date(2026, 6, 7).at(23, 41, 59, 0)
+            civil::date(2026, 6, 7).at(23, 42, 0, 0)
         );
         assert!(rows[0].anomalies.is_empty());
     }
@@ -1248,10 +1255,12 @@ mod test {
         }
     }
 
-    /// `Conn_start + Conn_Duration` must land within 59 seconds of the reported end, on either
-    /// side; truncation to the minute explains that much and no more. Both boundaries are pinned,
-    /// because getting either off by a second would silently reclassify real records: the sample
-    /// data reaches −57s, so the band is exercised almost to its edge.
+    /// `Conn_start + Conn_Duration` must land strictly inside one `SESSION_BOUNDARY_RESOLUTION`
+    /// of the reported end, on either side; truncation to the minute explains that much and no
+    /// more. Both boundaries are pinned, because getting either off by a second would silently
+    /// reclassify real records: the sample data reaches −57s, so the band is exercised almost to
+    /// its edge. The exclusive cases are pinned too — landing *exactly* a minute out is a fault,
+    /// since a sound record's two truncation windows would then merely touch, not meet.
     #[test]
     fn inconsistent_duration_is_reported() {
         let kinds = |start, end, conn| {
@@ -1263,7 +1272,7 @@ mod test {
         };
         let bad = vec![AnomalyKind::InconsistentDuration];
 
-        // Overshoot: 10:00 + 2h = 12:00, well past the 10:30:59 upper bound.
+        // Overshoot: 10:00 + 2h = 12:00, well past the 10:31:00 upper bound.
         assert_eq!(
             kinds("2026-06-01 10:00", "2026-06-01 10:30", "2:00:00"),
             bad
@@ -1273,13 +1282,18 @@ mod test {
             kinds("2026-06-01 10:00", "2026-06-01 09:00", "0:10:00"),
             bad
         );
-        // Undershoot: 10:00 + 29:00 = 10:29:00, a second below the 10:29:01 lower bound.
+        // Exactly on the bounds, which are exclusive: 10:31:00 and 10:29:00. These are the cases
+        // that separate the half-open reading from the closed one.
+        assert_eq!(
+            kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:31:00"),
+            bad
+        );
         assert_eq!(
             kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:29:00"),
             bad
         );
 
-        // Both bounds are inclusive and both are sound.
+        // One second inside each bound, and both sound.
         assert!(kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:30:59").is_empty());
         assert!(kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:29:01").is_empty());
     }
@@ -1311,12 +1325,13 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
 
         let col = |s: Source| column_index(s) as u32;
 
-        // Adj_conn_end = 21:29:59 local on the first row.
+        // Adj_conn_end = 21:30:00 local on the first row — the exclusive end of the minute the
+        // reported 21:29 end falls in.
         let adj: f64 = sheet
             .value((col(Source::AdjConnEndLocal), 2))
             .parse()
             .unwrap();
-        assert!((adj - 46_174.895_821_759_3).abs() < 1e-9, "{adj}");
+        assert!((adj - 46_174.895_833_333_3).abs() < 1e-9, "{adj}");
 
         // Formulas, not cached values.
         assert_eq!(
@@ -1585,8 +1600,8 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00001,,2026-06-03 09:00,2026-06-0
         assert_eq!(s.conn_start, utc(civil::date(2026, 6, 1).at(20, 22, 0, 0)));
         // The reported end, 21:29 EDT, unadjusted.
         assert_eq!(s.raw_conn_end, utc(civil::date(2026, 6, 2).at(1, 29, 0, 0)));
-        // The adjusted end: 21:29:59 EDT.
-        assert_eq!(s.conn_end, utc(civil::date(2026, 6, 2).at(1, 29, 59, 0)));
+        // The adjusted end: 21:30:00 EDT, exclusive.
+        assert_eq!(s.conn_end, utc(civil::date(2026, 6, 2).at(1, 30, 0, 0)));
         assert_eq!(s.conn_duration, Duration::from_secs(5 * 3600 + 7 * 60 + 53));
         assert_eq!(s.charge_time, Duration::from_secs(5 * 3600 + 7 * 60 + 52));
         assert!((s.energy_use - 30.6).abs() < 1e-9);

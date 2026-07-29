@@ -28,15 +28,17 @@ Given a time interval of interest **`I`** as described above, the estimation of 
 - The algorithm implemented by this software identifies all non-empty `SessionGroup`s for the given interval of interest `I`.
 - For each `SessionGroup`, the algorithm computes the following values:
   - **`avg_kw`**:  sum over all sessions in the `SessionGroup` of each session's average power demand. For each session, the average power demand is the session's total energy consumption divided by the session's charging time.
-  - **`count`**: number of sessions in the `SessionGroup`.
+  - **`size`**: number of sessions in the `SessionGroup`.
 - For the interval of interest `I`, the algorithm computes the following values:
   - **`consumption_based_kw`**: highest value of `avg_kw` over all `SessionGroup`s.
   - **`consumption_based_kva`**: `consumption_based_kw` divided by a power factor constant **`EV_POWER_FACTOR`** that reflects the combination of typical EV chargers and the Evolute infrastructure.
-  - **`breaker_spec_based_kw`**: highest value of `count` over all `SessionGroup`s multiplied by the Evolute smart breaker kW rating of 6.7 kW.
-  - **`breaker_spec_based_kva`**: highest value of `count` over all `SessionGroup`s multiplied by the Evolute smart breaker kVA rating of 7.5 kVA.
+  - **`breaker_spec_based_kw`**: highest value of `size` over all `SessionGroup`s multiplied by the Evolute smart breaker kW rating of 6.7 kW.
+  - **`breaker_spec_based_kva`**: highest value of `size` over all `SessionGroup`s multiplied by the Evolute smart breaker kVA rating of 7.5 kVA.
 - These four values provide brackets for the EV peak power demand during the interval of interest `I`:
   - The actual peak kW associated with EV charging activity during `I` is likely between `consumption_based_kw` and `breaker_spec_based_kw`.
   - The actual peak kVA associated with EV charging activity during `I` is likely between `consumption_based_kva` and `breaker_spec_based_kva`.
+- These four values are the **`direct`** estimates: computed from the `SessionGroup`s exactly as the report gives them. A second, **`clamped`** set is reported *only* when some `SessionGroup` exceeded a single panel's concurrency limit, since otherwise it would repeat `direct` exactly. See *Limitations*.
+- Every anomaly carried by every session that **intersects `I`** is reported alongside the estimates, including those of sessions excluded from them — an estimate is not interpretable without knowing what was left out of it. Sessions elsewhere in the workbook are not reported: the workbook covers a whole billing period while an estimate covers one window in it, and an unrelated finding three weeks away would only bury the ones that bear on this figure.
 
 ## Workflow
 
@@ -50,15 +52,57 @@ This is the typical workflow used with this software to estimate the impact of E
   - Transform the relevant Evolute *session report* CSV file to an Excel file. The transformation process includes some data validation and computes additional columns that are included in the Excel file.
   - Access the relevant Excel file and compute the peak kW and kVA brackets for the interval(s) of interest.
 
+### Tools
+
+Three binaries, matching the workflow steps:
+
+| Command | Purpose |
+|---|---|
+| `csv_to_xlsx <SESSION_REPORT.csv>...` | Converts a session report to a workbook, computing the derived columns and flagging rows that need review. |
+| `sessions <SESSION_REPORT.xlsx>...` | Lists the sessions a workbook holds, with spikes and excluded sessions shown separately. |
+| `estimates <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM> [15m\|1h]` | Prints the peak estimate report for one interval of interest. |
+
+`estimates` takes the interval start in **local time (ET)**, because that is what the Toronto Hydro metering data is stated in and converting by hand is where a mistake would pass unnoticed. The length defaults to `1h` when the start is on the hour and `15m` otherwise. An interval breaking the boundary rules above is rejected rather than estimated, as is a start that falls in a DST gap or fold, since either would silently estimate a different window than the one asked for.
+
+The report goes to stdout as **markdown that also reads as plain text** — not every reader has a markdown renderer. So: no `#` headings (setext underlines instead), no emphasis markers, no indented blocks, and every table cell padded so the columns line up in a monospace font. Session ids get their own section rather than a table column, because a markdown table row is a single line and a large group cannot be wrapped inside one.
+
+## Limitations
+
+This software is written for a single Evolute panel. Such a panel holds 20 breakers, but its PLC runs a queued time-sharing algorithm that keeps at most **10** cars drawing power at any one instant. That figure is the constant `EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`.
+
+Provided that the smart breakers across all panels have the same kW/kVA ratings (specified as constants in the software), the software can be used with Evolute installations containing any number of panels. When there is more than one, however, the results may be distorted, because the session report carries no panel ID and the software therefore cannot tell whether two overlapping sessions ran on the same panel or on different ones.
+
+To keep a single panel's estimate physically possible, a `SessionGroup` holding more than 10 sessions is **clamped**: the estimates are computed over 10 of them rather than all. Which 10 is decided in two tiers.
+
+- A session ending within one `SESSION_BOUNDARY_RESOLUTION` of the group's start may not have overlapped the group at all. Reported times are truncated to minutes, so a session that in fact *abutted* the next one is indistinguishable from one that overlapped it. These **short-overlap** sessions are the first to be dropped, lowest average power first.
+- Only if dropping every short-overlap session still leaves the group above 10 are **long-overlap** sessions dropped, again lowest average power first. Those demonstrably did overlap, so they go last.
+- A short-overlap session can only arise in a group no longer than one `SESSION_BOUNDARY_RESOLUTION`, because every session in a group outlasts the group by construction. The first tier therefore fires exactly where the truncation artefact lives, and nowhere else.
+
+The sessions themselves are never removed from the group: clamping affects only the derived figures, so a group's reported size stays truthful and carries the `ClampedSessionGroup` anomaly.
+
+Because clamping rests on the single-panel assumption, the software does not choose. The **`direct`** estimates — computed from the groups as reported, with no panel constraint applied — are always given. The **`clamped`** estimates are given *in addition*, and only when some group actually exceeded the limit; where no group did, clamping changes nothing and a second identical set would say nothing.
+
+A `clamped` set therefore carries information by its mere presence: it means the report claims more concurrent sessions than one panel can run, so either a second panel is installed or the data is wrong. The affected groups also carry the `ClampedSessionGroup` anomaly. When both sets are present the clamped figures never exceed the direct ones, so the two nest, and the widest honest bracket on the true peak runs from the clamped `consumption_based_kw` to the direct `breaker_spec_based_kw`.
+
+Testing *any* group is the same as testing only the groups the `direct` estimates were drawn from, so nothing turns on the choice: the group behind `breaker_spec_based_kw` is by definition the largest there is, so if it is within the limit then every group is. A clamped group that is not one of the peaks cannot arise.
+
+Clamping can still change *which* group peaks, but only when the peaking group is itself oversized: cutting it down may drop it below a group that was never clamped. So the two sets may point at different `SessionGroup`s, and each estimate names its own.
+
+No report seen so far produces a `clamped` set at all; the June 2026 sample peaks at three concurrent sessions.
+
 ## Technical Notes
 
 ### Session boundaries
 
-Unlike intervals of interest, which include the left end but exclude the right end, sessions are closed intervals, i.e., both end-points are included. Because reported session start and end times are truncated to whole minutes, this software calculates an adjusted session end time, by adding 59 seconds to the reported end time, to ensure the actual charge time is fully included between the session's start and end.
+Sessions in the software, like intervals of interest and the session groups derived from them, are treated as half-open intervals which include the left end but exclude the right end. Because reported session start and end times are truncated to whole minutes, this software calculates an adjusted session end time, by adding `SESSION_BOUNDARY_RESOLUTION` — 60 seconds — to the reported end time, to ensure the actual charge time is fully included between the session's start and end.
 
-The interval of interest has a **boundary margin** of `OVERLAP_THRESHOLD`, 60 seconds. Because reported session times are truncated to whole minutes, a session whose only overlap with the interval falls inside that margin cannot be trusted to overlap the interval at all, so it is excluded from the estimates and flagged `IntersectsBoundaryMarginOnly`. Equivalently: a session takes part only if it is active somewhere in the interval reduced by 60 seconds at each end.
+Half-open is what makes session groups **tile** the interval of interest: consecutive groups meet at a single instant that belongs to the later one, so no instant falls in two groups and none falls in neither, and group durations sum to the interval's own. Closed intervals cannot do this — adjacent groups would either share an instant, and so disagree about which sessions were active at it, or leave a one-tick gap. It is also what makes *abutting* distinguishable from *overlapping*, which is the question the estimates turn on.
 
-The margin applies *only* at the boundaries. A session lying inside the interval is included however short it is — a 10-second session counts, and so does a spike, whose `Active_Charge_Time` is zero. The margin also decides membership *only*: once a session is included, its `SessionGroup` end-points are clamped to the real interval, so the groups tile it and a reported peak window is a wall-clock window that can be matched against the metering data.
+The padding is 60 seconds rather than 59 for the same reason. A session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`, so `16:35:00` — exclusive — is the bound that contains it wherever it fell.
+
+The interval of interest has a **boundary margin** equal to `SESSION_BOUNDARY_RESOLUTION`. Because reported session times are truncated to whole minutes, a session whose only overlap with the interval falls inside that margin cannot be trusted to overlap the interval at all, so it is excluded from the estimates and flagged `IntersectsBoundaryMarginOnly`. Equivalently: a session takes part only if it is active somewhere in the interval reduced by 60 seconds at each end.
+
+The margin applies *only* at the boundaries. A session lying inside the interval is included however short. This includes any spikes, i.e., sessions whose `Active_Charge_Time` is zero. The margin also decides membership *only*: once a session is included, its `SessionGroup` end-points are clamped to the real interval, so the groups tile it and a reported peak window is a wall-clock window that can be matched against the metering data.
 
 ### Time zone
 
@@ -78,7 +122,8 @@ candidate offsets from each other.
 
 Note the assumption holds of the *true* instants, not of the reported ones. Because the report
 truncates start and end to whole minutes, `Conn_start_UTC + Conn_Duration` does not land on
-`Conn_end_UTC` — it misses by up to 59 seconds, in either direction, on a perfectly sound record.
+`Conn_end_UTC` — it misses by strictly less than one `SESSION_BOUNDARY_RESOLUTION`, in either
+direction, on a perfectly sound record.
 Every test below is stated as a tolerance for that reason, and the exact size of the discrepancy is
 derived in step 2.
 
@@ -126,7 +171,7 @@ to the peak in both candidate hours.
 
 - Session report session start and end times do not include seconds. Therefore, the following transformations are done during data ingestion:
   - Session start time `Conn_DateTime_Start` stays the same.
-  - A new field, adjusted session end time `Adj_conn_end`, is computed as: `Conn_DateTime_End + 59 seconds`.
+  - A new field, adjusted session end time `Adj_conn_end`, is computed as: `Conn_DateTime_End + 60 seconds`. It is the session's **exclusive** end: a session starting at exactly this time does not overlap this one.
   - A new field, adjusted session duration `Adj_conn_duration`, is computed as: `Adj_conn_end - Conn_DateTime_Start`.
   - Three new fields are added: `Conn_start_UTC`, `Conn_end_UTC`, and `Adj_conn_end_UTC`, with UTC values corresponding to the corresponding local time fields.
   - A new field, `Avg_power` in kW, is computed as: `Energy_Use / (Active_Charge_Time * 24)`.
@@ -135,7 +180,14 @@ to the peak in both candidate hours.
 ### Other
 
 - Every session in the report is written to the workbook, anomalous ones included: the sheet is a faithful rendering of the session report, and which sessions take part in an estimate is decided on the reading side.
-- Each session is checked for internal consistency: `Conn_start + Conn_Duration` must land within 59 seconds of `Conn_DateTime_End`, on either side. The upper bound is exactly `Adj_conn_end`, which already carries those 59 seconds; the lower bound sits the same distance below the reported end. The band is not slack — it is precisely what truncation to whole minutes accounts for, as derived under *The inference, in detail*, and the sample data reaches −57 seconds of it.
+- Each session is checked for internal consistency, and the test is *derived* rather than chosen. Truncation puts the true start somewhere in `[Conn_start, Adj_conn_start)` and the true end somewhere in `[Conn_end, Adj_conn_end)` — two half-open windows one `SESSION_BOUNDARY_RESOLUTION` wide, the same convention used everywhere else. An honest `Conn_Duration` carries some instant of the first window to some instant of the second, so the record is sound exactly when the first window, shifted by the duration, still *meets* the second:
+
+  ```
+  sound  <=>  Conn_start + Conn_Duration  <  Adj_conn_end
+         and  Conn_start + Conn_Duration  >  Conn_end - SESSION_BOUNDARY_RESOLUTION
+  ```
+
+  Both bounds are strict, because both windows are half-open at the same end. That makes this the one band in the design that is open rather than half-open — an instance of the convention rather than an exception to it, since it is the *intersection* condition of two half-open windows and not an interval anyone chose. The band is not slack: it is precisely what truncation to whole minutes accounts for, and the sample data reaches to within 3 seconds of its lower edge.
 - A session outside that band is flagged `InconsistentDuration` and excluded from the estimates. Both directions are faults: if a record's own fields disagree by more than the reporting can explain, neither its duration nor the span the grouping logic would place it on can be relied on. The overshoot direction subsumes the case of a session ending before it starts, since with `Conn_DateTime_End` a minute or more before `Conn_DateTime_Start` no non-negative duration can satisfy the test.
 - Together with the boundary margin described under *Session boundaries*, these are the only sessions excluded from the estimates.
 - Sessions with zero `Energy_Use` and non-zero `Active_Charge_Time` do not contribute to `consumption_based_kw` and `consumption_based_kva` but they do contribute to `breaker_spec_based_kw` and `breaker_spec_based_kva`.

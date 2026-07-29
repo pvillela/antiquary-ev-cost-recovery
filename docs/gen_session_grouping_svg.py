@@ -1,6 +1,7 @@
 """Generates docs/session-grouping.svg from the same figures the integration test asserts."""
 
-# minutes from 16:00; session end is the *reported* end, padded by 59s when drawn
+# minutes from 16:00; session end is the *reported* end, padded by 60s when drawn — sessions are
+# half-open, so the padded end is the first instant the session is no longer running
 SESSIONS = [
     # id, start_min, end_min, kW   (start/end relative to 16:00, may fall outside 0..60)
     ("A", -6, 63, 6.0),
@@ -13,8 +14,8 @@ SESSIONS = [
 ]
 # group boundaries in seconds from 16:00, and the count in each
 GROUPS = [
-    (0, 480, 2), (480, 959, 3), (959, 1200, 2), (1200, 1440, 3), (1440, 2040, 4),
-    (2040, 2099, 5), (2099, 2579, 3), (2579, 2880, 1), (2880, 3359, 2), (3359, 3600, 1),
+    (0, 480, 2), (480, 960, 3), (960, 1200, 2), (1200, 1440, 3), (1440, 2040, 4),
+    (2040, 2100, 5), (2100, 2580, 3), (2580, 2880, 1), (2880, 3360, 2), (3360, 3600, 1),
 ]
 
 # ---- layout -----------------------------------------------------------------
@@ -70,7 +71,7 @@ for m in range(0, 61, 15):
 # session bars
 for i, (sid, s_min, e_min, kw) in enumerate(SESSIONS):
     y = TOP + i * ROW_H
-    s_sec, e_sec = s_min * 60, e_min * 60 + 59      # padded end
+    s_sec, e_sec = s_min * 60, e_min * 60 + 60      # padded end (exclusive)
     cs, ce = max(s_sec, 0), min(e_sec, 3600)
     a(f'<text x="{LM - 12}" y="{y + BAR_H - 2}" text-anchor="end" font-weight="600" '
       f'fill="{TEXT}">{sid}</text>')
@@ -102,11 +103,11 @@ a(f'<text x="{LM - 12}" y="{TILE_Y + 18}" text-anchor="end" font-weight="600" '
   f'fill="{TEXT}">groups</text>')
 
 # callout to the sliver
-sx = x(2040) + (x(2099) - x(2040)) / 2
+sx = x(2040) + (x(2100) - x(2040)) / 2
 a(f'<line x1="{sx:.1f}" y1="{TILE_Y + TILE_H + 2:.1f}" x2="{sx:.1f}" y2="{ZOOM_TOP - 34:.1f}" '
   f'stroke="{SLIVER}" stroke-width="1.2" stroke-dasharray="3 2"/>')
 a(f'<text x="{sx:.1f}" y="{ZOOM_TOP - 40:.1f}" text-anchor="middle" fill="{SLIVER}" '
-  f'font-weight="600">5 sessions, 59 s</text>')
+  f'font-weight="600">5 sessions, 60 s</text>')
 
 # ---- magnified detail -------------------------------------------------------
 z0, z1 = 33 * 60, 36 * 60                              # detail window, seconds from 16:00
@@ -130,7 +131,7 @@ for s, e, n in GROUPS:
     a(f'<text x="{(zx(cs) + zx(ce)) / 2:.1f}" y="{ZOOM_TOP + 20}" text-anchor="middle" '
       f'fill="#ffffff" font-weight="600">{n}</text>')
 a(f'<text x="{zx(2040 + 30):.1f}" y="{ZOOM_TOP - 22:.1f}" text-anchor="middle" fill="{SLIVER}" '
-  f'font-size="11">16:34:00 &#8211; 16:34:59</text>')
+  f'font-size="11">16:34:00 &#8211; 16:35:00</text>')
 a('</svg>')
 
 open("docs/session-grouping.svg", "w").write("\n".join(x for x in out if x) + "\n")

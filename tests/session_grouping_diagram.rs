@@ -12,11 +12,12 @@
 //! cargo test --test session_grouping_diagram
 
 use ev_peak_contrib::{
-    EV_POWER_FACTOR, EVOLUTE_BREAKER_KVA_RATING, EVOLUTE_BREAKER_KW_RATING, SessionGroup,
-    max_power_estimates_for_interval, session_csv_to_xlsx, session_list,
+    EV_POWER_FACTOR, EVOLUTE_BREAKER_KVA_RATING, EVOLUTE_BREAKER_KW_RATING,
+    SESSION_BOUNDARY_RESOLUTION, SessionGroup, max_power_estimates_for_interval,
+    session_csv_to_xlsx, session_list,
 };
 use jiff::Timestamp;
-use std::{fs, path::PathBuf, time::Duration};
+use std::{fs, path::PathBuf, rc::Rc};
 
 /// The interval of interest: 16:00–17:00 local on 2026-06-15, i.e. a legal one-hour interval on a
 /// date with no DST transition. Stated in UTC, which is what the estimating logic takes.
@@ -47,7 +48,7 @@ fn convert_fixture() -> PathBuf {
 }
 
 /// `(seconds from interval start, seconds from interval start, session ids)` for each group.
-fn tiling(groups: &[SessionGroup]) -> Vec<(i64, i64, String)> {
+fn tiling(groups: &[Rc<SessionGroup>]) -> Vec<(i64, i64, String)> {
     let lo = ts(INTERVAL_START);
     groups
         .iter()
@@ -81,15 +82,15 @@ fn diagram_scenario_produces_the_expected_tiling_and_estimates() {
     #[rustfmt::skip]
     let expected = [
         (   0,  480, "A,B"),          //  0  16:00:00 – 16:08:00   B running, C not yet
-        ( 480,  959, "A,B,C"),        //  1  16:08:00 – 16:15:59   C joins
-        ( 959, 1200, "A,C"),          //  2  16:15:59 – 16:20:00   B's padded end
+        ( 480,  960, "A,B,C"),        //  1  16:08:00 – 16:16:00   C joins
+        ( 960, 1200, "A,C"),          //  2  16:16:00 – 16:20:00   B's padded end
         (1200, 1440, "A,C,E"),        //  3  16:20:00 – 16:24:00   E joins
         (1440, 2040, "A,C,D,E"),      //  4  16:24:00 – 16:34:00   D joins
-        (2040, 2099, "A,C,D,E,F"),    //  5  16:34:00 – 16:34:59   F starts as D and E finish
-        (2099, 2579, "A,C,F"),        //  6  16:34:59 – 16:42:59   D and E gone
-        (2579, 2880, "A"),            //  7  16:42:59 – 16:48:00   C and F gone, A alone
-        (2880, 3359, "A,G"),          //  8  16:48:00 – 16:55:59   G joins
-        (3359, 3600, "A"),            //  9  16:55:59 – 17:00:00   A alone to the interval end
+        (2040, 2100, "A,C,D,E,F"),    //  5  16:34:00 – 16:35:00   F starts as D and E finish
+        (2100, 2580, "A,C,F"),        //  6  16:35:00 – 16:43:00   D and E gone
+        (2580, 2880, "A"),            //  7  16:43:00 – 16:48:00   C and F gone, A alone
+        (2880, 3360, "A,G"),          //  8  16:48:00 – 16:56:00   G joins
+        (3360, 3600, "A"),            //  9  16:56:00 – 17:00:00   A alone to the interval end
     ];
     assert_eq!(
         tiling(groups),
@@ -97,7 +98,7 @@ fn diagram_scenario_produces_the_expected_tiling_and_estimates() {
     );
 
     // The counts along the bottom of the diagram.
-    let counts: Vec<usize> = groups.iter().map(SessionGroup::session_count).collect();
+    let counts: Vec<usize> = groups.iter().map(|g| g.size()).collect();
     assert_eq!(counts, [2, 3, 2, 3, 4, 5, 3, 1, 2, 1]);
 
     // The groups tile the interval: contiguous, and spanning it end to end. A overruns both ends,
@@ -108,24 +109,34 @@ fn diagram_scenario_produces_the_expected_tiling_and_estimates() {
     assert_eq!(groups[0].start(), ts(INTERVAL_START));
     assert_eq!(groups[9].end(), ts(INTERVAL_END));
 
-    // The five-session group lasts 59 seconds, not a minute. D and E report ending on the same
-    // minute F reports starting, and `Adj_conn_end` pads a reported end to the end of its minute —
-    // so the three genuinely overlap, for as long as that padding lasts. This sliver is the reason
-    // the arrangement is worth a test: it is the shortest group and the highest load.
-    assert_eq!(groups[5].duration(), Duration::from_secs(59));
+    // The five-session group lasts exactly one minute. D and E report ending on the same minute F
+    // reports starting, and `Adj_conn_end` pads a reported end past the end of its minute — so for
+    // as long as the report cannot tell us otherwise, the five genuinely overlap. This sliver is
+    // the reason the arrangement is worth a test: it is the shortest group and the highest load,
+    // and it is exactly one SESSION_BOUNDARY_RESOLUTION wide because that is the whole of the
+    // uncertainty the padding represents.
+    assert_eq!(groups[5].duration(), SESSION_BOUNDARY_RESOLUTION);
     assert_eq!(
-        groups.iter().map(SessionGroup::duration).min(),
-        Some(Duration::from_secs(59)),
+        groups.iter().map(|g| g.duration()).min(),
+        Some(SESSION_BOUNDARY_RESOLUTION),
         "the sliver should be the shortest group"
     );
 
     // Aggregate power per group. Every session draws between 5.9 and 6.7 kW, as Evolute's breakers
     // constrain them to, so the aggregate tracks the count closely.
-    let agg: Vec<f64> = groups.iter().map(SessionGroup::agg_avg_power).collect();
+    let agg: Vec<f64> = groups.iter().map(|g| g.agg_avg_power()).collect();
     let expected_agg = [12.4, 18.6, 12.2, 18.1, 24.7, 31.4, 18.9, 6.0, 12.1, 6.0];
     for (i, (got, want)) in agg.iter().zip(expected_agg).enumerate() {
         assert!((got - want).abs() < 1e-9, "group {i}: {got} != {want}");
     }
+
+    // Nothing here is worth flagging: seven clean sessions, all of them reaching well past the
+    // boundary margin.
+    assert!(
+        report.session_anomalies.is_empty(),
+        "{:?}",
+        report.session_anomalies
+    );
 
     // Both estimates peak at group 5. With every session near the breaker rating the aggregate can
     // only track the count, so the two can diverge just when the maximum count is reached by more
@@ -133,22 +144,32 @@ fn diagram_scenario_produces_the_expected_tiling_and_estimates() {
     let estimates = report
         .estimates
         .expect("some session intersects the interval");
-    assert_eq!(estimates.consumption_based_kw.session_group_idx, 5);
-    assert_eq!(estimates.breaker_specs_based_kw.session_group_idx, 5);
+    let direct = &estimates.direct;
+    assert_eq!(direct.consumption_based_kw.session_group_idx, 5);
+    assert_eq!(direct.breaker_specs_based_kw.session_group_idx, 5);
 
-    assert!((estimates.consumption_based_kw.value - 31.4).abs() < 1e-9);
-    assert!((estimates.consumption_based_kva.value - 31.4 / EV_POWER_FACTOR).abs() < 1e-9);
+    assert!((direct.consumption_based_kw.value - 31.4).abs() < 1e-9);
+    assert!((direct.consumption_based_kva.value - 31.4 / EV_POWER_FACTOR).abs() < 1e-9);
+    assert!((direct.breaker_specs_based_kw.value - 5.0 * EVOLUTE_BREAKER_KW_RATING).abs() < 1e-9);
     assert!(
-        (estimates.breaker_specs_based_kw.value - 5.0 * EVOLUTE_BREAKER_KW_RATING).abs() < 1e-9
+        (direct.breaker_specs_based_kva.value - 5.0 * EVOLUTE_BREAKER_KVA_RATING).abs() < 1e-9
     );
-    assert!(
-        (estimates.breaker_specs_based_kva.value - 5.0 * EVOLUTE_BREAKER_KVA_RATING).abs() < 1e-9
-    );
+
+    // An estimate can name the group it came from, and say whether that group was cut down. The
+    // biggest group here holds five sessions, half the panel limit, so nothing is.
+    assert_eq!(direct.consumption_based_kw.group().size(), 5);
+    assert_eq!(direct.consumption_based_kw.group().start(), groups[5].start());
+    assert!(direct.consumption_based_kw.group_anomalies().is_empty());
+
+    // No group reaches the panel limit, so clamping would change nothing and no clamped set is
+    // produced at all. It appears only when the report claims more concurrent sessions than one
+    // panel's PLC will run.
+    assert!(estimates.clamped.is_none());
 
     // The brackets from README, "Estimation logic": the consumption-based figure is the lower end
     // of each pair, the breaker-spec figure the upper.
-    assert!(estimates.consumption_based_kw.value < estimates.breaker_specs_based_kw.value);
-    assert!(estimates.consumption_based_kva.value < estimates.breaker_specs_based_kva.value);
+    assert!(direct.consumption_based_kw.value < direct.breaker_specs_based_kw.value);
+    assert!(direct.consumption_based_kva.value < direct.breaker_specs_based_kva.value);
 
     fs::remove_dir_all(xlsx.parent().unwrap()).ok();
 }

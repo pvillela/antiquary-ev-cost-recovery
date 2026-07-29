@@ -1,0 +1,13 @@
+UR_ID,Location_Address,Location_City,Location_Postal_Code,Station_ID,Station_Network_Provider,Station_Make,Station_Model,Charge_Session_ID,User_ID,Conn_DateTime_Start,Conn_DateTime_End,Conn_Duration,Charge_Duration,Active_Charge_Time,Charging_Level,Energy_Use,Total_Fee,Vehicle_Make,Vehicle_Model,Vehicle_Year
+CKT-7,,Toronto,,Station-1,Evolute Inc.,FLO,G5,C00,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,2.500,0.00,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-2,Evolute Inc.,FLO,G5,C01,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,2.550,0.00,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-3,Evolute Inc.,FLO,G5,C02,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,2.600,0.00,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-4,Evolute Inc.,FLO,G5,C03,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,2.650,0.00,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-5,Evolute Inc.,FLO,G5,C04,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,2.700,0.00,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-6,Evolute Inc.,FLO,G5,C05,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,2.750,0.00,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,C06,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,2.800,0.00,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-8,Evolute Inc.,FLO,G5,C07,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,2.850,0.00,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-9,Evolute Inc.,FLO,G5,C08,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,2.900,0.00,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-10,Evolute Inc.,FLO,G5,C09,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,2.950,0.00,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-11,Evolute Inc.,FLO,G5,C10,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,3.000,0.00,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-12,Evolute Inc.,FLO,G5,C11,,2026-06-15 16:20,2026-06-15 16:50,0:30:00,0:30:00,0:30:00,Level 2,3.050,0.00,VinFast,Vf8,2024
