@@ -204,18 +204,30 @@ pub struct Session {
     /// is 2. This is *not* the CSV row: a record duplicated to resolve a DST fold occupies two
     /// workbook rows, so the two diverge from that point on.
     pub row: usize,
-    /// Conection start date-time (UTC) from `session report`.
+    /// `Conn_start_UTC`: connection start date-time from `session report`, truncated to the
+    /// minute like every reported time, so the true start lies in
+    /// `[conn_start, conn_start + SESSION_BOUNDARY_RESOLUTION)`.
     pub conn_start: Timestamp,
-    /// Non-adjusted conection end date-time (UTC) from `session report`.
-    pub raw_conn_end: Timestamp,
-    /// Adjusted conection end date-time (UTC) from `session report`.
+    /// `Conn_end_UTC`: connection end date-time as reported, truncated to the minute.
+    ///
+    /// Held for reporting only. Every calculation wants [`Session::adj_conn_end`], which is the
+    /// bound that actually contains the session.
     pub conn_end: Timestamp,
+    /// `Adj_conn_end_UTC`: [`Session::conn_end`] padded by one [`SESSION_BOUNDARY_RESOLUTION`],
+    /// which makes it the session's **exclusive** end — the true end lies in
+    /// `[adj_conn_end - SESSION_BOUNDARY_RESOLUTION, adj_conn_end)`.
+    ///
+    /// This is the end the grouping and estimating logic uses throughout, so that
+    /// `[conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the real
+    /// connection. See README.md, "Session boundaries".
+    pub adj_conn_end: Timestamp,
     /// `Conn_Duration` from `session report`: the physical elapsed time of the connection, which is
     /// what makes the DST fold inference possible. See README.md, "Time zone".
     pub conn_duration: Duration,
     /// Active charge time from `session report`.
-    /// May differ from `conn_end - conn_start` due to `conn_end` for various reasons, including
-    /// ingestion adjustment.
+    ///
+    /// May differ from `adj_conn_end - conn_start` for several reasons: the padding on
+    /// `adj_conn_end`, and a car that stays connected without drawing power.
     pub charge_time: Duration,
     /// From `session report`.
     pub energy_use: f64,
@@ -237,24 +249,24 @@ impl Session {
     /// [`AnomalyKind::InconsistentDuration`] catches — and it is the last one that should quietly
     /// disappear from a report, being the one most in need of review.
     pub fn intersects(&self, interval: (Timestamp, Timestamp)) -> bool {
-        let start = self.conn_start.min(self.conn_end);
-        let end = self.conn_start.max(self.conn_end);
+        let start = self.conn_start.min(self.adj_conn_end);
+        let end = self.conn_start.max(self.adj_conn_end);
         start < interval.1 && end > interval.0
     }
 
-    /// Connection start in local time (ET).
+    /// Reported connection start in local time (ET).
     pub fn conn_start_local(&self) -> Zoned {
         Zoned::new(self.conn_start, time_zone())
     }
 
-    /// Non-adjusted conection end in local time (ET).
-    pub fn raw_conn_end_local(&self) -> Zoned {
-        Zoned::new(self.raw_conn_end, time_zone())
-    }
-
-    /// Adjusted conection end in local time (ET).
+    /// Reported connection end in local time (ET).
     pub fn conn_end_local(&self) -> Zoned {
         Zoned::new(self.conn_end, time_zone())
+    }
+
+    /// Adjusted, exclusive connection end in local time (ET).
+    pub fn adj_conn_end_local(&self) -> Zoned {
+        Zoned::new(self.adj_conn_end, time_zone())
     }
 }
 

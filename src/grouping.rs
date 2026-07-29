@@ -346,24 +346,23 @@ impl SessionGroup {
     /// back under the limit and so *raise* its clamped total. [`crate::PowerEstimates`] therefore
     /// assumes no ordering between its four sets.
     ///
-    /// Which ones go is decided in two tiers, ranked on how far a session's `conn_end` reaches
+    /// Which ones go is decided in two tiers, ranked on how far a session's `adj_conn_end` reaches
     /// past the group's start:
     ///
-    /// 1. **Short-overlap** — `conn_end - start <= SESSION_BOUNDARY_RESOLUTION`. Dropped first,
-    ///    lowest average power first.
+    /// 1. **Short-overlap** — `adj_conn_end - start <= SESSION_BOUNDARY_RESOLUTION`. Dropped
+    ///    first, lowest average power first.
     /// 2. **Long-overlap** — everything else. Dropped only when emptying tier 1 still leaves the
     ///    group oversized, again lowest power first.
     ///
     /// Ties are broken on session id, so the result never depends on iteration order.
     ///
-    /// The tier boundary is derived, not chosen. `conn_end` is `Adj_conn_end`: the reported end
-    /// padded to the exclusive end of the minute it fell in, so the true end lies somewhere in
-    /// `[conn_end - SESSION_BOUNDARY_RESOLUTION, conn_end)`. A short-overlap session has
-    /// `conn_end - SESSION_BOUNDARY_RESOLUTION <= start`, so it may have truly ended at or before
-    /// the group began, contributing nothing to it. A long-overlap session's true end is strictly
-    /// after `start`, so it was still connected once the group was under way. The comparison is
-    /// strict because the intervals are half-open: at exactly one resolution the true end can *be*
-    /// `start`, and that is no overlap at all.
+    /// The tier boundary is derived, not chosen. The true end lies somewhere in
+    /// `[adj_conn_end - SESSION_BOUNDARY_RESOLUTION, adj_conn_end)`. A short-overlap session has
+    /// `adj_conn_end - SESSION_BOUNDARY_RESOLUTION <= start`, so it may have truly ended at or
+    /// before the group began, contributing nothing to it. A long-overlap session's true end is
+    /// strictly after `start`, so it was still connected once the group was under way. The
+    /// comparison is strict because the intervals are half-open: at exactly one resolution the
+    /// true end can *be* `start`, and that is no overlap at all.
     ///
     /// Tier 2 establishes presence in the group's span — which is what the sweep means by
     /// concurrency — and not verified pairwise overlap with any particular member: the group's
@@ -373,19 +372,19 @@ impl SessionGroup {
     /// Tier 1 can only be non-empty for a group no longer than one [`SESSION_BOUNDARY_RESOLUTION`].
     /// Every session in a group outlasts the group — [`end_points_to_groups`] emits the run
     /// `[run_start, time)` *before* applying any end-point at `time` — so
-    /// `conn_end - start >= self.duration()` for every member. A short-overlap session therefore
-    /// implies a group of at most one tick, so the rule fires only where the uncertainty it answers
-    /// to actually lives, and nowhere else.
+    /// `adj_conn_end - start >= self.duration()` for every member. A short-overlap session
+    /// therefore implies a group of at most one tick, so the rule fires only where the uncertainty
+    /// it answers to actually lives, and nowhere else.
     fn eligible_sessions(&self, boundary: Boundary) -> Vec<RSession> {
         let mut ranked: Vec<(bool, f64, String, RSession)> = self
             .members(boundary)
             .map(|s| {
                 let session = s.as_ref().borrow();
-                let overlap = Duration::try_from(session.conn_end.duration_since(self.start))
+                let overlap = Duration::try_from(session.adj_conn_end.duration_since(self.start))
                     .unwrap_or_else(|_| {
                         panic!(
                             "session ends at {} before session group starts at {}",
-                            session.conn_end, self.start
+                            session.adj_conn_end, self.start
                         )
                     });
                 let long_overlap = overlap > SESSION_BOUNDARY_RESOLUTION;
@@ -454,27 +453,26 @@ pub fn groups_for_interval(
 /// Returns an unsorted list of end-points corresponding to the sessions that intersect `interval`,
 /// flagging those whose overlap with it is not provable.
 ///
-/// Membership is the *possible*-overlap test, `conn_start < hi && conn_end > lo` — a session takes
-/// part if it might have been running. Understating a maximum is the unsafe error, so the estimates
-/// are drawn from every session that could have contributed and the doubt is reported rather than
-/// silently resolved.
+/// Membership is the *possible*-overlap test, `conn_start < hi && adj_conn_end > lo` — a session
+/// takes part if it might have been running. Understating a maximum is the unsafe error, so the
+/// estimates are drawn from every session that could have contributed and the doubt is reported
+/// rather than silently resolved.
 ///
-/// What the doubt costs is derived from the two windows the reporting uncertainty leaves, assuming
-/// — as every call site does — that `boundary_margin` is one [`SESSION_BOUNDARY_RESOLUTION`].
-/// `conn_start` is truncated to the minute, so the true start lies in
-/// `[conn_start, conn_start + margin)`; `conn_end` is `Adj_conn_end`, the reported end padded to
-/// the exclusive end of its minute, so the true end lies in `[conn_end - margin, conn_end)`.
-/// Overlap is therefore *provable* exactly when
+/// What the doubt costs is derived from the two windows the reporting uncertainty leaves,
+/// assuming — as every call site does — that `boundary_margin` is one
+/// [`SESSION_BOUNDARY_RESOLUTION`]. The true start lies in `[conn_start, conn_start + margin)` and
+/// the true end in `[adj_conn_end - margin, adj_conn_end)`. Overlap is therefore *provable*
+/// exactly when
 ///
 /// ```text
-/// conn_end > lo + margin   and   conn_start <= hi - margin
+/// adj_conn_end > lo + margin   and   conn_start <= hi - margin
 /// ```
 ///
 /// The strictness differs between the two because the windows are open at opposite ends. The true
-/// end can attain `conn_end - margin`, so at `conn_end == lo + margin` it may be `lo` itself, which
-/// under half-open intervals is no overlap — hence the strict `>`. The true start never attains
-/// `conn_start + margin`, so `conn_start == hi - margin` still puts it before `hi` — hence the
-/// non-strict `<=`.
+/// end can attain `adj_conn_end - margin`, so at `adj_conn_end == lo + margin` it may be `lo`
+/// itself, which under half-open intervals is no overlap — hence the strict `>`. The true start
+/// never attains `conn_start + margin`, so `conn_start == hi - margin` still puts it before
+/// `hi` — hence the non-strict `<=`.
 ///
 /// A session that is admitted but fails that test is flagged
 /// [`AnomalyKind::IntersectsBoundaryMarginOnly`]; [`Boundary::Narrow`] is the view that leaves it
@@ -492,16 +490,16 @@ fn end_points_for_interval(
     let hi_t = hi - boundary_margin;
     let mut end_points = Vec::<EndPoint>::new();
     for s in sessions {
-        let (conn_start, conn_end) = {
+        let (conn_start, adj_conn_end) = {
             let session = s.as_ref().borrow();
-            (session.conn_start, session.conn_end)
+            (session.conn_start, session.adj_conn_end)
         };
 
-        if conn_start >= hi || conn_end <= lo {
+        if conn_start >= hi || adj_conn_end <= lo {
             continue;
         }
 
-        if !(conn_start <= hi_t && conn_end > lo_t) {
+        if !(conn_start <= hi_t && adj_conn_end > lo_t) {
             // Every other kind is settled at conversion time and arrives on the session already.
             // This one cannot be: it depends on which interval of interest was chosen.
             s.borrow_mut()
@@ -514,7 +512,7 @@ fn end_points_for_interval(
             session: s.clone(),
         }));
         end_points.push(EndPoint::Right(EndPointData {
-            time: conn_end.min(hi),
+            time: adj_conn_end.min(hi),
             session: s.clone(),
         }));
     }
@@ -589,8 +587,8 @@ mod test {
             id: Default::default(),
             row: Default::default(),
             conn_start: Default::default(),
-            raw_conn_end: Default::default(),
             conn_end: Default::default(),
+            adj_conn_end: Default::default(),
             conn_duration: Default::default(),
             charge_time: Default::default(),
             energy_use: Default::default(),
@@ -616,14 +614,14 @@ mod test {
     /// logic to work on.
     fn rsession(id: &str, start: &str, end: &str) -> RSession {
         let conn_start = ts(start);
-        let conn_end = ts(end);
+        let adj_conn_end = ts(end);
         Rc::new(RefCell::new(Session {
             id: id.to_owned(),
             row: 2,
             conn_start,
-            raw_conn_end: conn_end,
-            conn_end,
-            conn_duration: conn_end.duration_since(conn_start).unsigned_abs(),
+            conn_end: adj_conn_end,
+            adj_conn_end,
+            conn_duration: adj_conn_end.duration_since(conn_start).unsigned_abs(),
             charge_time: Duration::from_secs(60),
             energy_use: 1.0,
             avg_power: 1.0,
@@ -640,7 +638,7 @@ mod test {
     /// whose only overlap sits in a margin is not.
     ///
     /// The last two cases sit exactly on the derived line, which is where the two ends stop being
-    /// symmetric. `conn_end == lo + margin` leaves the true end possibly at `lo`, which is no
+    /// symmetric. `adj_conn_end == lo + margin` leaves the true end possibly at `lo`, which is no
     /// overlap, so it is flagged; `conn_start == hi - margin` still puts the true start before
     /// `hi`, so it is not.
     #[test]

@@ -841,8 +841,8 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
             id,
             row: row as usize,
             conn_start: timestamp_of(number(sheet, &headers, "Conn_start_UTC", row)?)?,
-            raw_conn_end: timestamp_of(number(sheet, &headers, "Conn_end_UTC", row)?)?,
-            conn_end: timestamp_of(number(sheet, &headers, "Adj_conn_end_UTC", row)?)?,
+            conn_end: timestamp_of(number(sheet, &headers, "Conn_end_UTC", row)?)?,
+            adj_conn_end: timestamp_of(number(sheet, &headers, "Adj_conn_end_UTC", row)?)?,
             conn_duration: duration_of(number(sheet, &headers, "Conn_Duration", row)?),
             charge_time,
             energy_use,
@@ -1541,7 +1541,7 @@ S2,2026-06-02 10:00,2026-06-02 09:00,0:10:00,0:09:00,1.5
                 .contains(&AnomalyKind::InconsistentDuration)
         );
         // The inverted session would put a Right end-point before its own Left.
-        assert!(report.excluded[0].conn_end < report.excluded[0].conn_start);
+        assert!(report.excluded[0].adj_conn_end < report.excluded[0].conn_start);
 
         fs::remove_dir_all(xlsx.parent().unwrap()).ok();
     }
@@ -1599,9 +1599,9 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00001,,2026-06-03 09:00,2026-06-0
         // 16:22 EDT is 20:22 UTC.
         assert_eq!(s.conn_start, utc(civil::date(2026, 6, 1).at(20, 22, 0, 0)));
         // The reported end, 21:29 EDT, unadjusted.
-        assert_eq!(s.raw_conn_end, utc(civil::date(2026, 6, 2).at(1, 29, 0, 0)));
+        assert_eq!(s.conn_end, utc(civil::date(2026, 6, 2).at(1, 29, 0, 0)));
         // The adjusted end: 21:30:00 EDT, exclusive.
-        assert_eq!(s.conn_end, utc(civil::date(2026, 6, 2).at(1, 30, 0, 0)));
+        assert_eq!(s.adj_conn_end, utc(civil::date(2026, 6, 2).at(1, 30, 0, 0)));
         assert_eq!(s.conn_duration, Duration::from_secs(5 * 3600 + 7 * 60 + 53));
         assert_eq!(s.charge_time, Duration::from_secs(5 * 3600 + 7 * 60 + 52));
         assert!((s.energy_use - 30.6).abs() < 1e-9);

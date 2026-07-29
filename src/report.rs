@@ -381,7 +381,7 @@ impl PowerEstimatesReport {
                     s.row.to_string(),
                     s.id.clone(),
                     ymd_hm(s.conn_start),
-                    ymd_hm(s.conn_end),
+                    ymd_hm(s.adj_conn_end),
                     if s.intersects(self.interval) {
                         "yes"
                     } else {
@@ -672,14 +672,14 @@ mod test {
 
     fn rsession(id: &str, start: &str, end: &str, avg_power: f64) -> RSession {
         let conn_start = ts(start);
-        let conn_end = ts(end);
+        let adj_conn_end = ts(end);
         Rc::new(RefCell::new(Session {
             id: id.to_owned(),
             row: 2,
             conn_start,
-            raw_conn_end: conn_end,
-            conn_end,
-            conn_duration: conn_end.duration_since(conn_start).unsigned_abs(),
+            conn_end: adj_conn_end,
+            adj_conn_end,
+            conn_duration: adj_conn_end.duration_since(conn_start).unsigned_abs(),
             charge_time: Duration::from_secs(60),
             energy_use: 1.0,
             avg_power,
