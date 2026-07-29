@@ -219,3 +219,5 @@ target/derby*
 .sonar/
 .~*
 ~*.*
+
+_nogit
