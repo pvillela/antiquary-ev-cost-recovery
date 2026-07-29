@@ -54,15 +54,23 @@ This is the typical workflow used with this software to estimate the impact of E
 
 ### Tools
 
-Three binaries, matching the workflow steps:
+Two binaries, matching the workflow steps:
 
 | Command | Purpose |
 |---|---|
 | `csv_to_xlsx <SESSION_REPORT.csv>...` | Converts a session report to a workbook, computing the derived columns and flagging rows that need review. |
-| `sessions <SESSION_REPORT.xlsx>...` | Lists the sessions a workbook holds, with spikes and excluded sessions shown separately. |
-| `estimates <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM> [15m\|1h]` | Prints the peak estimate report for one interval of interest. |
+| `estimates <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM [EST\|EDT]> [15m\|1h]` | Prints the peak estimate report for one interval of interest. |
 
-`estimates` takes the interval start in **local time (ET)**, because that is what the Toronto Hydro metering data is stated in and converting by hand is where a mistake would pass unnoticed. The length defaults to `1h` when the start is on the hour and `15m` otherwise. An interval breaking the boundary rules above is rejected rather than estimated, as is a start that falls in a DST gap or fold, since either would silently estimate a different window than the one asked for.
+`estimates` takes the interval start in **local time (ET)**. The length defaults to `1h` when the start is on the hour and `15m` otherwise. An interval breaking the boundary rules described earlier is rejected rather than estimated.
+
+The two DST transitions are treated differently, because they are different problems.
+
+- On the night DST **ends**, an hour of wall time occurs twice. That is a question the caller can answer, so `estimates` asks it: a bare `"2026-11-01 01:30"` is refused, and `"2026-11-01 01:30 EST"` or `"... EDT"` resolves it. The designator is accepted on any date and **checked against it** — `"2026-06-01 16:00 EST"` is an error, not a silently ignored hint — so naming the wrong one cannot produce a figure for the wrong hour.
+- On the night DST **begins**, an hour of wall time never happens. There is nothing to choose between, so such a start is refused outright and no designator helps.
+
+Both fall out of one test rather than being special-cased: read the wall time as if at each candidate offset, and keep the offsets the zone actually uses at the instant you land on. Two survivors means the caller must choose; one means it is settled; none means the time never existed.
+
+Because a fold interval can begin at `01:00 EDT` and end at `01:00 EST` — the same clock reading, an hour apart — the report header names the offset at each end, and states it once when both agree.
 
 The report goes to stdout as **markdown that also reads as plain text** — not every reader has a markdown renderer. So: no `#` headings (setext underlines instead), no emphasis markers, no indented blocks, and every table cell padded so the columns line up in a monospace font. Session ids get their own section rather than a table column, because a markdown table row is a single line and a large group cannot be wrapped inside one.
 

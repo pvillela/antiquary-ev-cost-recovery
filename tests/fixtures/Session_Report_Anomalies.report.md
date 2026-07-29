@@ -2,7 +2,7 @@ EV Peak Power Contribution
 ==========================
 
 Source     Session_Report_Anomalies.xlsx
-Interval   2026-06-15 16:00 - 17:00 ET  (1 hour)
+Interval   2026-06-15 16:00 - 17:00 EDT  (1 hour)
 
 
 Estimates

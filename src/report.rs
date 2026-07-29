@@ -179,13 +179,7 @@ impl PowerEstimatesReport {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| self.source.to_string_lossy().into_owned())
         ));
-        let (lo, hi) = self.interval;
-        push(format!(
-            "Interval   {} - {} ET  ({})",
-            local(lo).strftime("%Y-%m-%d %H:%M"),
-            local(hi).strftime("%H:%M"),
-            interval_length(lo, hi)
-        ));
+        push(format!("Interval   {}", interval_line(self.interval)));
         push(String::new());
         push(String::new());
 
@@ -469,6 +463,36 @@ impl PowerEstimatesReport {
     }
 }
 
+/// The header's interval line, naming the UTC offset in force at each end.
+///
+/// Naming it is not decoration. On the night DST ends an hour of wall time occurs twice, so an
+/// interval can begin at `01:30` and end at `01:30` — the same clock reading an hour apart. Written
+/// as bare local times that reads as a window of no duration; written with the offsets it reads as
+/// what it is. When both ends share an offset, which is every interval but two a year, it is stated
+/// once at the end.
+fn interval_line(interval: (Timestamp, Timestamp)) -> String {
+    let (lo, hi) = interval;
+    let (lo_z, hi_z) = (local(lo), local(hi));
+    let (lo_off, hi_off) = (
+        lo_z.strftime("%Z").to_string(),
+        hi_z.strftime("%Z").to_string(),
+    );
+    let length = interval_length(lo, hi);
+    if lo_off == hi_off {
+        format!(
+            "{} - {} {lo_off}  ({length})",
+            lo_z.strftime("%Y-%m-%d %H:%M"),
+            hi_z.strftime("%H:%M"),
+        )
+    } else {
+        format!(
+            "{} {lo_off} - {} {hi_off}  ({length})",
+            lo_z.strftime("%Y-%m-%d %H:%M"),
+            hi_z.strftime("%H:%M"),
+        )
+    }
+}
+
 /// "1 hour" / "15 minutes", for the header.
 fn interval_length(lo: Timestamp, hi: Timestamp) -> String {
     let secs = hi.duration_since(lo).as_secs();
@@ -579,7 +603,7 @@ mod test {
 
         assert!(md.starts_with("EV Peak Power Contribution\n=========================="));
         assert!(md.contains("Source     Session_Report_Test.xlsx"));
-        assert!(md.contains("Interval   2026-06-01 16:00 - 17:00 ET  (1 hour)"));
+        assert!(md.contains("Interval   2026-06-01 16:00 - 17:00 EDT  (1 hour)"), "{md}");
         // Three sessions at 1 kW: consumption 3.000, breaker 3 x 6.7.
         assert!(md.contains("| Consumption-based  |  3.000 |"), "{md}");
         assert!(md.contains("| Breaker-spec-based | 20.100 |"), "{md}");
@@ -652,6 +676,37 @@ mod test {
         assert_eq!(md.matches("- ZeroActiveChargeTime - ").count(), 1, "{md}");
     }
 
+    /// The header names the offset at each end, which matters exactly once a year.
+    ///
+    /// On the night DST ends, an hour begun at 01:00 EDT finishes at 01:00 EST — the same clock
+    /// reading, an hour later. Rendered as bare local times that reads as a window of no duration,
+    /// so both offsets are named. No fixture reaches this; it can only be built directly.
+    #[test]
+    fn a_fold_spanning_interval_names_both_offsets() {
+        let lo = ts("2026-11-01T05:00:00Z"); // 01:00 EDT
+        let hi = ts("2026-11-01T06:00:00Z"); // 01:00 EST
+        let mut sessions = vec![rsession(
+            "F",
+            "2026-11-01T05:10:00Z",
+            "2026-11-01T05:50:00Z",
+            6.0,
+        )];
+        let groups = groups_for_interval((lo, hi), &mut sessions);
+        let report = PowerEstimatesReport {
+            source: PathBuf::from("Fold.xlsx"),
+            interval: (lo, hi),
+            estimates: crate::peak_est::estimates_for_groups(&groups),
+            session_groups: groups,
+            session_anomalies: Vec::new(),
+        };
+        let md = report.to_markdown();
+        assert_plain_text_safe(&md);
+        assert!(
+            md.contains("Interval   2026-11-01 01:00 EDT - 01:00 EST  (1 hour)"),
+            "{md}"
+        );
+    }
+
     /// An interval no session reached still renders, and says so rather than printing nothing.
     #[test]
     fn empty_interval_renders_an_explanation() {
@@ -705,7 +760,7 @@ mod test {
         assert_plain_text_safe(&md);
 
         assert!(md.contains("Source     Session_Report_Diagram.xlsx"), "{md}");
-        assert!(md.contains("Interval   2026-06-15 16:00 - 17:00 ET  (1 hour)"), "{md}");
+        assert!(md.contains("Interval   2026-06-15 16:00 - 17:00 EDT  (1 hour)"), "{md}");
         // The diagram's peak: five sessions, 31.4 kW, in group 5.
         assert!(md.contains("| Consumption-based  | 31.400 | 33.053 |     5 |"), "{md}");
         assert!(md.contains("| Breaker-spec-based | 33.500 | 37.500 |     5 |"), "{md}");
