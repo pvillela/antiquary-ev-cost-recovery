@@ -92,8 +92,8 @@ The padding is 60 seconds rather than 59 for the same reason. A session reported
 
 If a group's duration is exactly `SESSION_BOUNDARY_RESOLUTION`  then its membership and size are ambiguous.
 
-- In order for the group to truly exist, it must contains at least one session `s1` that ends inside the group and at least one session `s2` that starts inside the group.
-- If the true end of `s1` is less than the true start of `s2` then they don't overlap, so the group size overstates the number of concurrent sessions in the group.
+- In order for the group to truly exist, it must contains at least one session `s1` that ends inside the group or at least one session `s2` that starts inside the group.
+- If it contains both a session `s1` that ends inside the group and a session `s2` that starts inside the group and the true end of `s1` is less than the true start of `s2`, then they don't overlap, so the group size overstates the number of concurrent sessions in the group.
 
 -  If the above condition holds and `s1` and `s2` are the only sessions in the group, then the group could conceptually be split into two subgroups occupying the same place on the time grid -- one subgroup containing just `s1` and the other containing just `s2`.
 
@@ -185,8 +185,9 @@ The `min` estimates for a narrow group `g` spanning the interval `[g.start, g.en
 
 - Take `[g.start, g.end)`as the interval of interest in an arbitrarily fine time grid.
 - For each session `s` participating in group `g`, define a legal nudged version of `s`:
-  - If `s` starts before `g` and `s.conn_end <= g.end`: let`nudge(s, ε)` be the modification of `s` by adding a small positive or negative `ε` to `s.conn_end` while keeping the nudged session ending within `g`.
-  - If `s` ends after `g` and `s.conn_start >= g.start`: let `nudge(s, ε)` be the modification of `s` by adding a small positive or negative `ε` to `s.conn_start` while keeping the nudged session starting within `g`.
+  - If `s` starts before and ends after `g` then its end-points remain unchanged.
+  - If `s` starts before `g` and ends in `g`, i.e., `s.conn_end <= g.end`: let`nudge(s, ε)` be the modification of `s` by adding a small positive or negative `ε` to `s.conn_end` while keeping the nudged session ending within `g`.
+  - If `s` ends after `g` and starts in `g`, i.e., `s.conn_start >= g.start`: let `nudge(s, ε)` be the modification of `s` by adding a small positive or negative `ε` to `s.conn_start` while keeping the nudged session starting within `g`.
   - If `s` lies entirely within `g`, i.e., `s.conn_start >= g.start && s.conn_end <= g.end`: let `nudge(s, ε1, ε2)` be the modification of `s` by adding small positive or negative `ε1` and `ε2` to `s.conn_start` and `s.conn_end`, respectively, while keeping the nudged session within `g`.
 - Obtain a legal nudged version of each of the participating sessions and apply the `direct` estimating algorithm to them with`[g.start, g.end)` as the interval of interest, producing a pair `(max_kw, max_size)`.
 - The `min` estimates for `g`:
@@ -196,14 +197,21 @@ The `min` estimates for a narrow group `g` spanning the interval `[g.start, g.en
 The computations of the `min` and `max` estimates for `g` are straightforward:
 
 - `max` is the result of the direct estimates produced without regard for `g`'s narrow nature.
-- `min_agg_avg_kw` is the maximum of the following:
-  - Sum of `avg_kw` over all sessions that start before `g` and end in `g`.
-  - Maximum of `avg_kw` over all sessions that start and end in `g`.
-  - Sum of `avg_kw` over all sessions that start in `g` and end after `g`.
-- `min_size` is the maximum of the following:
-  - Count of sessions that start before `g` and end in `g`.
-  - `1` if there are sessions that start and end in `g`, `0` otherwise.
-  - Count of sessions that start in `g` and end after `g`.
+- `min` computation:
+  - Let `ba_sessions` be the set of sessions that start before and end after `g`.
+  - Let `bi_sessions` be the set of sessions that start before and end in `g`.
+  - Let `ia_sessions` be the set of sessions that start in and end after `g`.
+  - Let `ii_sessions` be the set of sessions that start and end in `g`.
+  - Let the sum of `avg_kw` of and size of each of these sets be named by prepending the set name to `_avg_kw` and `size`, respectively.
+
+- `min_agg_avg_kw` is ``ba_sessions_avg_kw` plus the maximum of the following:
+  - `bi_sessions_avg_kw`.
+  - `ia_sessions_avg_kw`.
+  - maximum `avg_kw` over `ii_sessions`.
+- `min_size` is `ba_sessions_size` plus the maximum of the following:
+  - `bi_sessions_size`
+  - `ia_sessions_size`
+  - `1` if `ii_sessions` is non-empty, `0` otherwise.
 
 ### Other
 
