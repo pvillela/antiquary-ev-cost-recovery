@@ -1,5 +1,5 @@
 use jiff::{Timestamp, Zoned, tz::TimeZone};
-use std::{cell::RefCell, fmt, rc::Rc, time::Duration};
+use std::{cell::RefCell, fmt, rc::Rc, sync::LazyLock, time::Duration};
 
 /// Time zone the session report's timestamps are stated in. See README.md, "Time zone".
 pub const TIME_ZONE_NAME: &str = "America/Toronto";
@@ -21,16 +21,30 @@ pub const TIME_ZONE_NAME: &str = "America/Toronto";
 ///   rather than a genuine overlap.
 ///
 /// See README.md, "Session boundaries".
-pub const SESSION_BOUNDARY_RESOLUTION: Duration = Duration::from_secs(60);
+///
+/// Must divide 15 minutes without leaving a remainder to support a sane time grid within
+/// an interval of interest.
+pub static SESSION_BOUNDARY_RESOLUTION: LazyLock<Duration> =
+    LazyLock::new(|| SESSION_REPORTING_RESOLUTION.max(TIME_ERROR_MARGIN));
+
+/// Resolution the session report states session boundaries at: `Conn_DateTime_Start` and
+/// `Conn_DateTime_End` are truncated to whole minutes. `Conn_Duration` and `Active_Charge_Time`
+/// are *not* — they carry seconds, which is what makes the DST fold inference possible.
+///
+/// Must divide 15 minutes without leaving a remainder to support a sane time grid within
+/// an interval of interest.
+pub const SESSION_REPORTING_RESOLUTION: Duration = Duration::from_secs(60);
+
+/// Margin of error in the reporting of time, including drift between Toronto Hydro and Evolute
+/// panel clocks.
+///
+/// Must divide 15 minutes without leaving a remainder to support a sane time grid within
+/// an interval of interest.
+pub const TIME_ERROR_MARGIN: Duration = Duration::from_secs(1);
 
 pub const EV_POWER_FACTOR: f64 = 0.95;
 pub const EVOLUTE_BREAKER_KW_RATING: f64 = 6.7;
 pub const EVOLUTE_BREAKER_KVA_RATING: f64 = 7.5;
-
-/// Sessions an Evolute panel can charge at once. The panel holds 20 breakers, but its PLC runs a
-/// queued time-sharing algorithm that keeps at most this many cars drawing power at any instant —
-/// so a group larger than this cannot be one panel's worth, whatever the report says.
-pub const EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS: usize = 10;
 
 pub(crate) fn time_zone() -> TimeZone {
     TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid time-zone name")
