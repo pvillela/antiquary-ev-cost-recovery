@@ -37,9 +37,9 @@ to 90.000 kVA ("Direct", breaker-spec-based).
 Session groups
 --------------
 
-|  # | From     | To       | Length | Count |     kW |
-|---:|:---------|:---------|-------:|------:|-------:|
-| 0* | 16:20:00 | 16:51:00 |  31:00 |    12 | 66.600 |
+|  # | From     | To       |   Len | Count |     kW |
+|---:|:---------|:---------|------:|------:|-------:|
+| 0* | 16:20:00 | 16:51:00 | 31:00 |    12 | 66.600 |
 
 Times are local (ET). Groups are half-open: each runs from its From up to
 but not including its To, so no instant falls in two groups and no session

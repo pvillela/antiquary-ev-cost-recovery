@@ -11,7 +11,9 @@
 //! - **No four-space indentation anywhere**, since markdown would turn it into a code block. Wrapped
 //!   list items indent by two.
 //! - **No emphasis markers.** Labels are quoted — `"Direct"`, `"Clamped"` — which reads identically
-//!   either way. An asterisk means one thing only in this document: it marks an anomalous group.
+//!   either way. Two markers are used, each meaning one thing only: an asterisk marks an anomalous
+//!   *group*, a dagger a doubtful *session*. Neither is emphasis, so neither collides with a
+//!   renderer's reading of `*`.
 //! - **Session ids live in their own section**, not in a table cell, because a markdown table row is
 //!   a single line and a group of twelve sessions cannot be wrapped inside one.
 
@@ -135,6 +137,10 @@ fn hms(ts: Timestamp) -> String {
 fn ymd_hm(ts: Timestamp) -> String {
     local(ts).strftime("%Y-%m-%d %H:%M").to_string()
 }
+
+/// Marks a session whose overlap with the interval of interest is not certain — the ones
+/// [`crate::Boundary::Narrow`] leaves out. Distinct from the asterisk, which marks a group.
+const DOUBTFUL: char = '†';
 
 /// Group number, with the anomaly marker in a slot of its own so the digits stay in a column:
 /// `0 `, `1*`, `2 ` align, whereas `0`, `1*`, `2` stagger under right alignment.
@@ -296,22 +302,26 @@ impl PowerEstimatesReport {
         // Selecting on kW serves kVA too. kVA is kW over a fixed power factor on the consumption
         // side, and a fixed per-breaker rating times the same count on the other, so both are
         // strictly increasing in whatever kW ranks on and the argmin and argmax cannot differ.
-        let low = sets
-            .iter()
-            .min_by(|a, b| {
-                a.2.consumption_based_kw
-                    .value
-                    .total_cmp(&b.2.consumption_based_kw.value)
-            })
-            .expect("`direct` is always present");
-        let high = sets
-            .iter()
-            .max_by(|a, b| {
-                a.2.breaker_specs_based_kw
-                    .value
-                    .total_cmp(&b.2.breaker_specs_based_kw.value)
-            })
-            .expect("`direct` is always present");
+        //
+        // Ties go to the earliest set, matching `max_group_by`'s rule for groups. Two sets can
+        // genuinely tie on a bound — `direct` and `direct_narrow` share a breaker-spec figure
+        // whenever the doubtful session is not in the largest group — and the reader should be
+        // pointed at the plainest of them, which is the one printed first. `Iterator::max_by`
+        // returns the *last* maximum, so it cannot be used directly here; `min_by` already returns
+        // the first minimum and needs no such care.
+        let extreme = |better: fn(f64, f64) -> bool, field: fn(&EstimateSet) -> f64| {
+            sets.iter()
+                .reduce(|best, next| {
+                    if better(field(next.2), field(best.2)) {
+                        next
+                    } else {
+                        best
+                    }
+                })
+                .expect("`direct` is always present")
+        };
+        let low = extreme(|a, b| a < b, |s| s.consumption_based_kw.value);
+        let high = extreme(|a, b| a > b, |s| s.breaker_specs_based_kw.value);
         // The gloss belongs over its table, not in a sentence that may name four sets; and with
         // only one set there is nothing to name at all.
         let name = |name: &str| {
@@ -440,26 +450,46 @@ impl PowerEstimatesReport {
             .session_groups
             .iter()
             .any(|g| !g.anomalies().is_empty());
+
+        // The narrow pair is carried only when it says something. A session is flagged only if the
+        // grouping admitted it, and an admitted session belongs to at least one group, so a dagger
+        // anywhere guarantees some row where the two counts differ — and its absence guarantees
+        // four columns that would repeat each other exactly.
+        let any_doubtful = self
+            .session_groups
+            .iter()
+            .any(|g| g.session_iter().any(|s| !s.overlap_is_certain()));
+
         let rows: Vec<Vec<String>> = self
             .session_groups
             .iter()
             .enumerate()
             .map(|(i, g)| {
-                vec![
+                let mut row = vec![
                     group_number(i, !g.anomalies().is_empty(), any_flagged),
                     hms(g.start()),
                     hms(g.end()),
                     mmss(g.duration()),
                     g.size().to_string(),
                     format!("{:.3}", g.agg_avg_power()),
-                ]
+                ];
+                if any_doubtful {
+                    row.push(g.size_in(View::DIRECT_NARROW).to_string());
+                    row.push(format!("{:.3}", g.agg_avg_power_in(View::DIRECT_NARROW)));
+                }
+                row
             })
             .collect();
-        out.push(table(
-            &["#", "From", "To", "Length", "Count", "kW"],
-            &rows,
-            &[Right, Left, Left, Right, Right, Right],
-        ));
+
+        let mut headers = vec!["#", "From", "To", "Len", "Count", "kW"];
+        let mut align = vec![Right, Left, Left, Right, Right, Right];
+        if any_doubtful {
+            headers[4] = "Direct Count";
+            headers[5] = "Direct kW";
+            headers.extend(["Narrow Count", "Narrow kW"]);
+            align.extend([Right, Right]);
+        }
+        out.push(table(&headers, &rows, &align));
         out.push(String::new());
         // Deliberately not "the lengths sum to the interval": groups tile only the part of it that
         // has a session in it, so they sum to the interval exactly just when some session spans
@@ -469,6 +499,16 @@ impl PowerEstimatesReport {
              including its To, so no instant falls in two groups and no session is counted twice.",
             "",
         ));
+
+        if any_doubtful {
+            out.push(String::new());
+            out.push(wrap(
+                "\"Direct\" counts every member, \"Narrow\" only those whose overlap with the \
+                 interval is certain; the two differ exactly where a member is daggered under \
+                 Group membership.",
+                "",
+            ));
+        }
 
         if any_flagged {
             out.push(String::new());
@@ -490,10 +530,38 @@ impl PowerEstimatesReport {
         out.push(h2("Group membership"));
         out.push(String::new());
         for (i, g) in self.session_groups.iter().enumerate() {
-            let ids: Vec<String> = g.session_iter().map(|s| s.id.clone()).collect();
+            let ids: Vec<String> = g
+                .session_iter()
+                .map(|s| {
+                    if s.overlap_is_certain() {
+                        s.id.clone()
+                    } else {
+                        format!("{}{DOUBTFUL}", s.id)
+                    }
+                })
+                .collect();
             // Wrapped rather than put in a table cell: a markdown row is one line, so a group of
             // twelve sessions could not be broken across lines inside one.
             out.push(wrap(&format!("- Group {i} - {}", ids.join(", ")), "  "));
+        }
+
+        // Without this the boundary axis is invisible per group: the estimates would show a
+        // "Narrow" set and nothing here would say which member accounts for the difference.
+        if self
+            .session_groups
+            .iter()
+            .any(|g| g.session_iter().any(|s| !s.overlap_is_certain()))
+        {
+            out.push(String::new());
+            out.push(wrap(
+                &format!(
+                    "{DOUBTFUL} marks a session whose overlap with the interval is not certain, \
+                     its reported times leaving it undecidable. Such a session is counted in the \
+                     main estimates and left out of the \"Narrow\" ones; the reason is under \
+                     Anomalies."
+                ),
+                "",
+            ));
         }
         out.push(String::new());
         out.push(String::new());
@@ -937,10 +1005,13 @@ mod test {
             md.contains("| Breaker-spec-based | 33.500 | 37.500 |     5 |"),
             "{md}"
         );
+        // No session's overlap is in doubt here, so the narrow pair is withheld and the columns
+        // stay at their unqualified names.
         assert!(
-            md.contains("| 5 | 16:34:00 | 16:35:00 |   1:00 |     5 | 31.400 |"),
+            md.contains("| 5 | 16:34:00 | 16:35:00 |  1:00 |     5 | 31.400 |"),
             "{md}"
         );
+        assert!(!md.contains("Narrow Count"), "{md}");
         assert!(md.contains("- Group 5 - A, C, D, E, F"), "{md}");
 
         std::fs::remove_dir_all(&dir).ok();

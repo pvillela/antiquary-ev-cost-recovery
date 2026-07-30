@@ -300,17 +300,12 @@ impl SessionGroup {
     /// The members `boundary` counts.
     ///
     /// [`Boundary::Narrow`] drops those flagged [`AnomalyKind::IntersectsBoundaryMarginOnly`],
-    /// which may not have overlapped the interval of interest at all. Tested with `contains`
-    /// rather than by counting, because [`groups_for_interval`] appends the flag afresh on every
-    /// call and a caller that grouped the same sessions twice would carry it twice.
+    /// which may not have overlapped the interval of interest at all. The predicate lives on
+    /// [`Session::overlap_is_certain`], so the report can mark the same sessions it excludes here.
     fn members(&self, boundary: Boundary) -> impl Iterator<Item = &RSession> {
         self.sessions.iter().filter(move |s| match boundary {
             Boundary::Wide => true,
-            Boundary::Narrow => !s
-                .as_ref()
-                .borrow()
-                .anomalies
-                .contains(&AnomalyKind::IntersectsBoundaryMarginOnly),
+            Boundary::Narrow => s.as_ref().borrow().overlap_is_certain(),
         })
     }
 

@@ -254,6 +254,22 @@ impl Session {
         start < interval.1 && end > interval.0
     }
 
+    /// Whether this session's overlap with the interval of interest was established, rather than
+    /// merely possible.
+    ///
+    /// The predicate [`crate::Boundary::Narrow`] filters on, and the one the report's dagger marks
+    /// the negation of. Tested with `contains` rather than by counting, because
+    /// [`crate::groups_for_interval`] appends the flag afresh on every call and a caller that
+    /// grouped the same sessions twice would carry it twice.
+    ///
+    /// Meaningful only after grouping: the flag depends on which interval was chosen, so before
+    /// then every session trivially answers `true`.
+    pub fn overlap_is_certain(&self) -> bool {
+        !self
+            .anomalies
+            .contains(&AnomalyKind::IntersectsBoundaryMarginOnly)
+    }
+
     /// Reported connection start in local time (ET).
     pub fn conn_start_local(&self) -> Zoned {
         Zoned::new(self.conn_start, time_zone())
