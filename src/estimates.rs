@@ -1,8 +1,9 @@
 use crate::{
-    Anomaly, EV_POWER_FACTOR, EVOLUTE_BREAKER_KVA_RATING, EVOLUTE_BREAKER_KW_RATING, RSession,
-    Session, SessionGroup, SessionReport, View, groups_for_interval, session_list,
+    Anomaly, CLOCK_SKEW_MARGIN, EV_POWER_FACTOR, EVOLUTE_BREAKER_KVA_RATING,
+    EVOLUTE_BREAKER_KW_RATING, RSession, Session, SessionGroup, SessionReport, View,
+    groups_for_interval, session_list,
 };
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use std::{
     cell::RefCell,
     cmp::Ordering,
@@ -77,6 +78,113 @@ pub struct PowerEstimates {
     pub min_overlap: Option<EstimateSet>,
 }
 
+impl PowerEstimates {
+    /// The set to read as this window's *minimum*: `min_overlap` where it was given, `nominal`
+    /// otherwise — which is exactly what its absence means, the two readings having come out equal.
+    ///
+    /// Lets a comparison between two windows put like against like without a case analysis at every
+    /// call site.
+    pub fn min_reading(&self) -> &EstimateSet {
+        self.min_overlap.as_ref().unwrap_or(&self.nominal)
+    }
+}
+
+/// The three windows the estimates cover: the interval of interest, and a *skew margin* interval
+/// immediately before and after it.
+///
+/// The margins answer for the two clocks nothing reconciles. If the meter's clock leads or lags
+/// Evolute's by `δ`, the interval really at issue is `I` shifted by `δ`; every such window lies
+/// inside these three taken together, and the peak over a union is the highest of the peaks over its
+/// parts. See README.md, "Clock skew and drift".
+#[derive(Debug, Clone, Copy)]
+pub struct WindowSpans {
+    pub left_margin: (Timestamp, Timestamp),
+    pub interest: (Timestamp, Timestamp),
+    pub right_margin: (Timestamp, Timestamp),
+}
+
+impl WindowSpans {
+    pub fn around(interest: (Timestamp, Timestamp)) -> Self {
+        // Signed, because the timestamp arithmetic is; `CLOCK_SKEW_MARGIN` is a whole number of
+        // seconds by construction, being a multiple of `SESSION_BOUNDARY_RESOLUTION`.
+        let m = SignedDuration::from_secs(CLOCK_SKEW_MARGIN.as_secs() as i64);
+        // Saturating rather than checked: at the ends of representable time a margin is clipped to
+        // an empty window rather than taking the whole report down. The `Err` arm cannot arise —
+        // jiff returns one only for a `Span` carrying units above hours, which needs a reference
+        // date to interpret; a `SignedDuration` never does.
+        let shift = |ts: Timestamp, d: SignedDuration| {
+            ts.saturating_add(d)
+                .expect("a fixed duration needs no reference date")
+        };
+        Self {
+            left_margin: (shift(interest.0, -m), interest.0),
+            interest,
+            right_margin: (interest.1, shift(interest.1, m)),
+        }
+    }
+
+    /// The whole span the estimates reach over, margins included.
+    pub fn full(&self) -> (Timestamp, Timestamp) {
+        (self.left_margin.0, self.right_margin.1)
+    }
+}
+
+/// Which of the [`WindowSpans`] something falls in. More than one at a time, for anything longer
+/// than a margin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Windows {
+    pub left_margin: bool,
+    pub interest: bool,
+    pub right_margin: bool,
+}
+
+impl Windows {
+    pub fn of_session(session: &Session, spans: &WindowSpans) -> Self {
+        Self {
+            left_margin: session.intersects(spans.left_margin),
+            interest: session.intersects(spans.interest),
+            right_margin: session.intersects(spans.right_margin),
+        }
+    }
+
+    pub fn any(self) -> bool {
+        self.left_margin || self.interest || self.right_margin
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarginSide {
+    Left,
+    Right,
+}
+
+/// A skew margin interval that earned a place in the report, with its own estimates and its own
+/// tiling.
+///
+/// Only margins that could raise the estimate are kept — see [`raises_estimate`] — so `estimates` is
+/// not optional here: a margin no session reached has nothing to exceed anything with, and never
+/// gets this far.
+///
+/// The tiling is the margin's own, and so are the `session_group_idx` values in its estimates. A
+/// group number means "group *n* of this window", as it always has.
+pub struct SkewMargin {
+    pub side: MarginSide,
+    pub interval: (Timestamp, Timestamp),
+    pub estimates: PowerEstimates,
+    pub session_groups: Vec<Rc<SessionGroup>>,
+}
+
+/// An anomaly, with the windows the session carrying it reaches.
+///
+/// The window is reported because the anomalies now span more than one: a figure drawn from a skew
+/// margin can rest on a session that never touches the interval of interest, and a reader has to be
+/// able to tell which is which.
+#[derive(Debug)]
+pub struct WindowedAnomaly {
+    pub anomaly: Anomaly,
+    pub windows: Windows,
+}
+
 pub struct PowerEstimatesReport {
     /// Workbook the sessions were read from. Held so the report is self-describing: it can be
     /// stored or rendered later without a caller having to remember what produced it.
@@ -87,14 +195,21 @@ pub struct PowerEstimatesReport {
     pub interval: (Timestamp, Timestamp),
     pub estimates: Option<PowerEstimates>,
     pub session_groups: Vec<Rc<SessionGroup>>,
-    /// Every anomaly carried by every session that took part in this interval's groups. Sessions
-    /// elsewhere in the workbook are not reported: they say nothing about this estimate. Without
-    /// this the caller has a number and no way to judge it — a spike's substituted average power,
-    /// for one, is invisible in the total it feeds.
+    /// The skew margins that could raise the estimate, in time order. Empty in the ordinary case,
+    /// where neither margin beats the interval of interest on any figure.
+    ///
+    /// Margins that could not are dropped here rather than hidden by the renderer, so there is one
+    /// place that decides what the report covers.
+    pub skew_margins: Vec<SkewMargin>,
+    /// Every anomaly carried by every session that took part in any of the [`WindowSpans`], each
+    /// marked with the windows its session reaches. Sessions elsewhere in the workbook are not
+    /// reported: they say nothing about this estimate. Without this the caller has a number and no
+    /// way to judge it — a spike's substituted average power, for one, is invisible in the total it
+    /// feeds.
     ///
     /// Sessions excluded outright are *not* here; they are in
     /// [`PowerEstimatesReport::excluded_sessions`], which is reported in full and separately.
-    pub session_anomalies: Vec<Anomaly>,
+    pub session_anomalies: Vec<WindowedAnomaly>,
     /// Every session excluded from the estimates for
     /// [`crate::AnomalyKind::InconsistentDuration`] — the whole workbook's worth, not only those
     /// near this interval.
@@ -140,18 +255,67 @@ pub fn max_power_estimates_for_interval(
         .chain(spikes)
         .map(|s| Rc::new(RefCell::new(s)))
         .collect();
+    let spans = WindowSpans::around(interval);
     let groups = groups_for_interval(interval, &rsessions);
-    let session_anomalies = collect_session_anomalies(interval, &rsessions);
+    let session_anomalies = collect_session_anomalies(&spans, &rsessions);
 
     let estimates = estimates_for_groups(&groups);
+    // Each margin goes through the same path as the interval of interest, deliberately. At the
+    // current `CLOCK_SKEW_MARGIN` a margin spans one grid cell and so holds exactly one group,
+    // which invites a shortcut; taking it would make raising `CLOCK_SKEW_BOUND` past
+    // `SESSION_BOUNDARY_RESOLUTION` a code change rather than a change to one constant.
+    let skew_margins = [
+        (MarginSide::Left, spans.left_margin),
+        (MarginSide::Right, spans.right_margin),
+    ]
+    .into_iter()
+    .filter_map(|(side, margin_interval)| {
+        let session_groups = groups_for_interval(margin_interval, &rsessions);
+        let margin = estimates_for_groups(&session_groups)?;
+        raises_estimate(&margin, estimates.as_ref()).then_some(SkewMargin {
+            side,
+            interval: margin_interval,
+            estimates: margin,
+            session_groups,
+        })
+    })
+    .collect();
+
     Ok(PowerEstimatesReport {
         source: path.to_path_buf(),
         interval,
         estimates,
         session_groups: groups,
+        skew_margins,
         session_anomalies,
         excluded_sessions: excluded,
     })
+}
+
+/// Whether a skew margin could raise the estimate, and so earns a place in the report.
+///
+/// True when any of the margin's four figures, in either reading, exceeds the corresponding figure
+/// for the interval of interest in that same reading. Readings are compared like with like: a
+/// margin's `nominal` against `I`'s `nominal`, its minimum against `I`'s minimum.
+///
+/// The minimum clause is not redundant. `I`'s own `nominal` can be inflated by a dubious group while
+/// its minimum sits well below a margin's, and that margin is worth seeing — it raises the floor of
+/// the bracket even though it does not touch the ceiling.
+///
+/// A margin is compared against nothing when no session reached `I` at all, and any margin that
+/// reached a session then qualifies: it is the only thing the report has to say.
+fn raises_estimate(margin: &PowerEstimates, interest: Option<&PowerEstimates>) -> bool {
+    let Some(interest) = interest else {
+        return true;
+    };
+    let beats = |margin: &EstimateSet, interest: &EstimateSet| {
+        margin
+            .values()
+            .into_iter()
+            .zip(interest.values())
+            .any(|(m, i)| m > i)
+    };
+    beats(&margin.nominal, &interest.nominal) || beats(margin.min_reading(), interest.min_reading())
 }
 
 /// Assembles the estimates for an already-computed tiling, or `None` when no session reached the
@@ -172,41 +336,48 @@ pub(crate) fn estimates_for_groups(groups: &[Rc<SessionGroup>]) -> Option<PowerE
     })
 }
 
-/// Every anomaly on every session that touches `interval`, in report-row order.
+/// Every anomaly on every session that touches any of `spans`, in report-row order, each marked
+/// with the windows its session reaches.
 ///
-/// Restricted to sessions intersecting the interval, because the workbook covers a whole billing
-/// period while a report covers one window in it: a spike three weeks away says nothing about this
-/// estimate and would only bury the findings that do. That restriction is safe here and not for
-/// [`PowerEstimatesReport::excluded_sessions`], because these sessions' timestamps are the ones the
-/// grouping already trusted.
+/// Restricted to sessions intersecting those windows, because the workbook covers a whole billing
+/// period while a report covers a little over one interval of it: a spike three weeks away says
+/// nothing about this estimate and would only bury the findings that do. The radius is the whole
+/// span rather than the interval of interest alone, because a figure drawn from a skew margin can
+/// rest on a session that never touches `I`, and a reported figure whose anomalies go unmentioned is
+/// the situation this list exists to prevent.
+///
+/// That restriction is safe here and not for [`PowerEstimatesReport::excluded_sessions`], because
+/// these sessions' timestamps are the ones the grouping already trusted.
 ///
 /// Deliberately blind to [`crate::AnomalyKind`]: it matches on nothing, so a kind added later
 /// surfaces here without anyone having to remember to wire it up.
-fn collect_session_anomalies(
-    interval: (Timestamp, Timestamp),
-    rsessions: &[RSession],
-) -> Vec<Anomaly> {
-    let mut anomalies: Vec<Anomaly> = rsessions
+fn collect_session_anomalies(spans: &WindowSpans, rsessions: &[RSession]) -> Vec<WindowedAnomaly> {
+    let mut anomalies: Vec<WindowedAnomaly> = rsessions
         .iter()
         .flat_map(|rs| {
             let s = rs.as_ref().borrow();
-            if !s.intersects(interval) {
+            let windows = Windows::of_session(&s, spans);
+            if !windows.any() {
                 return Vec::new();
             }
             s.anomalies
                 .iter()
-                .map(|kind| Anomaly {
-                    row: s.row,
-                    session_id: s.id.clone(),
-                    kind: *kind,
+                .map(|kind| WindowedAnomaly {
+                    anomaly: Anomaly {
+                        row: s.row,
+                        session_id: s.id.clone(),
+                        kind: *kind,
+                    },
+                    windows,
                 })
                 .collect::<Vec<_>>()
         })
         .collect();
     anomalies.sort_by(|a, b| {
-        a.row
-            .cmp(&b.row)
-            .then_with(|| a.session_id.cmp(&b.session_id))
+        a.anomaly
+            .row
+            .cmp(&b.anomaly.row)
+            .then_with(|| a.anomaly.session_id.cmp(&b.anomaly.session_id))
     });
     anomalies
 }

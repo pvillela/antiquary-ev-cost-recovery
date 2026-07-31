@@ -16,9 +16,12 @@
 //! - **Session ids live in their own section**, not in a table cell, because a markdown table row is
 //!   a single line and a group of twelve sessions cannot be wrapped inside one.
 
-use crate::{AnomalyKind, EstimateSet, PowerEstimatesReport, View, time_zone};
+use crate::{
+    AnomalyKind, EstimateSet, MarginSide, PowerEstimates, PowerEstimatesReport, SessionGroup, View,
+    WindowSpans, Windows, time_zone,
+};
 use jiff::{Timestamp, Zoned};
-use std::{fmt, time::Duration};
+use std::{fmt, rc::Rc, time::Duration};
 
 /// Width the prose is wrapped to. Comfortably inside 80 columns, leaving room for a quoting prefix
 /// in an email reply.
@@ -187,10 +190,20 @@ impl PowerEstimatesReport {
                 .unwrap_or_else(|| self.source.to_string_lossy().into_owned())
         ));
         push(format!("Interval   {}", interval_line(self.interval)));
+        // Only when a margin made it into the report. Otherwise the span covered and the interval
+        // estimated are the same thing as far as any figure below is concerned, and naming both
+        // would invite a reader to look for a difference that is not there.
+        if !self.skew_margins.is_empty() {
+            push(format!(
+                "Covered    {}",
+                interval_line(WindowSpans::around(self.interval).full())
+            ));
+        }
         push(String::new());
         push(String::new());
 
         self.push_estimates(&mut out);
+        self.push_skew_margins(&mut out);
         self.push_excluded(&mut out);
         self.push_groups(&mut out);
         self.push_membership(&mut out);
@@ -216,83 +229,7 @@ impl PowerEstimatesReport {
             return;
         };
 
-        // The name is quoted and the gloss is not, per the module docs: a label has to read as a
-        // label in plain text, and quotation marks are the only device available.
-        let mut sets: Vec<(&str, &str, &EstimateSet)> = vec![(
-            "Nominal",
-            "every group's membership taken at face value",
-            &estimates.nominal,
-        )];
-        if let Some(set) = &estimates.min_overlap {
-            sets.push((
-                "Minimum overlap",
-                "assuming the sessions in each dubious group overlapped as little as \
-                 their reported times allow",
-                set,
-            ));
-        }
-
-        if sets.len() > 1 {
-            out.push(wrap(
-                "More than one reading of the data is defensible here, because some group holds \
-                 two sessions that need not have overlapped each other - one is reported as \
-                 ending in the same minute the other is reported as starting, and the report \
-                 states those times only to the minute. Both readings are given below. The first \
-                 counts every session and assumes nothing, so it is the one to quote if only one \
-                 figure is wanted.",
-                "",
-            ));
-            out.push(String::new());
-        }
-
-        for (name, gloss, set) in &sets {
-            if sets.len() > 1 {
-                out.push(wrap(&format!("\"{name}\" - {gloss}:"), "  "));
-                out.push(String::new());
-            }
-            out.push(table(
-                &ESTIMATE_HEADERS,
-                &estimate_rows(set),
-                &ESTIMATE_ALIGN,
-            ));
-            out.push(String::new());
-        }
-
-        // `min_overlap <= nominal` on all four figures, unconditionally — see `PowerEstimates` —
-        // so the bracket needs no search: its floor is the consumption figure of the last set
-        // printed and its ceiling the breaker-spec figure of the first. With one set present both
-        // come from it, and the sentence reads the same.
-        //
-        // Selecting on kW serves kVA too. kVA is kW over a fixed power factor on the consumption
-        // side, and a fixed per-breaker rating times the same count on the other, so both are
-        // strictly increasing in whatever kW ranks on and the two ends cannot differ.
-        let low = sets.last().expect("`nominal` is always present");
-        let high = sets.first().expect("`nominal` is always present");
-        // The gloss belongs over its table, not in a sentence naming both sets; and with only one
-        // set there is nothing to name at all.
-        let name = |name: &str| {
-            if sets.len() > 1 {
-                format!("\"{name}\", ")
-            } else {
-                String::new()
-            }
-        };
-        out.push(wrap(
-            &format!(
-                "The likely kW values are in the range from {:.3} kW ({}consumption-based) to \
-                 {:.3} kW ({}breaker-spec-based). The likely kVA values are in the range from \
-                 {:.3} kVA ({}consumption-based) to {:.3} kVA ({}breaker-spec-based).",
-                low.2.consumption_based_kw.value,
-                name(low.0),
-                high.2.breaker_specs_based_kw.value,
-                name(high.0),
-                low.2.consumption_based_kva.value,
-                name(low.0),
-                high.2.breaker_specs_based_kva.value,
-                name(high.0),
-            ),
-            "",
-        ));
+        push_estimate_sets(estimates, out);
 
         if !self.excluded_sessions.is_empty() {
             out.push(String::new());
@@ -316,16 +253,61 @@ impl PowerEstimatesReport {
         out.push(String::new());
     }
 
-    /// Every session excluded from the estimates, whether or not it appears to touch the interval.
+    /// The skew margins that could raise the estimate, each with its own estimates and its own
+    /// tiling.
     ///
-    /// Listed in full rather than filtered to the interval, because the filter would be applied to
-    /// exactly the timestamps that are in doubt. A session whose fields contradict each other may
-    /// belong in this window and still test as falling outside it, so "In window" is reported as
-    /// what it is — a reading of the same unreliable times — and no row is dropped on its say-so.
+    /// Absent from most reports, and silent about why the margins exist at all beyond the one
+    /// sentence below: the treatment is one-sided by design — a margin that would *lower* the
+    /// figures changes nothing worth printing — and the reasoning for that belongs in README.md,
+    /// "Clock skew and drift", not in every report.
+    fn push_skew_margins(&self, out: &mut Vec<String>) {
+        if self.skew_margins.is_empty() {
+            return;
+        }
+        out.push(h2("Skew margins"));
+        out.push(String::new());
+        out.push(wrap(
+            "The interval of interest comes from Toronto Hydro's metering data and the session \
+             times from Evolute, and nothing reconciles the two clocks. The windows just before \
+             and just after the interval are therefore estimated too, and one of them is shown \
+             below because its figures come out higher than the interval's own. Read it as what \
+             the EV load could have been had the two clocks disagreed - not as a second estimate \
+             of the metered window.",
+            "",
+        ));
+        out.push(String::new());
+
+        for margin in &self.skew_margins {
+            let side = match margin.side {
+                MarginSide::Left => "Before",
+                MarginSide::Right => "After",
+            };
+            out.push(wrap(
+                &format!("\"{side}\" - {}:", interval_line(margin.interval)),
+                "  ",
+            ));
+            out.push(String::new());
+            push_estimate_sets(&margin.estimates, out);
+            out.push(String::new());
+            push_group_table(&margin.session_groups, out);
+            out.push(String::new());
+            push_membership_list(&margin.session_groups, out);
+            out.push(String::new());
+        }
+        out.push(String::new());
+    }
+
+    /// Every session excluded from the estimates, whether or not it appears to touch any window.
+    ///
+    /// Listed in full rather than filtered, because the filter would be applied to exactly the
+    /// timestamps that are in doubt. A session whose fields contradict each other may belong in one
+    /// of these windows and still test as falling outside them all, so "Window" is reported as what
+    /// it is — a reading of the same unreliable times — and no row is dropped on its say-so.
     fn push_excluded(&self, out: &mut Vec<String>) {
         if self.excluded_sessions.is_empty() {
             return;
         }
+        let spans = WindowSpans::around(self.interval);
         out.push(h2("Excluded sessions"));
         out.push(String::new());
 
@@ -338,12 +320,7 @@ impl PowerEstimatesReport {
                     s.id.clone(),
                     ymd_hm(s.conn_start),
                     ymd_hm(s.adj_conn_end),
-                    if s.intersects(self.interval) {
-                        "yes"
-                    } else {
-                        "no"
-                    }
-                    .to_owned(),
+                    windows_label(Windows::of_session(s, &spans)),
                     s.anomalies
                         .iter()
                         .map(|k| k.as_str())
@@ -360,10 +337,11 @@ impl PowerEstimatesReport {
         out.push(String::new());
         out.push(wrap(
             "These sessions take no part in any estimate. Times are local (ET), and the list \
-             covers the whole workbook rather than the interval of interest. \"Window\" is whether \
-             the session appears to fall in that interval - appears only, because a record whose \
-             own fields contradict each other cannot be trusted to say which window it belongs \
-             in. It reads the same doubtful times, so no row was dropped on its say-so.",
+             covers the whole workbook rather than the windows estimated. \"Window\" is which of \
+             those the session appears to fall in - the interval of interest, the skew margin \
+             before it, the one after it, or none - appears only, because a record whose own \
+             fields contradict each other cannot be trusted to say which window it belongs in. It \
+             reads the same doubtful times, so no row was dropped on its say-so.",
             "",
         ));
         out.push(String::new());
@@ -380,7 +358,183 @@ impl PowerEstimatesReport {
         out.push(String::new());
         out.push(String::new());
     }
+}
 
+/// One window's estimate sets, with the bracket sentence that reads them.
+///
+/// Shared by the interval of interest and by each skew margin, so the two are rendered by one piece
+/// of code and cannot drift apart. Every figure in a set comes from a group in that one window.
+fn push_estimate_sets(estimates: &PowerEstimates, out: &mut Vec<String>) {
+    // The name is quoted and the gloss is not, per the module docs: a label has to read as a
+    // label in plain text, and quotation marks are the only device available.
+    let mut sets: Vec<(&str, &str, &EstimateSet)> = vec![(
+        "Nominal",
+        "every group's membership taken at face value",
+        &estimates.nominal,
+    )];
+    if let Some(set) = &estimates.min_overlap {
+        sets.push((
+            "Minimum overlap",
+            "assuming the sessions in each dubious group overlapped as little as \
+                 their reported times allow",
+            set,
+        ));
+    }
+
+    if sets.len() > 1 {
+        out.push(wrap(
+            "More than one reading of the data is defensible here, because some group holds \
+                 two sessions that need not have overlapped each other - one is reported as \
+                 ending in the same minute the other is reported as starting, and the report \
+                 states those times only to the minute. Both readings are given below. The first \
+                 counts every session and assumes nothing, so it is the one to quote if only one \
+                 figure is wanted.",
+            "",
+        ));
+        out.push(String::new());
+    }
+
+    for (name, gloss, set) in &sets {
+        if sets.len() > 1 {
+            out.push(wrap(&format!("\"{name}\" - {gloss}:"), "  "));
+            out.push(String::new());
+        }
+        out.push(table(
+            &ESTIMATE_HEADERS,
+            &estimate_rows(set),
+            &ESTIMATE_ALIGN,
+        ));
+        out.push(String::new());
+    }
+
+    // `min_overlap <= nominal` on all four figures, unconditionally — see `PowerEstimates` —
+    // so the bracket needs no search: its floor is the consumption figure of the last set
+    // printed and its ceiling the breaker-spec figure of the first. With one set present both
+    // come from it, and the sentence reads the same.
+    //
+    // Selecting on kW serves kVA too. kVA is kW over a fixed power factor on the consumption
+    // side, and a fixed per-breaker rating times the same count on the other, so both are
+    // strictly increasing in whatever kW ranks on and the two ends cannot differ.
+    let low = sets.last().expect("`nominal` is always present");
+    let high = sets.first().expect("`nominal` is always present");
+    // The gloss belongs over its table, not in a sentence naming both sets; and with only one
+    // set there is nothing to name at all.
+    let name = |name: &str| {
+        if sets.len() > 1 {
+            format!("\"{name}\", ")
+        } else {
+            String::new()
+        }
+    };
+    out.push(wrap(
+        &format!(
+            "The likely kW values are in the range from {:.3} kW ({}consumption-based) to \
+                 {:.3} kW ({}breaker-spec-based). The likely kVA values are in the range from \
+                 {:.3} kVA ({}consumption-based) to {:.3} kVA ({}breaker-spec-based).",
+            low.2.consumption_based_kw.value,
+            name(low.0),
+            high.2.breaker_specs_based_kw.value,
+            name(high.0),
+            low.2.consumption_based_kva.value,
+            name(low.0),
+            high.2.breaker_specs_based_kva.value,
+            name(high.0),
+        ),
+        "",
+    ));
+}
+
+/// One window's tiling, with the notes that read it.
+///
+/// Shared by the interval of interest and by each skew margin. Group numbers are positions within
+/// the tiling passed in, which is what a figure's group number refers to in the same window's
+/// estimates.
+fn push_group_table(groups: &[Rc<SessionGroup>], out: &mut Vec<String>) {
+    // One predicate for both the marker and the extra columns: a dubious group is exactly one
+    // whose two readings differ, so a marked row is a row where the columns say something and
+    // an unmarked table is one where they would repeat each other exactly.
+    let any_dubious = groups.iter().any(|g| g.is_dubious());
+
+    let rows: Vec<Vec<String>> = groups
+        .iter()
+        .enumerate()
+        .map(|(i, g)| {
+            let mut row = vec![
+                group_number(i, g.is_dubious(), any_dubious),
+                hms(g.start()),
+                hms(g.end()),
+                mmss(g.duration()),
+                g.size().to_string(),
+                format!("{:.3}", g.agg_avg_power()),
+            ];
+            if any_dubious {
+                row.push(g.size_in(View::MinOverlap).to_string());
+                row.push(format!("{:.3}", g.agg_avg_power_in(View::MinOverlap)));
+            }
+            row
+        })
+        .collect();
+
+    let mut headers = vec!["#", "From", "To", "Len", "Count", "kW"];
+    let mut align = vec![Right, Left, Left, Right, Right, Right];
+    if any_dubious {
+        headers.extend(["Min Count", "Min kW"]);
+        align.extend([Right, Right]);
+    }
+    out.push(table(&headers, &rows, &align));
+    out.push(String::new());
+    // Deliberately not "the lengths sum to the interval": groups tile only the part of it that
+    // has a session in it, so they sum to the interval exactly just when some session spans
+    // the whole window. What always holds is that they neither overlap nor double-count.
+    out.push(wrap(
+        "Times are local (ET). Groups are half-open: each runs from its From up to but not \
+         including its To, so no instant falls in two groups and no session is counted twice.",
+        "",
+    ));
+
+    if any_dubious {
+        out.push(String::new());
+        out.push(wrap(
+            "An asterisk marks a dubious group: one holding two sessions that need not have \
+             overlapped each other, because one is reported as ending in the same minute the \
+             other is reported as starting. \"Count\" and \"kW\" take its membership at face \
+             value; \"Min Count\" and \"Min kW\" assume as little overlap as the reported \
+             times allow. They differ on exactly the marked rows.",
+            "",
+        ));
+    }
+}
+
+/// Which sessions are in which group of one window's tiling.
+fn push_membership_list(groups: &[Rc<SessionGroup>], out: &mut Vec<String>) {
+    for (i, g) in groups.iter().enumerate() {
+        let ids: Vec<String> = g.session_iter().map(|s| s.id.clone()).collect();
+        // Wrapped rather than put in a table cell: a markdown row is one line, so a group of
+        // twelve sessions could not be broken across lines inside one.
+        out.push(wrap(&format!("- Group {i} - {}", ids.join(", ")), "  "));
+    }
+}
+
+/// The windows a session appears to reach, as a report cell.
+fn windows_label(w: Windows) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if w.left_margin {
+        parts.push("before");
+    }
+    if w.interest {
+        parts.push("interval");
+    }
+    if w.right_margin {
+        parts.push("after");
+    }
+    if parts.is_empty() {
+        "none".to_owned()
+    } else {
+        parts.join(", ")
+    }
+}
+
+impl PowerEstimatesReport {
     fn push_groups(&self, out: &mut Vec<String>) {
         out.push(h2("Session groups"));
         out.push(String::new());
@@ -392,60 +546,7 @@ impl PowerEstimatesReport {
             return;
         }
 
-        // One predicate for both the marker and the extra columns: a dubious group is exactly one
-        // whose two readings differ, so a marked row is a row where the columns say something and
-        // an unmarked table is one where they would repeat each other exactly.
-        let any_dubious = self.session_groups.iter().any(|g| g.is_dubious());
-
-        let rows: Vec<Vec<String>> = self
-            .session_groups
-            .iter()
-            .enumerate()
-            .map(|(i, g)| {
-                let mut row = vec![
-                    group_number(i, g.is_dubious(), any_dubious),
-                    hms(g.start()),
-                    hms(g.end()),
-                    mmss(g.duration()),
-                    g.size().to_string(),
-                    format!("{:.3}", g.agg_avg_power()),
-                ];
-                if any_dubious {
-                    row.push(g.size_in(View::MinOverlap).to_string());
-                    row.push(format!("{:.3}", g.agg_avg_power_in(View::MinOverlap)));
-                }
-                row
-            })
-            .collect();
-
-        let mut headers = vec!["#", "From", "To", "Len", "Count", "kW"];
-        let mut align = vec![Right, Left, Left, Right, Right, Right];
-        if any_dubious {
-            headers.extend(["Min Count", "Min kW"]);
-            align.extend([Right, Right]);
-        }
-        out.push(table(&headers, &rows, &align));
-        out.push(String::new());
-        // Deliberately not "the lengths sum to the interval": groups tile only the part of it that
-        // has a session in it, so they sum to the interval exactly just when some session spans
-        // the whole window. What always holds is that they neither overlap nor double-count.
-        out.push(wrap(
-            "Times are local (ET). Groups are half-open: each runs from its From up to but not \
-             including its To, so no instant falls in two groups and no session is counted twice.",
-            "",
-        ));
-
-        if any_dubious {
-            out.push(String::new());
-            out.push(wrap(
-                "An asterisk marks a dubious group: one holding two sessions that need not have \
-                 overlapped each other, because one is reported as ending in the same minute the \
-                 other is reported as starting. \"Count\" and \"kW\" take its membership at face \
-                 value; \"Min Count\" and \"Min kW\" assume as little overlap as the reported \
-                 times allow. They differ on exactly the marked rows.",
-                "",
-            ));
-        }
+        push_group_table(&self.session_groups, out);
         out.push(String::new());
         out.push(String::new());
     }
@@ -456,12 +557,7 @@ impl PowerEstimatesReport {
         }
         out.push(h2("Group membership"));
         out.push(String::new());
-        for (i, g) in self.session_groups.iter().enumerate() {
-            let ids: Vec<String> = g.session_iter().map(|s| s.id.clone()).collect();
-            // Wrapped rather than put in a table cell: a markdown row is one line, so a group of
-            // twelve sessions could not be broken across lines inside one.
-            out.push(wrap(&format!("- Group {i} - {}", ids.join(", ")), "  "));
-        }
+        push_membership_list(&self.session_groups, out);
         out.push(String::new());
         out.push(String::new());
     }
@@ -484,20 +580,24 @@ impl PowerEstimatesReport {
             .iter()
             .map(|a| {
                 vec![
-                    a.row.to_string(),
-                    a.session_id.clone(),
-                    a.kind.as_str().to_owned(),
+                    a.anomaly.row.to_string(),
+                    a.anomaly.session_id.clone(),
+                    windows_label(a.windows),
+                    a.anomaly.kind.as_str().to_owned(),
                 ]
             })
             .collect();
         out.push(table(
-            &["Row", "Session", "Anomaly"],
+            &["Row", "Session", "Window", "Anomaly"],
             &rows,
-            &[Right, Left, Left],
+            &[Right, Left, Left, Left],
         ));
         out.push(String::new());
         out.push(wrap(
-            "Row numbers are workbook rows, so each one can be looked up directly.",
+            "Row numbers are workbook rows, so each one can be looked up directly. \"Window\" is \
+             which of the estimated windows the session reaches - the interval of interest, the \
+             skew margin before it, the one after it, or more than one. A session reaching only a \
+             margin still matters: a figure reported for that margin may rest on it.",
             "",
         ));
         out.push(String::new());
@@ -507,8 +607,8 @@ impl PowerEstimatesReport {
         // explained.
         let mut seen: Vec<AnomalyKind> = Vec::new();
         for a in &self.session_anomalies {
-            if !seen.contains(&a.kind) {
-                seen.push(a.kind);
+            if !seen.contains(&a.anomaly.kind) {
+                seen.push(a.anomaly.kind);
             }
         }
         for kind in seen {
@@ -550,13 +650,16 @@ fn interval_line(interval: (Timestamp, Timestamp)) -> String {
 }
 
 /// "1 hour" / "15 minutes", for the header.
+///
+/// Singular is worth the branch: a skew margin is one `SESSION_BOUNDARY_RESOLUTION` wide, so "1
+/// minutes" would appear in every report that shows one.
 fn interval_length(lo: Timestamp, hi: Timestamp) -> String {
+    let plural = |n: i64, unit: &str| format!("{n} {unit}{}", if n == 1 { "" } else { "s" });
     let secs = hi.duration_since(lo).as_secs();
     match secs {
-        3600 => "1 hour".to_owned(),
-        s if s % 3600 == 0 => format!("{} hours", s / 3600),
-        s if s % 60 == 0 => format!("{} minutes", s / 60),
-        s => format!("{s} seconds"),
+        s if s % 3600 == 0 => plural(s / 3600, "hour"),
+        s if s % 60 == 0 => plural(s / 60, "minute"),
+        s => plural(s, "second"),
     }
 }
 
@@ -570,7 +673,8 @@ impl fmt::Display for PowerEstimatesReport {
 mod test {
     use super::*;
     use crate::{
-        Anomaly, RSession, Session, groups_for_interval, max_power_estimates_for_interval,
+        Anomaly, RSession, Session, WindowedAnomaly, groups_for_interval,
+        max_power_estimates_for_interval,
     };
     use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
@@ -599,6 +703,9 @@ mod test {
     }
 
     /// Builds a report over `sessions` without touching the filesystem.
+    ///
+    /// The anomalies are marked as reaching the interval of interest, which is where a hand-built
+    /// one belongs; the skew margins are exercised through the real entry point instead.
     fn report_of(sessions: Vec<RSession>, anomalies: Vec<Anomaly>) -> PowerEstimatesReport {
         let groups = groups_for_interval((ts(LO), ts(HI)), &sessions);
         PowerEstimatesReport {
@@ -607,7 +714,17 @@ mod test {
             interval: (ts(LO), ts(HI)),
             estimates: crate::estimates::estimates_for_groups(&groups),
             session_groups: groups,
-            session_anomalies: anomalies,
+            skew_margins: Vec::new(),
+            session_anomalies: anomalies
+                .into_iter()
+                .map(|anomaly| WindowedAnomaly {
+                    anomaly,
+                    windows: Windows {
+                        interest: true,
+                        ..Windows::default()
+                    },
+                })
+                .collect(),
         }
     }
 
@@ -734,13 +851,14 @@ mod test {
 
         // Exact rows, so the padding is pinned too. There is no "Excluded" column: a session that
         // is excluded outright appears under Excluded sessions instead, so every row here would
-        // read the same and the column carried no information.
+        // read the same and the column carried no information. "Window" does carry information —
+        // an anomaly can belong to a skew margin alone — though every row here is in the interval.
         assert!(
-            md.contains("|  47 | S31882  | InconsistentDuration |"),
+            md.contains("|  47 | S31882  | interval | InconsistentDuration |"),
             "{md}"
         );
         assert!(
-            md.contains("| 152 | S70933  | ZeroActiveChargeTime |"),
+            md.contains("| 152 | S70933  | interval | ZeroActiveChargeTime |"),
             "{md}"
         );
         // Two rows share a kind, but it is explained once.
@@ -770,6 +888,7 @@ mod test {
             interval: (lo, hi),
             estimates: crate::estimates::estimates_for_groups(&groups),
             session_groups: groups,
+            skew_margins: Vec::new(),
             session_anomalies: Vec::new(),
         };
         let md = report.to_markdown();

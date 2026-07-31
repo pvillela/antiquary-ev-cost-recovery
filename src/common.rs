@@ -1,5 +1,5 @@
 use jiff::{Timestamp, Zoned, tz::TimeZone};
-use std::{cell::RefCell, fmt, rc::Rc, time::Duration};
+use std::{cell::RefCell, fmt, rc::Rc, sync::LazyLock, time::Duration};
 
 /// Time zone the session report's timestamps are stated in. See README.md, "Time zone".
 pub const TIME_ZONE_NAME: &str = "America/Toronto";
@@ -23,13 +23,42 @@ pub const TIME_ZONE_NAME: &str = "America/Toronto";
 /// See README.md, "Boundaries and the time grid".
 pub const SESSION_BOUNDARY_RESOLUTION: Duration = Duration::from_secs(60);
 
-/// The interval of interest comes from Toronto Hydro's metering data and the session times from
-/// Evolute, and nothing reconciles the two clocks.
-/// In addition, the two clocks may drift during the reporting period.
-/// The maximum absolute skew between the two clocks plus the sum of each of those clocks'
-/// absolute drift during the reporting period is assumed to be no more than `5s`.
-/// (= max(absolute clock skew + drift, [`SESSION_BOUNDARY_RESOLUTION`])).
-pub const CLOCK_SKEW_MARGIN: Duration = SESSION_BOUNDARY_RESOLUTION;
+/// Assumed upper bound on the disagreement between the two clocks the estimates depend on: the
+/// Toronto Hydro meter, which fixes the interval of interest, and Evolute, which fixes the session
+/// times. Nothing reconciles them, and they may drift apart over the reporting period.
+///
+/// It bounds the maximum absolute skew between the two clocks *plus* the sum of each clock's
+/// absolute drift over the period. Unverifiable rather than merely unverified — Evolute's clock
+/// discipline is undocumented and Toronto Hydro's is not ours to ask about.
+///
+/// Nothing depends on the figure itself, only on [`CLOCK_SKEW_MARGIN`] being derived from it. A
+/// larger bound widens the skew margins, which costs conservatism but breaks nothing.
+///
+/// See README.md, "Clock skew and drift".
+pub const CLOCK_SKEW_BOUND: Duration = Duration::from_secs(5);
+
+/// Width of the *skew margin* interval placed at each end of the interval of interest, to bound
+/// every window the interval could really name given [`CLOCK_SKEW_BOUND`].
+///
+/// `CLOCK_SKEW_BOUND` rounded **up** to a whole [`SESSION_BOUNDARY_RESOLUTION`]. The rounding is
+/// what keeps the margin bounds on the `R` grid: an interval of interest's bounds are multiples of
+/// 15 minutes, so offsetting them by a whole number of `R` leaves every group boundary on the grid
+/// and every group duration a multiple of `R`. A raw `5s` margin would put both off it. Taking the
+/// greater of the bound and `R` would do as well while the bound stays under `R`, and silently stop
+/// working above it.
+///
+/// That this currently *equals* `SESSION_BOUNDARY_RESOLUTION` is arithmetic, not identity. The two
+/// measure different things: truncation is one-sided and forward and applies to the reported session
+/// times, while skew is two-sided and applies to the interval's end-points. `R` is a floor on the
+/// margin because of the grid, not because the two are the same kind of quantity.
+///
+/// See README.md, "Clock skew and drift".
+pub static CLOCK_SKEW_MARGIN: LazyLock<Duration> = LazyLock::new(|| {
+    let skew = CLOCK_SKEW_BOUND.as_secs_f64();
+    let step = SESSION_BOUNDARY_RESOLUTION.as_secs_f64();
+    let secs = (skew / step).ceil() * step;
+    Duration::from_secs_f64(secs)
+});
 
 pub const EV_POWER_FACTOR: f64 = 0.95;
 pub const EVOLUTE_BREAKER_KW_RATING: f64 = 6.7;

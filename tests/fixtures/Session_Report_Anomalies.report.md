@@ -25,17 +25,18 @@ sessions.
 Excluded sessions
 -----------------
 
-| Row | Session  | From             | To               | Window | Anomaly              |
-|----:|:---------|:-----------------|:-----------------|:-------|:---------------------|
-|   4 | BAD      | 2026-06-15 16:05 | 2026-06-15 16:31 | yes    | InconsistentDuration |
-|   8 | REVERSED | 2026-06-15 16:30 | 2026-06-15 16:21 | yes    | InconsistentDuration |
+| Row | Session  | From             | To               | Window   | Anomaly              |
+|----:|:---------|:-----------------|:-----------------|:---------|:---------------------|
+|   4 | BAD      | 2026-06-15 16:05 | 2026-06-15 16:31 | interval | InconsistentDuration |
+|   8 | REVERSED | 2026-06-15 16:30 | 2026-06-15 16:21 | interval | InconsistentDuration |
 
 These sessions take no part in any estimate. Times are local (ET), and the
-list covers the whole workbook rather than the interval of interest.
-"Window" is whether the session appears to fall in that interval - appears
-only, because a record whose own fields contradict each other cannot be
-trusted to say which window it belongs in. It reads the same doubtful times,
-so no row was dropped on its say-so.
+list covers the whole workbook rather than the windows estimated. "Window"
+is which of those the session appears to fall in - the interval of interest,
+the skew margin before it, the one after it, or none - appears only, because
+a record whose own fields contradict each other cannot be trusted to say
+which window it belongs in. It reads the same doubtful times, so no row was
+dropped on its say-so.
 
 - InconsistentDuration - Conn_start + Conn_Duration misses Conn_DateTime_End
   by a minute or more; start, end and duration are inconsistent.
@@ -72,11 +73,15 @@ Group membership
 Anomalies
 ---------
 
-| Row | Session | Anomaly              |
-|----:|:--------|:---------------------|
-|   6 | SPIKE   | ZeroActiveChargeTime |
+| Row | Session | Window   | Anomaly              |
+|----:|:--------|:---------|:---------------------|
+|   6 | SPIKE   | interval | ZeroActiveChargeTime |
 
 Row numbers are workbook rows, so each one can be looked up directly.
+"Window" is which of the estimated windows the session reaches - the
+interval of interest, the skew margin before it, the one after it, or more
+than one. A session reaching only a margin still matters: a figure reported
+for that margin may rest on it.
 
 - ZeroActiveChargeTime - zero Active_Charge_Time, so the session delivered
   its energy in no time at all and has no finite average power; the

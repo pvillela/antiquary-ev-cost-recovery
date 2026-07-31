@@ -78,7 +78,9 @@ Given a time interval of interest **`I`** as described above, the estimation of 
   - The actual peak kW associated with EV charging activity during `I` is likely between `consumption_based_kw` and `breaker_spec_based_kw`.
   - The actual peak kVA associated with EV charging activity during `I` is likely between `consumption_based_kva` and `breaker_spec_based_kva`.
 - These four values are the **`nominal`** estimates: computed from the `SessionGroup`s exactly as the report gives them. A second set, the **`min_overlap`** estimates, is reported when [dubious](#sessions-groups-and-doubt) groups make its figures differ from the `nominal` ones.
-- The software detects data anomalies in the reported session data. Anomalies associated with every session that **intersects `I`** are reported alongside the estimates, as well as anomalies that caused sessions to be excluded from the analysis. Other sessions elsewhere in the workbook are not included in the report.
+- The interval of interest comes from Toronto Hydro's metering data while the session times come from Evolute, and nothing reconciles the two clocks. The estimates therefore also cover a ***skew margin interval*** at each end of `I` — a short window immediately before it and another immediately after — computed by the same algorithm and reported alongside `I` when its figures come out higher. See [Clock skew and drift](#clock-skew-and-drift).
+  - Skew is admitted only as an *upward* revision. These figures exist to bound what EV charging could have contributed to a demand charge, so a candidate window that would lower them changes nothing worth reporting — and the symmetric floor, the lowest figure over the three windows, is zero whenever a margin happens to hold no session at all.
+- The software detects data anomalies in the reported session data. Anomalies associated with every session that **intersects `I` or either skew margin** are reported alongside the estimates, each marked with the window or windows it touches, as well as anomalies that caused sessions to be excluded from the analysis. Other sessions elsewhere in the workbook are not included in the report.
 
 ### Sessions, groups, and doubt
 
@@ -96,12 +98,16 @@ Only a group exactly one `R` long can be dubious, and not every such group is �
 
 ### The two estimate sets
 
-An ***estimate set*** consists of the following values: `consumption_based_kw`, `consumption_based_kva`, `breaker_spec_based_kw`, and `breaker_spec_based_kva`.
+An ***estimate set*** consists of the following values: `consumption_based_kw`, `consumption_based_kva`, `breaker_spec_based_kw`, and `breaker_spec_based_kva`. Each window the report covers — the interval of interest, and each skew margin that earns a place — has its own sets, and every figure in a set is drawn from a group in that one window. A set therefore always describes a state of affairs that could actually have obtained.
+
+Within a window:
 
 - **`nominal`** uses the `max` reading of every dubious group. It is always given, and it is the figure to quote when only one is wanted.
-- **`min_overlap`** uses the `min` reading instead. It is given only when its figures differ from the `nominal` ones: a dubious group that carries no peak changes no reported number, and a report never shows the same four figures twice.
+- **`min_overlap`** uses the `min` reading instead. It is given only when its figures differ from that window's `nominal` ones: a dubious group that carries no peak changes no reported number, and no window shows the same four figures twice.
 
 `min_overlap <= nominal` on all four figures, always. Each figure names the `SessionGroup` it was drawn from, and the two sets may name different groups — lowering a dubious group can hand the peak to one that was never in doubt. Where two groups tie on a figure, the one whose figure is certain is the one named. Dubious groups are marked in the report's group table whether or not a second estimate set appears.
+
+A skew margin's sets appear only when the margin could raise the estimate: when any of its four figures, in either reading, exceeds the corresponding figure for the interval of interest in that same reading. Readings are compared like with like, taking a window's `nominal` as its min reading wherever no `min_overlap` was given — which is exactly what its absence means. Both clauses earn their place: a margin can beat `I` on the min reading alone, when `I`'s own `nominal` is the one inflated by a dubious group. A margin that cannot raise anything is left out of the report entirely.
 
 A worked example, kept current by a golden-file test: [`tests/fixtures/Session_Report_Diagram.report.md`](tests/fixtures/Session_Report_Diagram.report.md), walked through step by step in [`docs/session-grouping.md`](docs/session-grouping.md).
 
@@ -177,6 +183,8 @@ Half-open is what makes session groups properly cover all sessions over the inte
 The padding is a full `R` rather than one tick less for the same reason. A session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`, so `16:35:00` — exclusive — is the bound that contains it wherever it fell.
 
 **The time grid** is a consequence rather than a rule imposed on the software. Reported start and end times lie on the `R` grid; `Adj_conn_end` adds exactly one `R`, so it lies on it too; and an end-point clamped into the interval of interest lands on one of `I`'s own bounds, which are multiples of 15 minutes. Every group boundary therefore lies on the `R` grid, and every group duration is a multiple of `R` — **provided `R` divides 15 minutes**. That last is a requirement on the *report format*, not on this software, and the current 60 seconds satisfies it.
+
+The [skew margin intervals](#clock-skew-and-drift) do not disturb any of this. Their bounds are `I`'s own bounds offset by `CLOCK_SKEW_MARGIN`, which is a whole multiple of `R` by construction, so they lie on the same grid and the argument above carries over to them unchanged.
 
 ### Dubious groups
 
@@ -271,18 +279,34 @@ Note that `min_size == size` therefore holds in exactly four shapes: no movable 
 
 ### Clock skew and drift
 
-The interval of interest comes from Toronto Hydro's metering data and the session times from Evolute, and nothing reconciles the two clocks. In addition, the two clocks may drift during the reporting period.
+The interval of interest comes from Toronto Hydro's metering data and the session times from Evolute, and nothing reconciles the two clocks. The two may also drift apart over the reporting period. Write **`M`** below for `CLOCK_SKEW_MARGIN`, derived at the end of this section.
 
- The impact of clock skew and drift on the estimates is addressed as follows:
- - Consider *clock skew margin* intervals of duration `CLOCK_SKEW_MARGIN` (`= max(absolute clock skew + drift, SESSION_BOUNDARY_RESOLUTION)`) adjacent to each end of the interval of interest.
- - Calculate the estimates (*drift margin estimates*) for those two additional small intervals as if they were regular intervals of interest.
- - Includine the drift margin estimates in the estimates report if at least one of the additional estimates is higher than the corresponding regular estimate for the interval of interest.
+**What is uncertain is which window of Evolute time the bill's interval names.** If the meter's clock leads or lags Evolute's by `δ`, the interval really at issue is `[I.start + δ, I.end + δ)` for an unknown `δ` with `|δ| <= M`. That shifted window — not any fixed interval — is the thing the estimates have to answer for.
+
+Every such window lies inside `[I.start - M, I.end + M)`, which is `I` together with the two ***skew margin intervals*** `[I.start - M, I.start)` and `[I.end, I.end + M)`. The peak over a union is the highest of the peaks over its parts, so computing the estimates for the two margins alongside `I` bounds every candidate window at once, without anyone having to know `δ`.
+
+The bound is deliberately loose. It admits an instant from the left margin and one from the right that no single `δ` could ever bring into view together, so a reported margin figure says the peak *could* have fallen just outside the metered window, not that any one shift puts it there. The tight alternative — evaluating each shifted window `I + δ` in turn, a finite family since all boundaries lie on the `R` grid — buys little at the margin sizes in play.
+
+The same grouping and estimation machinery is applied to each margin interval; none of it is special-cased for them. In particular, a margin is not assumed to contain a single group, though at the current `M` it always does: a margin is then exactly one grid cell, and no session end-point can fall strictly inside one.
+
+**The margin** is derived from an assumed bound, never from a measured skew — no measurement is available:
+
+```
+CLOCK_SKEW_BOUND  = 5s
+CLOCK_SKEW_MARGIN = R * ceil(CLOCK_SKEW_BOUND / R)   (currently one R)
+```
+
+Rounding *up to a whole* `R` is what keeps `I.start - M` and `I.end + M` on the `R` grid — see [Boundaries and the time grid](#boundaries-and-the-time-grid). A margin of `5s` would put both off it, and group durations would stop being multiples of `R`. Taking the greater of the bound and `R` would do as well while the bound stays under `R`, and silently stop working above it.
+
+That `M` currently equals `R` is arithmetic, not identity. The two are different quantities measuring different things: truncation is one-sided and forward, and applies to the reported session times; skew is two-sided, and applies to the interval's end-points. `R` is a floor on the margin because of the grid, not because the two are the same kind of thing. Raising `CLOCK_SKEW_BOUND` past `R` widens the margins and changes nothing else — the cost is conservatism, since each end then admits more time that the meter never counted.
+
+The bound itself is an assumption, and an unverifiable one; see [Assumptions](#assumptions).
 
 ### Assumptions
 
 - **Session end times are truncated, not rounded.** `Adj_conn_end = Conn_DateTime_End + R` is the exclusive bound of the window the true end lies in only because the reported end is the true end rounded *down* to `R`. Under rounding to nearest, or under a convention where the reported end is the first instant the vehicle was no longer drawing power, the correct padding would differ — in the latter case it would be zero. The resolution `R` and the padding are two separate facts about the report, and only the first is settled by observation; `Questions_for_Evolute.md` carries the outstanding question about the second.
 - **Breaker ratings are uniform across panels.** `breaker_spec_based_kw` and `breaker_spec_based_kva` are a session count multiplied by a single rating, so an installation mixing breakers of different ratings would skew both. Nothing else in the estimates depends on how many panels there are or on which panel a session ran: the session report carries no panel ID, and none is needed.
-- **Clock skew and drift** The maximum absolute skew between the two clocks plus the sum of each of those clocks' absolute drift during the reporting period is assumed to be no more than `5s`.
+- **Clock skew and drift.** The maximum absolute skew between the Toronto Hydro and Evolute clocks, plus the sum of each clock's absolute drift over the reporting period, is assumed to be no more than `CLOCK_SKEW_BOUND`, currently `5s`. Unlike the assumption above it, this one is unverifiable rather than merely unverified: Evolute's clock discipline is undocumented, and Toronto Hydro's is not ours to ask about. Nothing downstream depends on the figure itself, only on its staying below `R` — a larger bound widens the [skew margins](#clock-skew-and-drift), which costs conservatism but breaks nothing.
 
 ### Other
 
