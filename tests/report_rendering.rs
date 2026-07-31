@@ -95,6 +95,18 @@ fn rendered_reports_match_their_golden_files() {
             )
         });
         if expected != rendered {
+            // Named rather than left to be found in a diff where every line differs and none of
+            // them visibly. The comparison stays byte for byte — a golden that has picked up CRLF
+            // is a real fault, just not one the printed diff can show.
+            if expected.replace("\r\n", "\n") == rendered {
+                stale.push(format!(
+                    "--- {stem} ---\nThe only difference is line endings: the golden file holds \
+                     CRLF and the renderer emits LF. The working copy was checked out with git \
+                     translating line endings - see .gitattributes, which pins these files to LF, \
+                     and re-check-out with `git rm --cached -r . && git reset --hard`."
+                ));
+                continue;
+            }
             stale.push(format!(
                 "--- {stem} ---\nexpected:\n{expected}\nactual:\n{rendered}"
             ));

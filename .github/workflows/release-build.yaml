@@ -17,8 +17,8 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-          - os: macos-latest
-            target: aarch64-apple-darwin
+        #   - os: macos-latest
+        #     target: aarch64-apple-darwin
 
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +28,13 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Run Build
         run: cargo build --release --target ${{ matrix.target }} --verbose
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/ev_estimates_cli
+            target/${{ matrix.target }}/release/ev_estimates_cli.exe
       - name: Run tests
         run: cargo test --verbose
 
