@@ -111,6 +111,12 @@ struct SessionGroupCache([Figures; 2]);
 
 /// Where a member sits relative to its group's two ends, which is what decides how far its true
 /// times can be moved inside the group. See [`SessionGroup::min_overlap_figures`].
+///
+/// Every member's *reported* times cover the group's whole span, so none of them falls inside it;
+/// what varies is whether each of `conn_start <= start` and `adj_conn_end >= end` holds strictly or
+/// with equality, and an equality is exactly where truncation leaves the *true* instant inside the
+/// group. The names say where those two true instants are — **b**efore, **i**nside, or **a**fter —
+/// the start first and the end second.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Bucket {
     /// Starts before the group and ends after it: certainly running throughout.

@@ -58,6 +58,8 @@ None of the data in the Excel workbook (or the source CSV) should be modified by
 
 ## Estimation logic
 
+### Estimating algorithm overview
+
 Given a time interval of interest **`I`** as described above, the estimation of EV peak power demand during the interval proceeds as follows:
 
 - From the Evolute monthly session report, identify all charging sessions that intersect the interval of interest `I`.
@@ -90,7 +92,7 @@ What truncation leaves behind is a residual doubt the estimates have to answer f
 
 > A group is **dubious** when it has two members that need not have overlapped each other.
 
-Only a group exactly one `R` long can be dubious, and not every such group is — see [Dubious groups](#dubious-groups). For a dubious group the software computes two readings: **`max`**, taking the group's reported membership at face value, and **`min`**, assuming as little overlap as the reported times allow.
+Only a group exactly one `R` long can be dubious, and not every such group is — see [Dubious groups](#dubious-groups). For a dubious group, the software computes two readings: **`max`**, taking the group's reported membership at face value, and **`min`**, assuming as little overlap as the reported times allow.
 
 ### The two estimate sets
 
@@ -174,34 +176,49 @@ Half-open is what makes session groups properly cover all sessions over the inte
 
 The padding is a full `R` rather than one tick less for the same reason. A session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`, so `16:35:00` — exclusive — is the bound that contains it wherever it fell.
 
-**The time grid** is a consequence rather than a rule imposed on the software. Reported start and end times lie on the `R` grid; `Adj_conn_end` adds exactly one `R`, so it lies on it too; and an end-point clamped into the interval of interest lands on one of `I`'s own bounds, which are multiples of 15 minutes. Every group boundary therefore lies on the `R` grid, and every group duration is a multiple of `R` — **provided `R` divides 15 minutes**. That last is a requirement on the *report format*, not on this software, and the current 60 seconds satisfies it. Both claims in [Dubious groups](#dubious-groups) rest on it.
+**The time grid** is a consequence rather than a rule imposed on the software. Reported start and end times lie on the `R` grid; `Adj_conn_end` adds exactly one `R`, so it lies on it too; and an end-point clamped into the interval of interest lands on one of `I`'s own bounds, which are multiples of 15 minutes. Every group boundary therefore lies on the `R` grid, and every group duration is a multiple of `R` — **provided `R` divides 15 minutes**. That last is a requirement on the *report format*, not on this software, and the current 60 seconds satisfies it.
 
 ### Dubious groups
 
-Every member of a group runs the group's whole span. The sweep emits the run `[run_start, time)` *before* applying any end-point at `time`, so `conn_start <= g.start` and `adj_conn_end >= g.end` for every member. No member, then, literally starts or ends inside its own group; what varies is whether each of those two relations is strict, and that is what sorts the members into four classes:
+Every member of a group runs the group's whole span. That is what a group is: a stretch of time over which the set of active sessions does not change, whose members are the sessions active throughout it. A session active at every instant of `[g.start, g.end)` must start at or before `g.start` and end at or after `g.end` — so `conn_start <= g.start` and `adj_conn_end >= g.end` for every member.
 
-| set | `conn_start` | `adj_conn_end` | what is certain |
-| --------------- | ------------ | -------------- | ----------------------------- |
-| `ba_sessions`   | `< g.start`  | `> g.end`      | runs through all of `g` |
-| `bi_sessions`   | `< g.start`  | `== g.end`     | its true end falls inside `g` |
-| `ia_sessions`   | `== g.start` | `> g.end`      | its true start falls inside `g` |
-| `ii_sessions`   | `== g.start` | `== g.end`     | both its true end-points fall inside `g` |
+A group of duration exactly `R` is called ***narrow***. Only a narrow group can be dubious, as shown at the end of this section, so take `g` to be narrow from here on.
 
-The tests read each session's **own** `conn_start` and `adj_conn_end` — never `conn_end`, whose padding has not yet been applied, and never the end-points clamped into the interval of interest, which would make a session running through `I`'s edge look like one confined to the group.
+Each of the above start and end comparisons holds either with equality or as a strict inequality, and the difference is what the rest of this section turns on. Reading them on the grid established above:
 
-A group of duration exactly `R` is called ***narrow***. For a narrow group the right-hand column above follows exactly: a member with `adj_conn_end == g.end` has its true end in `[g.end - R, g.end)`, which *is* `[g.start, g.end)`; a member with `conn_start == g.start` has its true start in `[g.start, g.start + R)`, likewise `g`. So the members that can be moved around inside `g` are precisely those outside `ba_sessions`, and which pairs of them can be arranged not to overlap decides whether the group is dubious:
+- **`adj_conn_end == g.end`.** The true end lies in `[adj_conn_end - R, adj_conn_end)`, which for a narrow group *is* `[g.start, g.end)`. The session stopped somewhere inside `g` and the report does not say where.
+- **`adj_conn_end > g.end`.** Then `adj_conn_end` is at least `g.end + R`, so the true end lies at or after `g.end`. The session was drawing power throughout `g`, wherever in its last minute it truly stopped.
+- **`conn_start == g.start`.** The true start lies in `[g.start, g.start + R)`, again `g` itself. Inside the group, position unknown.
+- **`conn_start < g.start`.** Then `conn_start` is at most `g.start - R`, so the true start lies before `g.start`. The session was already drawing power when `g` began.
+
+A strict inequality therefore *settles* that end of the session: it unequivocally covers the group whatever the truncation hid. Only an equality leaves an end-point loose inside the group. Two comparisons, two ways each, gives four classes, whose names say where the true start and the true end lie — **b** before the group, **i** inside it, **a** after it:
+
+| set | `conn_start` | `adj_conn_end` | true start | true end |
+| ------------- | ------------ | ---------- | --------------------- | --------------------- |
+| `ba_sessions` | `< g.start`  | `> g.end`  | before `g.start`      | at or after `g.end`   |
+| `bi_sessions` | `< g.start`  | `== g.end` | before `g.start`      | inside `g`, where unknown |
+| `ia_sessions` | `== g.start` | `> g.end`  | inside `g`, where unknown | at or after `g.end` |
+| `ii_sessions` | `== g.start` | `== g.end` | inside `g`, where unknown | inside `g`, where unknown |
+
+The above comparisons read each session's **own** `conn_start` and `adj_conn_end` — never `conn_end`, whose padding has not yet been applied, and never the end-points clamped into the interval of interest, which would make a session running through `I`'s edge look like one confined to the group.
+
+`ba_sessions` have nothing loose in them: they cover `g`, unequivocally extending beyond `g` on both ends. Every other session category has at least one end-point free to "move" inside `g` and we refer to such sessions as "movable". That "freedom to move" is the whole source of doubt — which pairs of them can be arranged not to overlap is what decides whether the group is dubious:
 
 | pair | can be disjoint | why |
 | ------------- | --- | ---------------------------------------------- |
 | `bi` & `ia`   | yes | one ends inside, the other starts inside |
-| `bi` & `ii`   | yes | |
-| `ia` & `ii`   | yes | |
+| `bi` & `ii`   | yes | one ends inside, the other floats freely inside `g` |
+| `ia` & `ii`   | yes | one starts inside, the other floats freely inside `g` |
 | `ii` & `ii`   | yes | both float freely inside `g` |
 | `bi` & `bi`   | no  | both start before `g`, so both run at `g.start` |
 | `ia` & `ia`   | no  | both run past `g.end`, so both run just before it |
 | `ba` & any    | no  | `ba` covers all of `g` |
 
-A group is therefore dubious exactly when `bi_sessions` and `ia_sessions` are both non-empty, or `ii_sessions` is non-empty and there are at least two members outside `ba_sessions`. That condition is equivalent to `min_size < size`, which is how the software tests it. A narrow group whose movable members all sit in one of `bi_sessions` or `ia_sessions` is **not** dubious, and neither is one all of whose members span it — which is possible, since a group's two boundaries can both be created by sessions that are not its members.
+Intuitively, a group is ***dubious*** exactly when it is narrow and has at least two "movable" members that are not anchored to the same end of the group. Formally, a narrow group is dubious if and only if:
+- `bi_sessions` and `ia_sessions` are both non-empty, or
+- `ii_sessions` is non-empty and there is at least one other group member outside `ba_sessions`.
+
+This condition is provably equivalent to `min_size < size` (see definitions in the section below), which is how the software checks it. A narrow group whose movable members all sit in one of `bi_sessions` or `ia_sessions` is **not** dubious, and neither is one all of whose members span it — which is possible, since a group's two boundaries can both be created by sessions that are not its members.
 
 **No group longer than `R` can be dubious.** Group durations are multiples of `R`, so a group that is not narrow is at least `2R` long. Every member's true start is before `g.start + R`, and every member's true end is at or after `g.end - R`, which is at or after `g.start + R`. Take `t` to be the latest true start among the members: `t` is at or after every true start, and `t < g.start + R <=` every true end, so every member is running at `t`. No pair can be disjoint, whatever the true times turn out to be.
 
@@ -242,7 +259,8 @@ The `ba_sessions` term is unconditional because those sessions certainly run thr
 
 - **Session end times are truncated, not rounded.** `Adj_conn_end = Conn_DateTime_End + R` is the exclusive bound of the window the true end lies in only because the reported end is the true end rounded *down* to `R`. Under rounding to nearest, or under a convention where the reported end is the first instant the vehicle was no longer drawing power, the correct padding would differ — in the latter case it would be zero. The resolution `R` and the padding are two separate facts about the report, and only the first is settled by observation; `Questions_for_Evolute.md` carries the outstanding question about the second.
 - **Breaker ratings are uniform across panels.** `breaker_spec_based_kw` and `breaker_spec_based_kva` are a session count multiplied by a single rating, so an installation mixing breakers of different ratings would skew both. Nothing else in the estimates depends on how many panels there are or on which panel a session ran: the session report carries no panel ID, and none is needed.
-- **Clock drift is not modelled.** The interval of interest comes from Toronto Hydro's metering data and the session times from the Evolute panel, and nothing reconciles the two clocks. Drift is assumed small against `R`.
+- **Clock skew is not modelled.** The interval of interest comes from Toronto Hydro's metering data and the session times from the Evolute panel, and nothing reconciles the two clocks. Skew between the two clocks is assumed small against `R`.
+- **Clock drift is not modelled.** The Evolute panel clock(s) is/are assumed to have negligible drift over the reporting month.
 
 ### Other
 
