@@ -3,7 +3,10 @@ use jiff::{
     Timestamp, civil,
     tz::{Offset, TimeZone},
 };
-use std::{path::PathBuf, process::ExitCode};
+use std::{
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 const USAGE: &str = "\
 Estimates the EV charging contribution to peak demand over an interval of interest.
@@ -46,11 +49,29 @@ fn main() -> ExitCode {
         };
     }
     if args.len() < 2 || args.len() > 3 {
-        eprintln!("expected 2 or 3 arguments, got {}\n\n{USAGE}", args.len());
+        eprintln!(
+            "expected 2 or 3 arguments - a workbook, an interval start, and optionally a length - \
+             but got {}\n\n{USAGE}",
+            args.len()
+        );
         return ExitCode::FAILURE;
     }
 
     let path = PathBuf::from(&args[0]);
+    match workbook_fault(&path) {
+        // The arguments shifted, so the usage is the thing to show.
+        Some(PathFault::NotAWorkbook(msg)) => {
+            eprintln!("{msg}\n\n{USAGE}");
+            return ExitCode::FAILURE;
+        }
+        // A workbook named but not found is an ordinary typo; the usage would not help.
+        Some(PathFault::Missing(msg)) => {
+            eprintln!("{msg}");
+            return ExitCode::FAILURE;
+        }
+        None => {}
+    }
+
     let interval = match parse_interval(&args[1], args.get(2).map(String::as_str)) {
         Ok(i) => i,
         Err(e) => {
@@ -69,6 +90,42 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Why the first argument cannot be the session report.
+enum PathFault {
+    /// Not a workbook name at all. Most likely the arguments shifted.
+    NotAWorkbook(String),
+    /// A workbook name that is not there.
+    Missing(String),
+}
+
+/// Checks the first argument before the interval is parsed, or `None` when it looks like a workbook
+/// that exists.
+///
+/// Worth doing separately because the arguments shift *silently* when the workbook is omitted: the
+/// length is optional, so `estimates "2026-06-01 16:00" 1h` is a legal two-argument call in which
+/// the start time is read as the path and the length as the start time. Left to `parse_interval`,
+/// that comes out as a complaint about `1h` — a message about the argument that is present rather
+/// than the one that is missing.
+fn workbook_fault(path: &Path) -> Option<PathFault> {
+    if path
+        .extension()
+        .is_none_or(|e| !e.eq_ignore_ascii_case("xlsx"))
+    {
+        return Some(PathFault::NotAWorkbook(format!(
+            "first argument \"{}\" is not a .xlsx workbook - the session report comes first, then \
+             the interval start",
+            path.display()
+        )));
+    }
+    if !path.is_file() {
+        return Some(PathFault::Missing(format!(
+            "no such workbook: {}",
+            path.display()
+        )));
+    }
+    None
 }
 
 /// Parses the local start and optional length into a UTC interval, enforcing README's boundary
@@ -191,6 +248,37 @@ mod test {
 
     fn utc(s: &str) -> Timestamp {
         s.parse().unwrap()
+    }
+
+    /// The first argument is checked before the interval is, so omitting the workbook is reported as
+    /// the missing workbook rather than as an unreadable timestamp.
+    ///
+    /// `estimates "2026-06-01 16:00" 1h` is what prompted this: two arguments is a legal shape,
+    /// since the length is optional, so the start was read as the path and `1h` as the start.
+    #[test]
+    fn a_first_argument_that_is_not_a_workbook_is_caught_before_the_interval() {
+        assert!(
+            matches!(
+                workbook_fault(Path::new("2026-06-01 16:00")),
+                Some(PathFault::NotAWorkbook(_))
+            ),
+            "a shifted first argument should be reported as such"
+        );
+        // Named as a workbook, so the arguments are in the right order; it is simply not there.
+        assert!(matches!(
+            workbook_fault(Path::new("no_such_file_here.xlsx")),
+            Some(PathFault::Missing(_))
+        ));
+        // A real workbook is a real workbook whatever the case of its extension.
+        assert!(matches!(
+            workbook_fault(Path::new("Nope.XLSX")),
+            Some(PathFault::Missing(_))
+        ));
+        // Cargo.toml exists but is not a workbook, so the extension is what decides.
+        assert!(matches!(
+            workbook_fault(Path::new("Cargo.toml")),
+            Some(PathFault::NotAWorkbook(_))
+        ));
     }
 
     #[test]
