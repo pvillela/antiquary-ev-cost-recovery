@@ -23,8 +23,12 @@ pub const TIME_ZONE_NAME: &str = "America/Toronto";
 /// See README.md, "Boundaries and the time grid".
 pub const SESSION_BOUNDARY_RESOLUTION: Duration = Duration::from_secs(60);
 
-/// Max of [`SESSION_BOUNDARY_RESOLUTION`] and the absolute clock skey between Toronto Hydro
-/// and Evolute timekeeping. The latter is assumed to <= 5 seconds.
+/// The interval of interest comes from Toronto Hydro's metering data and the session times from
+/// Evolute, and nothing reconciles the two clocks.
+/// In addition, the two clocks may drift during the reporting period.
+/// The maximum absolute skew between the two clocks plus the sum of each of those clocks'
+/// absolute drift during the reporting period is assumed to be no more than `5s`.
+/// (= max(absolute clock skew + drift, [`SESSION_BOUNDARY_RESOLUTION`])).
 pub const CLOCK_SKEW_MARGIN: Duration = SESSION_BOUNDARY_RESOLUTION;
 
 pub const EV_POWER_FACTOR: f64 = 0.95;

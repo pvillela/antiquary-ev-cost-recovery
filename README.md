@@ -269,12 +269,20 @@ min_size < size  <=>  max(n_bi, n_ia, [n_ii > 0])  <  n_bi + n_ia + n_ii
 
 Note that `min_size == size` therefore holds in exactly four shapes: no movable members at all, `bi` members only, `ia` members only, or a single `ii` member. In each of them the `min_agg_avg_kw` formula reduces to `ba_sessions_avg_kw` plus the whole movable sum — the same value as `max` — so the power figure never falls unless the size figure does. That is why the software decides dubiousness on the size figure alone. The converse does not hold: a dubious group whose surplus members draw no power reports the same kW in both readings, and the report then withholds the second estimate set only if all four figures agree.
 
+### Clock skew and drift
+
+The interval of interest comes from Toronto Hydro's metering data and the session times from Evolute, and nothing reconciles the two clocks. In addition, the two clocks may drift during the reporting period.
+
+ The impact of clock skew and drift on the estimates is addressed as follows:
+ - Consider *clock skew margin* intervals of duration `CLOCK_SKEW_MARGIN` (`= max(absolute clock skew + drift, SESSION_BOUNDARY_RESOLUTION)`) adjacent to each end of the interval of interest.
+ - Calculate the estimates (*drift margin estimates*) for those two additional small intervals as if they were regular intervals of interest.
+ - Includine the drift margin estimates in the estimates report if at least one of the additional estimates is higher than the corresponding regular estimate for the interval of interest.
+
 ### Assumptions
 
 - **Session end times are truncated, not rounded.** `Adj_conn_end = Conn_DateTime_End + R` is the exclusive bound of the window the true end lies in only because the reported end is the true end rounded *down* to `R`. Under rounding to nearest, or under a convention where the reported end is the first instant the vehicle was no longer drawing power, the correct padding would differ — in the latter case it would be zero. The resolution `R` and the padding are two separate facts about the report, and only the first is settled by observation; `Questions_for_Evolute.md` carries the outstanding question about the second.
 - **Breaker ratings are uniform across panels.** `breaker_spec_based_kw` and `breaker_spec_based_kva` are a session count multiplied by a single rating, so an installation mixing breakers of different ratings would skew both. Nothing else in the estimates depends on how many panels there are or on which panel a session ran: the session report carries no panel ID, and none is needed.
-- **Clock skew** The interval of interest comes from Toronto Hydro's metering data and the session times from Evolute, and nothing reconciles the two clocks. The maximum absolute skew between the two clocks is assumed to be no more than `5s`. Clock skew's impact on estimates is addressed by extending the interval of interest on both ends by `CLOCK_SKEW_MARGIN` (`= max(absolute clock skew, SESSION_BOUNDARY_RESOLUTION)`), calculating the estimates for those two additional narrow groups, and including the drift margin estimates in the estimates report if at least one of the drift margin estimates is higher than the regular estimate for the interval of interest.
-- **Clock drift is not modelled.** Evolute timekeeping is assumed to have negligible drift over the reporting month.
+- **Clock skew and drift** The maximum absolute skew between the two clocks plus the sum of each of those clocks' absolute drift during the reporting period is assumed to be no more than `5s`.
 
 ### Other
 
