@@ -1,5 +1,5 @@
 use jiff::{Timestamp, Zoned, tz::TimeZone};
-use std::{cell::RefCell, fmt, rc::Rc, sync::LazyLock, time::Duration};
+use std::{cell::RefCell, fmt, rc::Rc, time::Duration};
 
 /// Time zone the session report's timestamps are stated in. See README.md, "Time zone".
 pub const TIME_ZONE_NAME: &str = "America/Toronto";
@@ -12,35 +12,20 @@ pub const TIME_ZONE_NAME: &str = "America/Toronto";
 /// together should Evolute ever report seconds:
 ///
 /// - Added to the reported session end to give `Adj_conn_end`, the session's exclusive end.
-/// - The boundary margin of the interval of interest: a session whose only overlap falls within
-///   this distance of a boundary cannot be trusted to overlap it at all, so it takes part only if
-///   it is active somewhere in the interval reduced by this amount at each end. The margin applies
-///   *only* at the boundaries.
 /// - The half-width of the band a sound record's `Conn_start + Conn_Duration` must land in.
-/// - The span within which a session ending at the head of a group may be a truncation artefact
-///   rather than a genuine overlap.
+/// - The width of a *narrow* group, the only width at which a group can be
+///   [dubious](crate::SessionGroup::is_dubious).
 ///
-/// See README.md, "Session boundaries".
+/// It is deliberately *not* a general error margin. Clock drift between the Toronto Hydro meter
+/// and the Evolute panel is unmodelled — folding it in here would be wrong in any case, since
+/// truncation is one-sided and forward while drift is two-sided and applies to both end-points.
 ///
-/// Must divide 15 minutes without leaving a remainder to support a sane time grid within
-/// an interval of interest.
-pub static SESSION_BOUNDARY_RESOLUTION: LazyLock<Duration> =
-    LazyLock::new(|| SESSION_REPORTING_RESOLUTION.max(TIME_ERROR_MARGIN));
-
-/// Resolution the session report states session boundaries at: `Conn_DateTime_Start` and
-/// `Conn_DateTime_End` are truncated to whole minutes. `Conn_Duration` and `Active_Charge_Time`
-/// are *not* — they carry seconds, which is what makes the DST fold inference possible.
+/// Must divide 15 minutes without leaving a remainder, or an end-point clamped into the interval
+/// of interest lands off the grid and group durations stop being multiples of this value. That is
+/// a requirement on the report format rather than on this software.
 ///
-/// Must divide 15 minutes without leaving a remainder to support a sane time grid within
-/// an interval of interest.
-pub const SESSION_REPORTING_RESOLUTION: Duration = Duration::from_secs(60);
-
-/// Margin of error in the reporting of time, including drift between Toronto Hydro and Evolute
-/// panel clocks.
-///
-/// Must divide 15 minutes without leaving a remainder to support a sane time grid within
-/// an interval of interest.
-pub const TIME_ERROR_MARGIN: Duration = Duration::from_secs(1);
+/// See README.md, "Boundaries and the time grid".
+pub const SESSION_BOUNDARY_RESOLUTION: Duration = Duration::from_secs(60);
 
 pub const EV_POWER_FACTOR: f64 = 0.95;
 pub const EVOLUTE_BREAKER_KW_RATING: f64 = 6.7;
@@ -112,20 +97,6 @@ pub enum AnomalyKind {
     /// Only fold starts are checked this way; the same inconsistency on any other date is caught,
     /// if at all, by [`AnomalyKind::InconsistentDuration`]. See README.md, "Time zone".
     DstUnresolvable,
-    /// Session intersects the interval of interest, but its overlap cannot be established from the
-    /// reported times: it is confined to within one [`SESSION_BOUNDARY_RESOLUTION`] of a boundary,
-    /// which is the precision those times are stated to. The session may have been running
-    /// throughout, or not at all.
-    ///
-    /// It counts all the same. The session takes part in the groups and in the headline estimates,
-    /// because understating a maximum is the unsafe error. [`crate::Boundary::Narrow`] is the view
-    /// that leaves it out, and the report gives those figures alongside whenever they differ. This
-    /// kind does not exclude a session from anything — only
-    /// [`AnomalyKind::InconsistentDuration`] does that.
-    ///
-    /// Unlike every other kind, this one depends on which interval of interest was chosen, so it
-    /// cannot be recorded in the workbook's `Anomalies` column. It is added by the grouping logic.
-    IntersectsBoundaryMarginOnly,
 }
 
 impl AnomalyKind {
@@ -139,7 +110,6 @@ impl AnomalyKind {
             Self::DstAmbiguousDuplicated => "DstAmbiguousDuplicated",
             Self::DstGapShifted => "DstGapShifted",
             Self::DstUnresolvable => "DstUnresolvable",
-            Self::IntersectsBoundaryMarginOnly => "IntersectsBoundaryMarginOnly",
         }
     }
 
@@ -151,7 +121,6 @@ impl AnomalyKind {
             "DstAmbiguousDuplicated" => Self::DstAmbiguousDuplicated,
             "DstGapShifted" => Self::DstGapShifted,
             "DstUnresolvable" => Self::DstUnresolvable,
-            "IntersectsBoundaryMarginOnly" => Self::IntersectsBoundaryMarginOnly,
             _ => return None,
         })
     }
@@ -185,12 +154,6 @@ impl fmt::Display for AnomalyKind {
             Self::DstUnresolvable => {
                 "DST fold: neither EDT nor EST reproduces the reported end, so the record is \
                  inconsistent; assumed EDT, timestamps may be an hour early"
-            }
-            Self::IntersectsBoundaryMarginOnly => {
-                "session overlaps the interval of interest only within a minute of a boundary, \
-                 which is the precision the report's session times are stated to, so it may not \
-                 have been running in this window at all. It is counted in the main estimates; \
-                 the \"Narrow\" ones leave it out"
             }
         };
         f.write_str(s)
@@ -266,22 +229,6 @@ impl Session {
         let start = self.conn_start.min(self.adj_conn_end);
         let end = self.conn_start.max(self.adj_conn_end);
         start < interval.1 && end > interval.0
-    }
-
-    /// Whether this session's overlap with the interval of interest was established, rather than
-    /// merely possible.
-    ///
-    /// The predicate [`crate::Boundary::Narrow`] filters on, and the one the report's dagger marks
-    /// the negation of. Tested with `contains` rather than by counting, because
-    /// [`crate::groups_for_interval`] appends the flag afresh on every call and a caller that
-    /// grouped the same sessions twice would carry it twice.
-    ///
-    /// Meaningful only after grouping: the flag depends on which interval was chosen, so before
-    /// then every session trivially answers `true`.
-    pub fn overlap_is_certain(&self) -> bool {
-        !self
-            .anomalies
-            .contains(&AnomalyKind::IntersectsBoundaryMarginOnly)
     }
 
     /// Reported connection start in local time (ET).

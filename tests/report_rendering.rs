@@ -6,11 +6,11 @@
 //! change in wrapping, padding or column order shows up as a diff in the golden file, which is
 //! exactly where it should be visible during review.
 //!
-//! The four cases between them cover every shape the renderer has: a clean report, one carrying
-//! session anomalies and an excluded-sessions section, one where a group exceeds a single panel so
-//! that `clamped` is emitted, and one where all four estimate sets appear at once. The last two are
-//! unreachable through the real path — no report anyone has produced reaches eleven concurrent
-//! sessions.
+//! The two cases between them cover every shape the renderer has: a report holding a dubious group,
+//! so that both estimate sets are printed and the group table carries the marker and its two extra
+//! columns; and one carrying session anomalies and an excluded-sessions section. Both are reachable
+//! through the real path — a dubious group needs nothing more than two sessions reported to meet on
+//! the same minute.
 //!
 //! To regenerate after an intended change, having read the diff:
 //!
@@ -26,9 +26,9 @@ use std::{fs, path::PathBuf};
 
 /// `(fixture stem, interval start UTC, interval end UTC)`.
 ///
-/// All four sit on 2026-06-15, a date with no DST transition, and run 16:00–17:00 local — a legal
+/// Both sit on 2026-06-15, a date with no DST transition, and run 16:00–17:00 local — a legal
 /// interval of interest per README.
-const CASES: [(&str, &str, &str); 4] = [
+const CASES: [(&str, &str, &str); 2] = [
     (
         "Session_Report_Diagram",
         "2026-06-15T20:00:00Z",
@@ -36,20 +36,6 @@ const CASES: [(&str, &str, &str); 4] = [
     ),
     (
         "Session_Report_Anomalies",
-        "2026-06-15T20:00:00Z",
-        "2026-06-15T21:00:00Z",
-    ),
-    (
-        "Session_Report_Clamped",
-        "2026-06-15T20:00:00Z",
-        "2026-06-15T21:00:00Z",
-    ),
-    // MARGIN's adjusted end lands exactly one SESSION_BOUNDARY_RESOLUTION into the interval, so its
-    // overlap is unprovable and it is the strongest session in the group it forms; A01-A11 plus
-    // SPAN put a later group over the panel limit. Between them the two facts make all four
-    // estimate sets differ, which is the only way to see `clamped_narrow` at all.
-    (
-        "Session_Report_Four_Sets",
         "2026-06-15T20:00:00Z",
         "2026-06-15T21:00:00Z",
     ),

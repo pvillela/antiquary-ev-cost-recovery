@@ -1,10 +1,11 @@
 use crate::{
-    Anomaly, EV_POWER_FACTOR, EVOLUTE_BREAKER_KVA_RATING, EVOLUTE_BREAKER_KW_RATING, GroupAnomaly,
-    RSession, Session, SessionGroup, SessionReport, View, groups_for_interval, session_list,
+    Anomaly, EV_POWER_FACTOR, EVOLUTE_BREAKER_KVA_RATING, EVOLUTE_BREAKER_KW_RATING, RSession,
+    Session, SessionGroup, SessionReport, View, groups_for_interval, session_list,
 };
 use jiff::Timestamp;
 use std::{
     cell::RefCell,
+    cmp::Ordering,
     error::Error,
     path::{Path, PathBuf},
     rc::Rc,
@@ -23,13 +24,6 @@ impl PowerEstimate {
     /// The group this figure was drawn from.
     pub fn group(&self) -> &SessionGroup {
         &self.group
-    }
-
-    /// Anomalies carried by the group this figure was drawn from — most usefully
-    /// [`GroupAnomaly::ClampedSessionGroup`], which says the estimate rests on a group the panel
-    /// could not physically have run.
-    pub fn group_anomalies(&self) -> Vec<GroupAnomaly> {
-        self.group.anomalies()
     }
 }
 
@@ -59,41 +53,28 @@ impl EstimateSet {
     }
 }
 
-/// The estimates for an interval of interest, over the 2×2 of [`crate::Boundary`] and
-/// [`crate::Clamping`].
+/// The estimates for an interval of interest, under both [`View`]s of the session groups.
 ///
-/// `direct` is the tiling exactly as reported: every session that might have been running, and no
-/// constraint on how many can run at once. It is always present, and it is deliberately the
-/// over-inclusive corner — understating a maximum is the unsafe error, so the headline figure is
-/// drawn from everything that could have contributed and the doubt is reported beside it.
+/// `nominal` takes every group's membership at face value. It is always present, and it is
+/// deliberately the over-inclusive reading — understating a maximum is the unsafe error, so the
+/// headline figure is drawn from everything that could have contributed and the doubt is reported
+/// beside it.
 ///
-/// `clamped` assumes instead the single panel this software is written for, whose PLC will not run
-/// more than [`crate::EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS`] sessions at once, so a larger group
-/// is cut down to that. It is `Some` exactly when some group was actually cut down — equivalently,
-/// when some group carries [`GroupAnomaly::ClampedSessionGroup`], which is the invariant the
-/// report's asterisk rests on. The two formulations coincide: the group `direct` draws
-/// `breaker_specs_based_*` from is by definition the largest, so if it is oversized its clamped
-/// size falls to the limit and the figures differ, and if it is not, no group anywhere is.
+/// `min_overlap` assumes instead that the members of each [dubious](SessionGroup::is_dubious) group
+/// overlapped as little as their reported times allow. It is `Some` only when its four figures
+/// differ from `nominal`'s: a dubious group that carries no peak changes no reported number, and a
+/// report never shows the same four figures twice.
 ///
-/// `direct_narrow` and `clamped_narrow` drop the sessions flagged
-/// [`crate::AnomalyKind::IntersectsBoundaryMarginOnly`], whose overlap with the interval is not
-/// provable. Each is `Some` only when its four figures differ from every set printed before it, so
-/// no report ever shows the same numbers twice.
+/// **`min_overlap <= nominal` on all four figures, unconditionally.** Each is a sum over a subset
+/// of the same members and counts no more of them, per group, and a maximum across groups preserves
+/// that. The bracket the report states therefore runs from one to the other, with no case analysis.
 ///
-/// Clamping can *move* a peak as well as lower it — cutting the peaking group down may drop it
-/// below one that was never clamped — so two sets may cite different `session_group_idx`.
-///
-/// **The four do not nest.** `clamped <= direct` and `direct_narrow <= direct` both hold, since
-/// each sums over a subset and counts no more. But `clamped_narrow` can *exceed* `clamped`: see
-/// [`SessionGroup::eligible_sessions`] for why narrowing a group can raise its clamped total. Any
-/// bracket must therefore be an actual min and max over whichever sets are present, never a corner
-/// picked in advance. No report seen so far produces a `clamped` at all; the June sample peaks at
-/// three concurrent sessions.
+/// The two may still name *different* groups: lowering a dubious group can hand the peak to one
+/// that was never in doubt, so each figure carries its own `session_group_idx`. Where two groups
+/// tie, [`max_group_by`] names the one whose figure is certain.
 pub struct PowerEstimates {
-    pub direct: EstimateSet,
-    pub direct_narrow: Option<EstimateSet>,
-    pub clamped: Option<EstimateSet>,
-    pub clamped_narrow: Option<EstimateSet>,
+    pub nominal: EstimateSet,
+    pub min_overlap: Option<EstimateSet>,
 }
 
 pub struct PowerEstimatesReport {
@@ -108,10 +89,8 @@ pub struct PowerEstimatesReport {
     pub session_groups: Vec<Rc<SessionGroup>>,
     /// Every anomaly carried by every session that took part in this interval's groups. Sessions
     /// elsewhere in the workbook are not reported: they say nothing about this estimate. Without
-    /// this the caller has a number and no way to judge it — a session flagged
-    /// [`crate::AnomalyKind::IntersectsBoundaryMarginOnly`] is counted in `direct` though it may
-    /// never have been running, and a spike's substituted average power is invisible in the total
-    /// it feeds.
+    /// this the caller has a number and no way to judge it — a spike's substituted average power,
+    /// for one, is invisible in the total it feeds.
     ///
     /// Sessions excluded outright are *not* here; they are in
     /// [`PowerEstimatesReport::excluded_sessions`], which is reported in full and separately.
@@ -156,16 +135,12 @@ pub fn max_power_estimates_for_interval(
     });
 
     // Combine sessions and spikes. Grouping algorithm will sort it out.
-    let mut rsessions: Vec<_> = sessions
+    let rsessions: Vec<_> = sessions
         .into_iter()
         .chain(spikes)
         .map(|s| Rc::new(RefCell::new(s)))
         .collect();
-    let groups = groups_for_interval(interval, &mut rsessions);
-
-    // After grouping, not before: `groups_for_interval` appends `IntersectsBoundaryMarginOnly` to
-    // the sessions whose overlap it could not establish, and that flag is half of what makes this
-    // list worth reading.
+    let groups = groups_for_interval(interval, &rsessions);
     let session_anomalies = collect_session_anomalies(interval, &rsessions);
 
     let estimates = estimates_for_groups(&groups);
@@ -182,43 +157,18 @@ pub fn max_power_estimates_for_interval(
 /// Assembles the estimates for an already-computed tiling, or `None` when no session reached the
 /// interval and there are no groups.
 ///
-/// `clamped` is gated structurally: it is produced only when some group was actually cut down to
-/// one panel's worth, which `size_in(CLAMPED) < size()` tests exactly. Testing every group is
-/// equivalent to testing only the ones `direct` peaks at, because the size-peak group is the
-/// largest there is — but the `any` form is preferred, because it keeps the invariant that a
-/// `clamped` set is present exactly when some group carries
-/// [`GroupAnomaly::ClampedSessionGroup`], which is what the report's asterisk promises.
-///
-/// The narrow sets are gated on their figures instead. There is no structural test for them: a
-/// flagged session may sit in a group that never peaks, in which case narrowing changes no reported
-/// number and a second table would only repeat the first. Each is kept only if it differs from
-/// every set already destined for the report, in print order, so no two tables can coincide.
+/// `min_overlap` is gated on its figures rather than structurally. A dubious group may sit in a
+/// tiling without carrying either peak, in which case the second set repeats the first exactly and
+/// a second table would only invite the reader to hunt for a difference that is not there. The
+/// group table still marks the dubious group, so nothing about it goes unreported.
 pub(crate) fn estimates_for_groups(groups: &[Rc<SessionGroup>]) -> Option<PowerEstimates> {
-    let direct = estimate_set(groups, View::DIRECT)?;
-
-    let clamped = groups
-        .iter()
-        .any(|g| g.size_in(View::CLAMPED) < g.size())
-        .then(|| estimate_set(groups, View::CLAMPED))
-        .flatten();
-
-    let mut shown = vec![direct.values()];
-    shown.extend(clamped.as_ref().map(EstimateSet::values));
-
-    let mut keep = |set: Option<EstimateSet>| -> Option<EstimateSet> {
-        let set = set?;
-        if shown.contains(&set.values()) {
-            return None;
-        }
-        shown.push(set.values());
-        Some(set)
-    };
+    let nominal = estimate_set(groups, View::Nominal)?;
+    let min_overlap =
+        estimate_set(groups, View::MinOverlap).filter(|set| set.values() != nominal.values());
 
     Some(PowerEstimates {
-        direct_narrow: keep(estimate_set(groups, View::DIRECT_NARROW)),
-        clamped_narrow: keep(estimate_set(groups, View::CLAMPED_NARROW)),
-        direct,
-        clamped,
+        nominal,
+        min_overlap,
     })
 }
 
@@ -287,8 +237,19 @@ fn estimate_set(groups: &[Rc<SessionGroup>], view: View) -> Option<EstimateSet> 
 }
 
 /// Returns the index of the [`SessionGroup`] in `groups` scoring highest on `metric`, or `None`
-/// when there are no groups. Ties go to the earliest group, so the reported peak window is the
-/// first moment the peak was reached.
+/// when there are no groups.
+///
+/// Ties are broken twice over: first towards a group that is not
+/// [dubious](SessionGroup::is_dubious), so that a figure two groups reach alike is attributed to
+/// the one that reached it beyond doubt; then towards the earlier group, so the reported peak
+/// window is the first moment the peak was reached.
+///
+/// The first tie-break only ever moves *which* group is named, never the figure, since it applies
+/// at equal scores. One consequence is worth knowing: a figure whose peak group is dubious is one
+/// no other group tied, so every other group scores strictly lower and `min_overlap` comes out
+/// strictly lower too. A dubious group carrying a peak therefore all but guarantees a second
+/// estimate set — the exception being a group whose movable members all draw zero power, where the
+/// sizes differ but the aggregates do not.
 fn max_group_by<T: PartialOrd>(
     groups: &[Rc<SessionGroup>],
     metric: impl Fn(&SessionGroup) -> T,
@@ -297,7 +258,11 @@ fn max_group_by<T: PartialOrd>(
     for (i, group) in groups.iter().enumerate() {
         let score = metric(group);
         let improves = match &best {
-            Some((_, best_score)) => score > *best_score,
+            Some((best_idx, best_score)) => match score.partial_cmp(best_score) {
+                Some(Ordering::Greater) => true,
+                Some(Ordering::Equal) => groups[*best_idx].is_dubious() && !group.is_dubious(),
+                _ => false,
+            },
             None => true,
         };
         if improves {
@@ -310,7 +275,7 @@ fn max_group_by<T: PartialOrd>(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS, RSession, Session};
+    use crate::{RSession, Session};
     use std::time::Duration;
 
     /// Index of the group with the greatest aggregate average power.
@@ -381,179 +346,140 @@ mod test {
         assert!(estimates_for_groups(&[]).is_none());
     }
 
-    /// The interval the boundary-axis tests work in. `M` below ends exactly one
-    /// `SESSION_BOUNDARY_RESOLUTION` into it, so its true end may be `20:00:00` itself and its
-    /// overlap is unprovable — the flag `Boundary::Narrow` reads.
+    /// The interval the estimate-set tests work in.
     const LO: &str = "2026-06-01T20:00:00Z";
     const HI: &str = "2026-06-01T21:00:00Z";
 
-    /// A flagged session in the peaking group: the narrow set says something different, so it is
-    /// given. `clamped_narrow` would repeat it exactly, nothing being oversized, so it is not.
+    /// A dubious group carrying the peak: the second set says something the first does not, so it
+    /// is given. `E` is reported as ending in the same minute `S` is reported as starting, so the
+    /// group they share at `[20:04, 20:05)` may hold either both of them or one at a time.
     #[test]
-    fn narrow_set_is_given_when_a_doubtful_session_peaks() {
-        let mut sessions = vec![
-            rsession("M", "2026-06-01T19:50:00Z", "2026-06-01T20:01:00Z", 5.0),
-            rsession("A", "2026-06-01T19:55:00Z", "2026-06-01T20:30:00Z", 1.0),
+    fn min_overlap_is_given_when_a_dubious_group_peaks() {
+        let sessions = vec![
+            rsession("E", "2026-06-01T20:02:00Z", "2026-06-01T20:05:00Z", 5.0),
+            rsession("S", "2026-06-01T20:04:00Z", "2026-06-01T20:30:00Z", 4.0),
         ];
-        let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
-        let est = estimates_for_groups(&groups).expect("groups exist");
-
-        // Both sessions run over the first group; only `A` survives narrowing.
-        assert_eq!(groups[0].size(), 2);
-        assert_eq!(groups[0].size_in(View::DIRECT_NARROW), 1);
-
-        assert_eq!(est.direct.consumption_based_kw.value, 6.0);
-        let narrow = est
-            .direct_narrow
-            .expect("the figures differ, so it is given");
-        assert_eq!(narrow.consumption_based_kw.value, 1.0);
-        assert_eq!(
-            narrow.breaker_specs_based_kw.value,
-            EVOLUTE_BREAKER_KW_RATING
-        );
-
-        assert!(est.clamped.is_none(), "nothing is oversized");
-        assert!(
-            est.clamped_narrow.is_none(),
-            "it would only repeat `direct_narrow`"
-        );
-    }
-
-    /// A flagged session away from every peak changes no figure, so no second table is produced —
-    /// the case a structural gate would get wrong. Its group narrows to nothing at all, which is
-    /// reported honestly as zero and simply never wins a maximum.
-    #[test]
-    fn narrow_set_is_withheld_when_the_doubtful_session_never_peaks() {
-        let mut sessions = vec![
-            rsession("M", "2026-06-01T19:50:00Z", "2026-06-01T20:01:00Z", 1.0),
-            rsession("A", "2026-06-01T20:10:00Z", "2026-06-01T20:50:00Z", 5.0),
-        ];
-        let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
-
-        assert_eq!(groups[0].size(), 1);
-        assert_eq!(groups[0].size_in(View::DIRECT_NARROW), 0);
-        assert_eq!(groups[0].agg_avg_power_in(View::DIRECT_NARROW), 0.0);
+        let groups = groups_for_interval((ts(LO), ts(HI)), &sessions);
+        let peak = groups
+            .iter()
+            .find(|g| g.start() == ts("2026-06-01T20:04:00Z"))
+            .expect("the shared group");
+        assert!(peak.is_dubious());
 
         let est = estimates_for_groups(&groups).expect("groups exist");
-        assert_eq!(est.direct.consumption_based_kw.value, 5.0);
-        assert!(est.direct_narrow.is_none());
-        assert!(est.clamped_narrow.is_none());
+        assert_eq!(est.nominal.consumption_based_kw.value, 9.0);
+        let min = est.min_overlap.expect("the figures differ, so it is given");
+        assert_eq!(min.consumption_based_kw.value, 5.0);
+        assert_eq!(min.breaker_specs_based_kw.value, EVOLUTE_BREAKER_KW_RATING);
     }
 
-    /// `n` sessions running concurrently over the whole interval, each drawing 1 kW, so one group
-    /// of `n`.
-    fn concurrent(n: usize) -> Vec<Rc<SessionGroup>> {
-        let mut sessions: Vec<RSession> = (0..n)
-            .map(|i| {
-                rsession(
-                    &format!("S{i:02}"),
-                    "2026-06-01T20:05:00Z",
-                    "2026-06-01T20:55:00Z",
-                    1.0,
-                )
-            })
-            .collect();
-        groups_for_interval(
-            (ts("2026-06-01T20:00:00Z"), ts("2026-06-01T21:00:00Z")),
-            &mut sessions,
-        )
-    }
-
-    /// Below the panel limit clamping would change nothing, so no clamped set is produced — the
-    /// caller is not handed a second copy of `direct` to compare against.
-    #[test]
-    fn clamped_set_is_absent_when_no_group_exceeds_the_panel_limit() {
-        for n in [1, 5, 10] {
-            let groups = concurrent(n);
-            let estimates = estimates_for_groups(&groups).expect("a group exists");
-            assert_eq!(
-                estimates.direct.consumption_based_kw.value, n as f64,
-                "n={n}"
-            );
-            assert!(estimates.clamped.is_none(), "n={n}");
-        }
-    }
-
-    /// Above it, both sets are produced and the clamped one is strictly the lower — the bracket
-    /// that says the report claims more concurrent sessions than one panel can run.
-    #[test]
-    fn clamped_set_appears_and_is_lower_when_a_group_exceeds_the_panel_limit() {
-        for n in [11, 14] {
-            let groups = concurrent(n);
-            let estimates = estimates_for_groups(&groups).expect("a group exists");
-            let direct = &estimates.direct;
-            let clamped = estimates.clamped.as_ref().expect("a group was clamped");
-
-            assert_eq!(direct.consumption_based_kw.value, n as f64, "n={n}");
-            assert_eq!(
-                clamped.consumption_based_kw.value, EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS as f64,
-                "n={n}"
-            );
-            assert!(
-                clamped.breaker_specs_based_kw.value < direct.breaker_specs_based_kw.value,
-                "n={n}"
-            );
-            // The group keeps its real size, so the anomaly can carry it.
-            assert_eq!(
-                clamped.consumption_based_kw.group_anomalies(),
-                vec![GroupAnomaly::ClampedSessionGroup(n)],
-                "n={n}"
-            );
-        }
-    }
-
-    /// Clamping can move the peak, but only ever by cutting down the group that was peaking —
-    /// lowering a group cannot promote it, and cannot promote anything else either.
+    /// A dubious group away from every peak changes no figure, so no second table is produced —
+    /// the case a structural gate would get wrong.
     ///
-    /// Group 0 holds eleven sessions at 1.0 kW, so it leads on the direct figures (11.0 kW, and
-    /// the largest count) and is cut to 10.0 kW. Group 1 holds ten at 1.05 kW, is never clamped,
-    /// and so takes the consumption peak once group 0 has been cut below it.
+    /// Both peaks have to be moved elsewhere for this, the size peak included: a dubious pair is
+    /// two concurrent sessions, so it carries the size peak unless some group is larger. Hence the
+    /// three-session block, which also outdraws it.
     #[test]
-    fn clamping_can_move_the_peak_when_the_peaking_group_is_the_one_cut_down() {
-        let mut sessions: Vec<RSession> = (0..11)
-            .map(|i| {
-                rsession(
-                    &format!("X{i:02}"),
-                    "2026-06-01T20:05:00Z",
-                    "2026-06-01T20:20:00Z",
-                    1.0,
-                )
-            })
-            .chain((0..10).map(|i| {
-                rsession(
-                    &format!("Y{i:02}"),
-                    "2026-06-01T20:30:00Z",
-                    "2026-06-01T20:45:00Z",
-                    1.05,
-                )
-            }))
-            .collect();
-        let groups = groups_for_interval(
-            (ts("2026-06-01T20:00:00Z"), ts("2026-06-01T21:00:00Z")),
-            &mut sessions,
+    fn min_overlap_is_withheld_when_the_dubious_group_never_peaks() {
+        let sessions = vec![
+            rsession("E", "2026-06-01T20:02:00Z", "2026-06-01T20:05:00Z", 1.0),
+            rsession("S", "2026-06-01T20:04:00Z", "2026-06-01T20:08:00Z", 1.0),
+            rsession("A1", "2026-06-01T20:10:00Z", "2026-06-01T20:50:00Z", 5.0),
+            rsession("A2", "2026-06-01T20:10:00Z", "2026-06-01T20:50:00Z", 2.0),
+            rsession("A3", "2026-06-01T20:10:00Z", "2026-06-01T20:50:00Z", 1.0),
+        ];
+        let groups = groups_for_interval((ts(LO), ts(HI)), &sessions);
+        assert!(
+            groups.iter().any(|g| g.is_dubious()),
+            "one group is dubious"
         );
-        assert_eq!(groups.len(), 2);
 
-        let estimates = estimates_for_groups(&groups).expect("groups exist");
-        let direct = &estimates.direct;
-        let clamped = estimates.clamped.as_ref().expect("group 0 was clamped");
+        let est = estimates_for_groups(&groups).expect("groups exist");
+        assert_eq!(est.nominal.consumption_based_kw.value, 8.0);
+        assert!(est.min_overlap.is_none());
+    }
 
-        // Direct: group 0 leads on both counts.
-        assert_eq!(direct.consumption_based_kw.session_group_idx, 0);
-        assert!((direct.consumption_based_kw.value - 11.0).abs() < 1e-9);
-        assert_eq!(direct.breaker_specs_based_kw.session_group_idx, 0);
+    /// Lowering a dubious group can hand the peak to one that was never in doubt, so the two sets
+    /// name different groups. `E`+`S` reach 9.0 together but only 5.0 apart, while `A` runs at 6.0
+    /// throughout with nothing uncertain about it.
+    #[test]
+    fn the_peak_can_move_between_the_two_sets() {
+        let sessions = vec![
+            rsession("E", "2026-06-01T20:02:00Z", "2026-06-01T20:05:00Z", 5.0),
+            rsession("S", "2026-06-01T20:04:00Z", "2026-06-01T20:06:00Z", 4.0),
+            rsession("A", "2026-06-01T20:20:00Z", "2026-06-01T20:50:00Z", 6.0),
+        ];
+        let groups = groups_for_interval((ts(LO), ts(HI)), &sessions);
+        let est = estimates_for_groups(&groups).expect("groups exist");
+        let min = est.min_overlap.expect("the figures differ");
 
-        // Clamped: group 0 falls to 10.0, so group 1 at 10.5 takes the consumption peak.
-        assert_eq!(clamped.consumption_based_kw.session_group_idx, 1);
-        assert!((clamped.consumption_based_kw.value - 10.5).abs() < 1e-9);
-        // Both groups now count 10, and the tie goes to the earliest.
-        assert_eq!(clamped.breaker_specs_based_kw.session_group_idx, 0);
+        let dubious_idx = est.nominal.consumption_based_kw.session_group_idx;
+        assert!(groups[dubious_idx].is_dubious());
+        assert_eq!(est.nominal.consumption_based_kw.value, 9.0);
 
-        // Only the group that was cut down carries the anomaly.
-        assert_eq!(
-            groups[0].anomalies(),
-            vec![GroupAnomaly::ClampedSessionGroup(11)]
+        let certain_idx = min.consumption_based_kw.session_group_idx;
+        assert!(!groups[certain_idx].is_dubious());
+        assert_eq!(min.consumption_based_kw.value, 6.0);
+        assert_ne!(dubious_idx, certain_idx);
+    }
+
+    /// Where two groups reach the same figure, the one that reached it beyond doubt is named. `A`
+    /// alone draws exactly what `E` and `S` draw together, so the consumption peak is a tie between
+    /// a dubious group and a certain one.
+    #[test]
+    fn a_tie_on_a_figure_goes_to_the_group_that_is_not_dubious() {
+        let sessions = vec![
+            rsession("E", "2026-06-01T20:02:00Z", "2026-06-01T20:05:00Z", 5.0),
+            rsession("S", "2026-06-01T20:04:00Z", "2026-06-01T20:06:00Z", 4.0),
+            rsession("A", "2026-06-01T20:20:00Z", "2026-06-01T20:50:00Z", 9.0),
+        ];
+        let groups = groups_for_interval((ts(LO), ts(HI)), &sessions);
+        let est = estimates_for_groups(&groups).expect("groups exist");
+
+        let idx = est.nominal.consumption_based_kw.session_group_idx;
+        assert_eq!(est.nominal.consumption_based_kw.value, 9.0);
+        assert!(
+            !groups[idx].is_dubious(),
+            "the tie should be attributed to the group that is certain"
         );
-        assert!(groups[1].anomalies().is_empty());
+        // The dubious group is earlier, so earliest-wins alone would have named it.
+        assert!(
+            groups.iter().take(idx).any(|g| g.is_dubious()),
+            "an earlier dubious group ties this figure"
+        );
+    }
+
+    /// The tie-break moves which group is named, never the figure: a dubious group that scores
+    /// strictly higher is still the peak.
+    #[test]
+    fn a_dubious_group_still_wins_when_it_scores_higher() {
+        let sessions = vec![
+            rsession("E", "2026-06-01T20:02:00Z", "2026-06-01T20:05:00Z", 5.0),
+            rsession("S", "2026-06-01T20:04:00Z", "2026-06-01T20:06:00Z", 4.0),
+            rsession("A", "2026-06-01T20:20:00Z", "2026-06-01T20:50:00Z", 8.0),
+        ];
+        let groups = groups_for_interval((ts(LO), ts(HI)), &sessions);
+        let est = estimates_for_groups(&groups).expect("groups exist");
+
+        let idx = est.nominal.consumption_based_kw.session_group_idx;
+        assert_eq!(est.nominal.consumption_based_kw.value, 9.0);
+        assert!(groups[idx].is_dubious());
+    }
+
+    /// `min_overlap <= nominal` on all four figures, whatever the arrangement.
+    #[test]
+    fn min_overlap_never_exceeds_nominal() {
+        let sessions = vec![
+            rsession("E", "2026-06-01T20:02:00Z", "2026-06-01T20:05:00Z", 5.0),
+            rsession("S", "2026-06-01T20:04:00Z", "2026-06-01T20:06:00Z", 4.0),
+            rsession("A", "2026-06-01T20:03:00Z", "2026-06-01T20:50:00Z", 6.0),
+        ];
+        let groups = groups_for_interval((ts(LO), ts(HI)), &sessions);
+        let est = estimates_for_groups(&groups).expect("groups exist");
+        if let Some(min) = &est.min_overlap {
+            for (m, n) in min.values().iter().zip(est.nominal.values()) {
+                assert!(*m <= n, "{m} <= {n}");
+            }
+        }
     }
 }

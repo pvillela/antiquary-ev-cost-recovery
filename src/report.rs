@@ -10,16 +10,13 @@
 //!   the padding; a plain reader depends on it entirely.
 //! - **No four-space indentation anywhere**, since markdown would turn it into a code block. Wrapped
 //!   list items indent by two.
-//! - **No emphasis markers.** Labels are quoted — `"Direct"`, `"Clamped"` — which reads identically
-//!   either way. Two markers are used, each meaning one thing only: an asterisk marks an anomalous
-//!   *group*, a dagger a doubtful *session*. Neither is emphasis, so neither collides with a
-//!   renderer's reading of `*`.
+//! - **No emphasis markers.** Labels are quoted — `"Nominal"`, `"Minimum overlap"` — which reads
+//!   identically either way. One marker is used, an asterisk against a dubious *group*. It is not
+//!   emphasis, so it does not collide with a renderer's reading of `*`.
 //! - **Session ids live in their own section**, not in a table cell, because a markdown table row is
 //!   a single line and a group of twelve sessions cannot be wrapped inside one.
 
-use crate::{
-    AnomalyKind, EstimateSet, GroupAnomaly, PowerEstimatesReport, SessionGroup, View, time_zone,
-};
+use crate::{AnomalyKind, EstimateSet, PowerEstimatesReport, View, time_zone};
 use jiff::{Timestamp, Zoned};
 use std::{fmt, time::Duration};
 
@@ -138,10 +135,6 @@ fn ymd_hm(ts: Timestamp) -> String {
     local(ts).strftime("%Y-%m-%d %H:%M").to_string()
 }
 
-/// Marks a session whose overlap with the interval of interest is not certain — the ones
-/// [`crate::Boundary::Narrow`] leaves out. Distinct from the asterisk, which marks a group.
-const DOUBTFUL: char = '†';
-
 /// Group number, with the anomaly marker in a slot of its own so the digits stay in a column:
 /// `0 `, `1*`, `2 ` align, whereas `0`, `1*`, `2` stagger under right alignment.
 ///
@@ -223,60 +216,30 @@ impl PowerEstimatesReport {
             return;
         };
 
-        // Print order, omitting any set suppressed for repeating an earlier one. The name is
-        // quoted and the gloss is not, per the module docs: a label has to read as a label in
-        // plain text, and quotation marks are the only device available.
-        let mut sets: Vec<(&str, String, &EstimateSet)> = vec![(
-            "Direct",
-            "every session counted, no panel constraint".to_owned(),
-            &estimates.direct,
+        // The name is quoted and the gloss is not, per the module docs: a label has to read as a
+        // label in plain text, and quotation marks are the only device available.
+        let mut sets: Vec<(&str, &str, &EstimateSet)> = vec![(
+            "Nominal",
+            "every group's membership taken at face value",
+            &estimates.nominal,
         )];
-        if let Some(set) = &estimates.clamped {
+        if let Some(set) = &estimates.min_overlap {
             sets.push((
-                "Clamped",
-                format!(
-                    "assuming one panel, capped at {} concurrent sessions",
-                    crate::EVOLUTE_PANEL_MAX_CONCURRENT_SESSIONS
-                ),
-                set,
-            ));
-        }
-        if let Some(set) = &estimates.direct_narrow {
-            sets.push((
-                "Direct, narrow",
-                "counting only sessions whose overlap is certain".to_owned(),
-                set,
-            ));
-        }
-        if let Some(set) = &estimates.clamped_narrow {
-            sets.push((
-                "Clamped, narrow",
-                "both restrictions at once".to_owned(),
+                "Minimum overlap",
+                "assuming the sessions in each dubious group overlapped as little as \
+                 their reported times allow",
                 set,
             ));
         }
 
         if sets.len() > 1 {
-            let mut why: Vec<&str> = Vec::new();
-            if estimates.clamped.is_some() {
-                why.push(
-                    "some group was reported with more concurrent sessions than a single panel \
-                     can run, so either a second panel is installed or the report is wrong",
-                );
-            }
-            if estimates.direct_narrow.is_some() || estimates.clamped_narrow.is_some() {
-                why.push(
-                    "some session overlaps the interval by less than the precision its times are \
-                     reported to, so it may not have been running in this window at all",
-                );
-            }
             out.push(wrap(
-                &format!(
-                    "More than one reading of the data is defensible here, because {}. Each is \
-                     given below. The first counts every session and constrains nothing, so it is \
-                     the one to quote if only one figure is wanted.",
-                    why.join(", and "),
-                ),
+                "More than one reading of the data is defensible here, because some group holds \
+                 two sessions that need not have overlapped each other - one is reported as \
+                 ending in the same minute the other is reported as starting, and the report \
+                 states those times only to the minute. Both readings are given below. The first \
+                 counts every session and assumes nothing, so it is the one to quote if only one \
+                 figure is wanted.",
                 "",
             ));
             out.push(String::new());
@@ -295,35 +258,18 @@ impl PowerEstimatesReport {
             out.push(String::new());
         }
 
-        // The bracket is an actual min and max over the sets present, never a corner picked in
-        // advance: the four do not nest, because narrowing a group can lift it back under the
-        // panel limit and so raise its clamped figures. See `PowerEstimates`.
+        // `min_overlap <= nominal` on all four figures, unconditionally — see `PowerEstimates` —
+        // so the bracket needs no search: its floor is the consumption figure of the last set
+        // printed and its ceiling the breaker-spec figure of the first. With one set present both
+        // come from it, and the sentence reads the same.
         //
         // Selecting on kW serves kVA too. kVA is kW over a fixed power factor on the consumption
         // side, and a fixed per-breaker rating times the same count on the other, so both are
-        // strictly increasing in whatever kW ranks on and the argmin and argmax cannot differ.
-        //
-        // Ties go to the earliest set, matching `max_group_by`'s rule for groups. Two sets can
-        // genuinely tie on a bound — `direct` and `direct_narrow` share a breaker-spec figure
-        // whenever the doubtful session is not in the largest group — and the reader should be
-        // pointed at the plainest of them, which is the one printed first. `Iterator::max_by`
-        // returns the *last* maximum, so it cannot be used directly here; `min_by` already returns
-        // the first minimum and needs no such care.
-        let extreme = |better: fn(f64, f64) -> bool, field: fn(&EstimateSet) -> f64| {
-            sets.iter()
-                .reduce(|best, next| {
-                    if better(field(next.2), field(best.2)) {
-                        next
-                    } else {
-                        best
-                    }
-                })
-                .expect("`direct` is always present")
-        };
-        let low = extreme(|a, b| a < b, |s| s.consumption_based_kw.value);
-        let high = extreme(|a, b| a > b, |s| s.breaker_specs_based_kw.value);
-        // The gloss belongs over its table, not in a sentence that may name four sets; and with
-        // only one set there is nothing to name at all.
+        // strictly increasing in whatever kW ranks on and the two ends cannot differ.
+        let low = sets.last().expect("`nominal` is always present");
+        let high = sets.first().expect("`nominal` is always present");
+        // The gloss belongs over its table, not in a sentence naming both sets; and with only one
+        // set there is nothing to name at all.
         let name = |name: &str| {
             if sets.len() > 1 {
                 format!("\"{name}\", ")
@@ -446,19 +392,10 @@ impl PowerEstimatesReport {
             return;
         }
 
-        let any_flagged = self
-            .session_groups
-            .iter()
-            .any(|g| !g.anomalies().is_empty());
-
-        // The narrow pair is carried only when it says something. A session is flagged only if the
-        // grouping admitted it, and an admitted session belongs to at least one group, so a dagger
-        // anywhere guarantees some row where the two counts differ — and its absence guarantees
-        // four columns that would repeat each other exactly.
-        let any_doubtful = self
-            .session_groups
-            .iter()
-            .any(|g| g.session_iter().any(|s| !s.overlap_is_certain()));
+        // One predicate for both the marker and the extra columns: a dubious group is exactly one
+        // whose two readings differ, so a marked row is a row where the columns say something and
+        // an unmarked table is one where they would repeat each other exactly.
+        let any_dubious = self.session_groups.iter().any(|g| g.is_dubious());
 
         let rows: Vec<Vec<String>> = self
             .session_groups
@@ -466,16 +403,16 @@ impl PowerEstimatesReport {
             .enumerate()
             .map(|(i, g)| {
                 let mut row = vec![
-                    group_number(i, !g.anomalies().is_empty(), any_flagged),
+                    group_number(i, g.is_dubious(), any_dubious),
                     hms(g.start()),
                     hms(g.end()),
                     mmss(g.duration()),
                     g.size().to_string(),
                     format!("{:.3}", g.agg_avg_power()),
                 ];
-                if any_doubtful {
-                    row.push(g.size_in(View::DIRECT_NARROW).to_string());
-                    row.push(format!("{:.3}", g.agg_avg_power_in(View::DIRECT_NARROW)));
+                if any_dubious {
+                    row.push(g.size_in(View::MinOverlap).to_string());
+                    row.push(format!("{:.3}", g.agg_avg_power_in(View::MinOverlap)));
                 }
                 row
             })
@@ -483,10 +420,8 @@ impl PowerEstimatesReport {
 
         let mut headers = vec!["#", "From", "To", "Len", "Count", "kW"];
         let mut align = vec![Right, Left, Left, Right, Right, Right];
-        if any_doubtful {
-            headers[4] = "Direct Count";
-            headers[5] = "Direct kW";
-            headers.extend(["Narrow Count", "Narrow kW"]);
+        if any_dubious {
+            headers.extend(["Min Count", "Min kW"]);
             align.extend([Right, Right]);
         }
         out.push(table(&headers, &rows, &align));
@@ -500,22 +435,14 @@ impl PowerEstimatesReport {
             "",
         ));
 
-        if any_doubtful {
+        if any_dubious {
             out.push(String::new());
             out.push(wrap(
-                "\"Direct\" counts every member, \"Narrow\" only those whose overlap with the \
-                 interval is certain; the two differ exactly where a member is daggered under \
-                 Group membership.",
-                "",
-            ));
-        }
-
-        if any_flagged {
-            out.push(String::new());
-            out.push(wrap(
-                "An asterisk marks a group holding more sessions than a single panel can run at \
-                 once. \"Clamped\" estimates were computed over a subset of them; the figures are \
-                 under Anomalies",
+                "An asterisk marks a dubious group: one holding two sessions that need not have \
+                 overlapped each other, because one is reported as ending in the same minute the \
+                 other is reported as starting. \"Count\" and \"kW\" take its membership at face \
+                 value; \"Min Count\" and \"Min kW\" assume as little overlap as the reported \
+                 times allow. They differ on exactly the marked rows.",
                 "",
             ));
         }
@@ -530,38 +457,10 @@ impl PowerEstimatesReport {
         out.push(h2("Group membership"));
         out.push(String::new());
         for (i, g) in self.session_groups.iter().enumerate() {
-            let ids: Vec<String> = g
-                .session_iter()
-                .map(|s| {
-                    if s.overlap_is_certain() {
-                        s.id.clone()
-                    } else {
-                        format!("{}{DOUBTFUL}", s.id)
-                    }
-                })
-                .collect();
+            let ids: Vec<String> = g.session_iter().map(|s| s.id.clone()).collect();
             // Wrapped rather than put in a table cell: a markdown row is one line, so a group of
             // twelve sessions could not be broken across lines inside one.
             out.push(wrap(&format!("- Group {i} - {}", ids.join(", ")), "  "));
-        }
-
-        // Without this the boundary axis is invisible per group: the estimates would show a
-        // "Narrow" set and nothing here would say which member accounts for the difference.
-        if self
-            .session_groups
-            .iter()
-            .any(|g| g.session_iter().any(|s| !s.overlap_is_certain()))
-        {
-            out.push(String::new());
-            out.push(wrap(
-                &format!(
-                    "{DOUBTFUL} marks a session whose overlap with the interval is not certain, \
-                     its reported times leaving it undecidable. Such a session is counted in the \
-                     main estimates and left out of the \"Narrow\" ones; the reason is under \
-                     Anomalies."
-                ),
-                "",
-            ));
         }
         out.push(String::new());
         out.push(String::new());
@@ -571,14 +470,7 @@ impl PowerEstimatesReport {
         out.push(h2("Anomalies"));
         out.push(String::new());
 
-        let group_findings: Vec<(usize, &SessionGroup, GroupAnomaly)> = self
-            .session_groups
-            .iter()
-            .enumerate()
-            .flat_map(|(i, g)| g.anomalies().into_iter().map(move |a| (i, g.as_ref(), a)))
-            .collect();
-
-        if self.session_anomalies.is_empty() && group_findings.is_empty() {
+        if self.session_anomalies.is_empty() {
             out.push(wrap(
                 "None. Every session considered for this interval was well formed.",
                 "",
@@ -587,91 +479,42 @@ impl PowerEstimatesReport {
             return;
         }
 
-        if !self.session_anomalies.is_empty() {
-            let rows: Vec<Vec<String>> = self
-                .session_anomalies
-                .iter()
-                .map(|a| {
-                    vec![
-                        a.row.to_string(),
-                        a.session_id.clone(),
-                        a.kind.as_str().to_owned(),
-                    ]
-                })
-                .collect();
-            out.push(table(
-                &["Row", "Session", "Anomaly"],
-                &rows,
-                &[Right, Left, Left],
-            ));
-            out.push(String::new());
-            out.push(wrap(
-                "Row numbers are workbook rows, so each one can be looked up directly.",
-                "",
-            ));
-            out.push(String::new());
+        let rows: Vec<Vec<String>> = self
+            .session_anomalies
+            .iter()
+            .map(|a| {
+                vec![
+                    a.row.to_string(),
+                    a.session_id.clone(),
+                    a.kind.as_str().to_owned(),
+                ]
+            })
+            .collect();
+        out.push(table(
+            &["Row", "Session", "Anomaly"],
+            &rows,
+            &[Right, Left, Left],
+        ));
+        out.push(String::new());
+        out.push(wrap(
+            "Row numbers are workbook rows, so each one can be looked up directly.",
+            "",
+        ));
+        out.push(String::new());
 
-            // The prose comes from each kind's `Display`, so there is one wording to maintain
-            // rather than a second copy here that could drift from it. Only kinds actually present
-            // are explained.
-            let mut seen: Vec<AnomalyKind> = Vec::new();
-            for a in &self.session_anomalies {
-                if !seen.contains(&a.kind) {
-                    seen.push(a.kind);
-                }
-            }
-            for kind in seen {
-                out.push(wrap(&format!("- {} - {}.", kind.as_str(), kind), "  "));
+        // The prose comes from each kind's `Display`, so there is one wording to maintain rather
+        // than a second copy here that could drift from it. Only kinds actually present are
+        // explained.
+        let mut seen: Vec<AnomalyKind> = Vec::new();
+        for a in &self.session_anomalies {
+            if !seen.contains(&a.kind) {
+                seen.push(a.kind);
             }
         }
-
-        if !group_findings.is_empty() {
-            if self.session_anomalies.is_empty() {
-                // Otherwise the section would open straight into a table with nothing saying what
-                // it is or why the per-session table is missing.
-                let n = group_findings.len();
-                out.push(wrap(
-                    &format!(
-                        "No session was anomalous, but {}:",
-                        if n == 1 {
-                            "one group was".to_owned()
-                        } else {
-                            format!("{n} groups were")
-                        }
-                    ),
-                    "",
-                ));
-                out.push(String::new());
-            } else {
-                out.push(String::new());
-            }
-            let rows: Vec<Vec<String>> = group_findings
-                .iter()
-                .map(|(i, g, a)| {
-                    vec![
-                        i.to_string(),
-                        hms(g.start()),
-                        hms(g.end()),
-                        g.size().to_string(),
-                        g.size_in(View::CLAMPED).to_string(),
-                        a.as_str().to_owned(),
-                    ]
-                })
-                .collect();
-            out.push(table(
-                &["Group", "From", "To", "Reported", "Included", "Anomaly"],
-                &rows,
-                &[Right, Left, Left, Right, Right, Left],
-            ));
-            out.push(String::new());
-            let mut seen: Vec<&'static str> = Vec::new();
-            for (_, _, a) in &group_findings {
-                if !seen.contains(&a.as_str()) {
-                    seen.push(a.as_str());
-                    out.push(wrap(&format!("- {} - {}.", a.as_str(), a), "  "));
-                }
-            }
+        for kind in seen {
+            out.push(wrap(&format!("- {} - {}.", kind.as_str(), kind), "  "));
         }
+
         out.push(String::new());
     }
 }
@@ -757,8 +600,7 @@ mod test {
 
     /// Builds a report over `sessions` without touching the filesystem.
     fn report_of(sessions: Vec<RSession>, anomalies: Vec<Anomaly>) -> PowerEstimatesReport {
-        let mut sessions = sessions;
-        let groups = groups_for_interval((ts(LO), ts(HI)), &mut sessions);
+        let groups = groups_for_interval((ts(LO), ts(HI)), &sessions);
         PowerEstimatesReport {
             excluded_sessions: Vec::new(),
             source: PathBuf::from("/tmp/Session_Report_Test.xlsx"),
@@ -831,36 +673,39 @@ mod test {
         assert!(md.contains("| Breaker-spec-based | 20.100 |"), "{md}");
         assert!(md.contains("- Group 0 - S00, S01, S02"), "{md}");
         assert!(md.contains("None. Every session considered"), "{md}");
-        // Nothing clamped, so no marker slot and no second estimate table.
+        // No group in doubt, so no marker slot and no second estimate table.
         assert!(md.contains("| # |"), "{md}");
-        assert!(!md.contains("\"Clamped\""), "{md}");
+        assert!(!md.contains("\"Minimum overlap\""), "{md}");
+        assert!(!md.contains("Min Count"), "{md}");
     }
 
-    /// The clamped path, which no fixture or real report reaches.
+    /// A dubious group: `E` is reported as ending in the same minute `S` is reported as starting,
+    /// so the minute they share may hold both of them or one at a time. Both readings are printed,
+    /// the group is marked, and the group table grows the two columns that show the difference.
     #[test]
-    fn oversized_group_renders_both_estimate_sets_and_marks_the_group() {
-        let report = report_of(concurrent(12), Vec::new());
+    fn dubious_group_renders_both_estimate_sets_and_marks_the_group() {
+        let sessions = vec![
+            rsession("E", "2026-06-01T20:02:00Z", "2026-06-01T20:05:00Z", 5.0),
+            rsession("S", "2026-06-01T20:04:00Z", "2026-06-01T20:30:00Z", 4.0),
+        ];
+        let report = report_of(sessions, Vec::new());
         let md = report.to_markdown();
         assert_plain_text_safe(&md);
 
         assert!(
-            md.contains("\"Direct\" - every session counted, no panel constraint:"),
+            md.contains("\"Nominal\" - every group's membership taken at face value:"),
             "{md}"
         );
-        assert!(
-            md.contains("\"Clamped\" - assuming one panel, capped at 10 concurrent"),
-            "{md}"
-        );
-        // No session's overlap is in doubt here, so the boundary axis contributes nothing.
-        assert!(!md.contains("narrow"), "{md}");
-        // Direct sums all 12; clamped sums 10.
-        assert!(md.contains("| Consumption-based  | 12.000 |"), "{md}");
-        assert!(md.contains("| Consumption-based  | 10.000 |"), "{md}");
-        // The group carries the marker, and the footnote explaining it appears.
-        assert!(md.contains("| 0* |"), "{md}");
-        assert!(md.contains("An asterisk marks a group"), "{md}");
-        assert!(md.contains("ClampedSessionGroup"), "{md}");
-        assert!(md.contains("| Group | From"), "{md}");
+        assert!(md.contains("\"Minimum overlap\" - assuming"), "{md}");
+        // Nominal sums both; minimum overlap keeps only the larger of the two.
+        assert!(md.contains("| Consumption-based  |  9.000 |"), "{md}");
+        assert!(md.contains("| Consumption-based  | 5.000 |"), "{md}");
+        // The group carries the marker, and the legend explaining it appears.
+        assert!(md.contains("| 1* |"), "{md}");
+        assert!(md.contains("An asterisk marks a dubious group"), "{md}");
+        // The per-group columns appear only when some group is dubious.
+        assert!(md.contains("Min Count"), "{md}");
+        assert!(md.contains("Min kW"), "{md}");
     }
 
     /// Every anomaly kind present gets a table row and exactly one legend entry.
@@ -1005,13 +850,19 @@ mod test {
             md.contains("| Breaker-spec-based | 33.500 | 37.500 |     5 |"),
             "{md}"
         );
-        // No session's overlap is in doubt here, so the narrow pair is withheld and the columns
-        // stay at their unqualified names.
+        // Group 5 is the one-minute sliver where D and E are reported as ending in the minute F
+        // is reported as starting, so it is dubious and carries the marker. Its minimum reading is
+        // group 4's membership exactly - the case where F had not yet started.
         assert!(
-            md.contains("| 5 | 16:34:00 | 16:35:00 |  1:00 |     5 | 31.400 |"),
+            md.contains(
+                "| 5* | 16:34:00 | 16:35:00 |  1:00 |     5 | 31.400 |         4 | 24.700 |"
+            ),
             "{md}"
         );
-        assert!(!md.contains("Narrow Count"), "{md}");
+        assert!(
+            md.contains("| Consumption-based  | 24.700 | 26.000 |     4 |"),
+            "the tie with group 4 goes to the group that is not dubious: {md}"
+        );
         assert!(md.contains("- Group 5 - A, C, D, E, F"), "{md}");
 
         std::fs::remove_dir_all(&dir).ok();

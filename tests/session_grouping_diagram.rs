@@ -13,7 +13,7 @@
 
 use ev_peak_contrib::{
     EV_POWER_FACTOR, EVOLUTE_BREAKER_KVA_RATING, EVOLUTE_BREAKER_KW_RATING,
-    SESSION_BOUNDARY_RESOLUTION, SessionGroup, max_power_estimates_for_interval,
+    SESSION_BOUNDARY_RESOLUTION, SessionGroup, View, max_power_estimates_for_interval,
     session_csv_to_xlsx, session_list,
 };
 use jiff::Timestamp;
@@ -130,47 +130,77 @@ fn diagram_scenario_produces_the_expected_tiling_and_estimates() {
         assert!((got - want).abs() < 1e-9, "group {i}: {got} != {want}");
     }
 
-    // Nothing here is worth flagging: seven clean sessions, all of them reaching well past the
-    // boundary margin.
+    // Nothing here is worth flagging: seven clean, mutually consistent sessions.
     assert!(
         report.session_anomalies.is_empty(),
         "{:?}",
         report.session_anomalies
     );
 
-    // Both estimates peak at group 5. With every session near the breaker rating the aggregate can
-    // only track the count, so the two can diverge just when the maximum count is reached by more
-    // than one group — which it is not here.
     let estimates = report
         .estimates
         .expect("some session intersects the interval");
-    let direct = &estimates.direct;
-    assert_eq!(direct.consumption_based_kw.session_group_idx, 5);
-    assert_eq!(direct.breaker_specs_based_kw.session_group_idx, 5);
 
-    assert!((direct.consumption_based_kw.value - 31.4).abs() < 1e-9);
-    assert!((direct.consumption_based_kva.value - 31.4 / EV_POWER_FACTOR).abs() < 1e-9);
-    assert!((direct.breaker_specs_based_kw.value - 5.0 * EVOLUTE_BREAKER_KW_RATING).abs() < 1e-9);
-    assert!((direct.breaker_specs_based_kva.value - 5.0 * EVOLUTE_BREAKER_KVA_RATING).abs() < 1e-9);
+    // The nominal estimates peak at group 5, the sliver, on both figures.
+    let nominal = &estimates.nominal;
+    assert_eq!(nominal.consumption_based_kw.session_group_idx, 5);
+    assert_eq!(nominal.breaker_specs_based_kw.session_group_idx, 5);
 
-    // An estimate can name the group it came from, and say whether that group was cut down. The
-    // biggest group here holds five sessions, half the panel limit, so nothing is.
-    assert_eq!(direct.consumption_based_kw.group().size(), 5);
+    assert!((nominal.consumption_based_kw.value - 31.4).abs() < 1e-9);
+    assert!((nominal.consumption_based_kva.value - 31.4 / EV_POWER_FACTOR).abs() < 1e-9);
+    assert!((nominal.breaker_specs_based_kw.value - 5.0 * EVOLUTE_BREAKER_KW_RATING).abs() < 1e-9);
+    assert!(
+        (nominal.breaker_specs_based_kva.value - 5.0 * EVOLUTE_BREAKER_KVA_RATING).abs() < 1e-9
+    );
+
+    // An estimate can name the group it came from.
+    assert_eq!(nominal.consumption_based_kw.group().size(), 5);
     assert_eq!(
-        direct.consumption_based_kw.group().start(),
+        nominal.consumption_based_kw.group().start(),
         groups[5].start()
     );
-    assert!(direct.consumption_based_kw.group_anomalies().is_empty());
 
-    // No group reaches the panel limit, so clamping would change nothing and no clamped set is
-    // produced at all. It appears only when the report claims more concurrent sessions than one
-    // panel's PLC will run.
-    assert!(estimates.clamped.is_none());
+    // Group 5 is the only dubious one: D and E are reported as ending in the minute F is reported
+    // as starting, so whether the five ever drew together is exactly what the report cannot say.
+    // Every other group is wider than a minute, and no arrangement of the true times can separate
+    // any pair inside one.
+    for (i, g) in groups.iter().enumerate() {
+        assert_eq!(g.is_dubious(), i == 5, "group {i}");
+    }
+
+    // Its minimum reading is `{A, C, D, E}` — the case where F had not started yet — which is
+    // group 4's membership exactly, and so its aggregate exactly.
+    assert_eq!(groups[5].size_in(View::MinOverlap), 4);
+    assert_eq!(
+        groups[5].agg_avg_power_in(View::MinOverlap),
+        groups[4].agg_avg_power(),
+        "the minimum reading of group 5 is group 4's membership, to the bit"
+    );
+
+    // So the second set is given, and both figures fall.
+    let min_overlap = estimates
+        .min_overlap
+        .as_ref()
+        .expect("group 5 is dubious and carries both peaks");
+    assert!((min_overlap.consumption_based_kw.value - 24.7).abs() < 1e-9);
+    assert!(
+        (min_overlap.breaker_specs_based_kw.value - 4.0 * EVOLUTE_BREAKER_KW_RATING).abs() < 1e-9
+    );
+
+    // Group 4 reaches 24.7 kW beyond doubt while group 5 only may, so the tie is attributed to
+    // group 4 — the peak moves between the two sets.
+    assert_eq!(min_overlap.consumption_based_kw.session_group_idx, 4);
+    assert_eq!(min_overlap.breaker_specs_based_kw.session_group_idx, 4);
+
+    // The ordering holds on all four figures.
+    for (m, n) in min_overlap.values().iter().zip(nominal.values()) {
+        assert!(*m <= n, "{m} <= {n}");
+    }
 
     // The brackets from README, "Estimation logic": the consumption-based figure is the lower end
     // of each pair, the breaker-spec figure the upper.
-    assert!(direct.consumption_based_kw.value < direct.breaker_specs_based_kw.value);
-    assert!(direct.consumption_based_kva.value < direct.breaker_specs_based_kva.value);
+    assert!(nominal.consumption_based_kw.value < nominal.breaker_specs_based_kw.value);
+    assert!(nominal.consumption_based_kva.value < nominal.breaker_specs_based_kva.value);
 
     fs::remove_dir_all(xlsx.parent().unwrap()).ok();
 }

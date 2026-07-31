@@ -28,8 +28,8 @@ between 5.9 and 6.7 kW — what Evolute's smart breakers allow — so none of th
 Two coincidences carry most of the interest. **D and E both report ending at 16:34, the same minute
 F reports starting.** And **C and F both report ending at 16:42.**
 
-No group here reaches the panel's concurrency limit of ten, so only the `direct` estimates are
-reported and no `clamped` set is produced. See README.md, "Limitations".
+The first coincidence is what makes group 5 below **dubious**, so this arrangement produces both
+estimate sets. See README.md, "Dubious groups".
 
 ## The groups
 
@@ -61,7 +61,7 @@ The session report gives start and end times to the minute, with no seconds. A s
 end at 16:34 actually ended at some unknown instant in `[16:34:00, 16:35:00)`. The ingestion step
 therefore computes `Adj_conn_end` as the reported end plus 60 seconds — the *exclusive* end of the
 window the true end lies in — so that wherever in that minute the session really stopped, it falls
-inside the session as recorded. See README.md, "Session boundaries".
+inside the session as recorded. See README.md, "Boundaries and the time grid".
 
 That padding is what produces group 5. D and E are recorded as running until 16:35:00, while F is
 recorded as starting at 16:34:00 — so for that whole minute all five sessions are drawing at once:
@@ -89,8 +89,8 @@ resolution the report states session boundaries at, and the software carries tha
 
 ## The estimates
 
-Group 5 carries both the highest aggregate power and the highest session count, so both estimates
-are drawn from it:
+Group 5 carries both the highest aggregate power and the highest session count, so both **nominal**
+estimates are drawn from it:
 
 | | kW | kVA | From group |
 |---|---|---|---|
@@ -101,11 +101,37 @@ The consumption figure is the sum of the five sessions' average power. The break
 5 × 6.7 kW and 5 × 7.5 kVA, the smart breaker ratings. Together they bracket the true peak: the
 actual demand lay somewhere between 31.4 and 33.5 kW.
 
-The two estimates land on the same group here, and with Evolute's infrastructure that is the usual
-case — every session is capped near 6.7 kW, so aggregate power tracks session count closely. The two
-can still select *different* groups when several groups tie on the highest count, since the tie is
-broken by taking the earliest while the consumption figure is free to peak at any of them. That is
-what happens in the June 2026 sample report.
+## Why group 5 is dubious, and what the second set says
+
+Group 5 is one minute long, which is the only width at which a group's membership can be in doubt.
+Sorting its five members by where each one sits relative to the group's two ends:
+
+| session | `Conn_start` | `Adj_conn_end` | class | what is certain |
+|---|---|---|---|---|
+| A | 15:54 | 17:04 | spans | running throughout the minute |
+| C | 16:08 | 16:43 | spans | running throughout the minute |
+| D | 16:24 | **16:35** | ends inside | its true end falls in the minute |
+| E | 16:20 | **16:35** | ends inside | its true end falls in the minute |
+| F | **16:34** | 16:43 | starts inside | its true start falls in the minute |
+
+A session ending inside the group and one starting inside it may have overlapped for part of the
+minute or may merely have abutted, and the reported times cannot say which. Because both classes
+are occupied, group 5 is **dubious** and a second estimate set is reported.
+
+Its minimum reading keeps A and C — which certainly span the minute — and then the better of the two
+movable classes: D and E together at 12.5 kW, against F alone at 6.7 kW. So the minimum is
+`(6.0 + 6.2) + (6.6 + 5.9) = 24.7 kW` over four sessions, against 31.4 kW over five:
+
+| | kW | kVA | From group |
+|---|---|---|---|
+| Consumption-based | 24.700 | 26.000 | 4 |
+| Breaker-spec-based | 26.800 | 30.000 | 4 |
+
+Both figures name group **4**, not 5. That is not a coincidence of arithmetic: group 5's minimum
+reading is `{A, C, D, E}`, which is group 4's membership exactly — the minimum-overlap case is
+precisely the case where F had not started yet. The two therefore tie at 24.7 kW and at four
+sessions, and a tie is attributed to the group that reached the figure beyond doubt. Group 4 did;
+group 5 only may have.
 
 ## Regenerating the figure
 

@@ -48,7 +48,7 @@ The two DST transitions are treated differently, because they are different prob
 
 The conversion from CSV to Excel includes the addition of new fields:
 
-- `Adj_conn_end`, is computed as: `Conn_DateTime_End + 60 seconds`. It is the session's **exclusive** end: a session starting at exactly this time does not overlap this one.
+- `Adj_conn_end`, is computed as: `Conn_DateTime_End + SESSION_BOUNDARY_RESOLUTION` (currently 60 seconds). It is the session's **exclusive** end: a session starting at exactly this time does not overlap this one.
 - `Adj_conn_duration`, is computed as: `Adj_conn_end - Conn_DateTime_Start`.
 - `Conn_start_UTC`, `Conn_end_UTC`, and `Adj_conn_end_UTC`, with UTC values corresponding to the corresponding local time fields.
 - `Avg_power` in kW, is computed as: `Energy_Use / (Active_Charge_Time * 24)`.
@@ -75,42 +75,33 @@ Given a time interval of interest **`I`** as described above, the estimation of 
 - These four values provide brackets for the EV peak power demand during the interval of interest `I`:
   - The actual peak kW associated with EV charging activity during `I` is likely between `consumption_based_kw` and `breaker_spec_based_kw`.
   - The actual peak kVA associated with EV charging activity during `I` is likely between `consumption_based_kva` and `breaker_spec_based_kva`.
-- These four values are the **`direct`** estimates: computed from the `SessionGroup`s exactly as the report gives them. A second set, the **`narrow`** estimates, is reported *only* when there is at least one [narrow](#narrow-groups) group.
-- The software detects data anomalies in the reported session data. Anomalies associated with every session that **intersects `I`** are reported alongside the estimates, as well as anomalies that caused sessions to be excluded from the analysis. Other sessions elsewhere in the workbook are not included in report.
+- These four values are the **`nominal`** estimates: computed from the `SessionGroup`s exactly as the report gives them. A second set, the **`min_overlap`** estimates, is reported when [dubious](#sessions-groups-and-doubt) groups make its figures differ from the `nominal` ones.
+- The software detects data anomalies in the reported session data. Anomalies associated with every session that **intersects `I`** are reported alongside the estimates, as well as anomalies that caused sessions to be excluded from the analysis. Other sessions elsewhere in the workbook are not included in the report.
 
-#### Session and group boundaries
+### Sessions, groups, and doubt
 
-Sessions, `SessionGroup`s, and intervals of interest are treated as half-open intervals which include the left end but exclude the right end. Because reported session start and end times are currently truncated to whole minutes, this software calculates an adjusted session end time, **`Adj_conn_end`**, by adding `SESSION_BOUNDARY_RESOLUTION` (currently 60 seconds) to the reported end time, to ensure the actual charge time is fully included between the session's start (inclusive) and end (exclusive).
+Sessions, `SessionGroup`s, and intervals of interest are all **half-open**: each includes its left end-point and excludes its right one. Consecutive groups therefore meet at a single instant belonging to the later one, so no instant falls in two groups, and *abutting* stays distinguishable from *overlapping* — a distinction the estimates turn on. See [Boundaries and the time grid](#boundaries-and-the-time-grid).
 
-Like sessions, group boundaries are constrained to lie on a **time grid** aligned to multiples of `SESSION_BOUNDARY_RESOLUTION`.
+`SESSION_BOUNDARY_RESOLUTION` — written **`R`** below, currently 60 seconds — is exactly the resolution at which the session report states session **start and end times**. It is not the resolution of everything in the report: `Conn_Duration` and `Active_Charge_Time` are stated more finely, and several of the Technical Notes depend on that difference.
 
-Half-open is what makes session groups properly cover all sessions over the interval of interest without overlaps between groups: consecutive groups meet at a single instant that belongs to the later one, so no instant falls in two groups. Closed intervals (i.e., the end is included) cannot do this — adjacent groups would either share an instant, and so disagree about which sessions were active at it, or leave a one-tick gap. It is also what makes *abutting* distinguishable from *overlapping*, which is significant for the estimates.
+A time stated to the minute is the true time truncated down to the minute, so a session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`. The software therefore records an adjusted end, **`Adj_conn_end`**, one `R` past the reported end — the exclusive bound that contains the true end wherever in that minute it fell. That the report truncates rather than rounds is an assumption; see [Assumptions](#assumptions).
 
-The padding is 60 seconds rather than 59 for the same reason. A session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`, so `16:35:00` — exclusive — is the bound that contains it wherever it fell.
+What truncation leaves behind is a residual doubt the estimates have to answer for. Where one session is reported to end in the same minute another is reported to start, the two may have genuinely overlapped for part of that minute, or may merely have abutted; the reported times cannot say which. A group in which that question is live is called a ***dubious*** group:
 
-#### Narrow groups
+> A group is **dubious** when it has two members that need not have overlapped each other.
 
-If a group's duration is exactly `SESSION_BOUNDARY_RESOLUTION`  then its membership and size are ambiguous.
+Only a group exactly one `R` long can be dubious, and not every such group is — see [Dubious groups](#dubious-groups). For a dubious group the software computes two readings: **`max`**, taking the group's reported membership at face value, and **`min`**, assuming as little overlap as the reported times allow.
 
-- In order for the group to truly exist, it must contains at least one session `s1` that ends inside the group or at least one session `s2` that starts inside the group.
-- If it contains both a session `s1` that ends inside the group and a session `s2` that starts inside the group and the true end of `s1` is less than the true start of `s2`, then they don't overlap, so the group size overstates the number of concurrent sessions in the group.
+### The two estimate sets
 
--  If the above condition holds and `s1` and `s2` are the only sessions in the group, then the group could conceptually be split into two subgroups occupying the same place on the time grid -- one subgroup containing just `s1` and the other containing just `s2`.
+An ***estimate set*** consists of the following values: `consumption_based_kw`, `consumption_based_kva`, `breaker_spec_based_kw`, and `breaker_spec_based_kva`.
 
-Groups of duration `SESSION_BOUNDARY_RESOLUTION` are called ***narrow*** groups and need special treatment in the software, which will report two estimates for the group: one corresponding to the case where the group's membership is taken at face value and there is maximum possible session overlap (designated the **`max`** case) and the other corresponding to the case where there is minimum possible session overlap (designated the **`min`** case).
+- **`nominal`** uses the `max` reading of every dubious group. It is always given, and it is the figure to quote when only one is wanted.
+- **`min_overlap`** uses the `min` reading instead. It is given only when its figures differ from the `nominal` ones: a dubious group that carries no peak changes no reported number, and a report never shows the same four figures twice.
 
-For groups of duration greater than `SESSION_BOUNDARY_RESOLUTION`, there is no ambiguity regarding session membership and size.
+`min_overlap <= nominal` on all four figures, always. Each figure names the `SessionGroup` it was drawn from, and the two sets may name different groups — lowering a dubious group can hand the peak to one that was never in doubt. Where two groups tie on a figure, the one whose figure is certain is the one named. Dubious groups are marked in the report's group table whether or not a second estimate set appears.
 
-#### The two possible estimate sets
-
-An  ***estimate set*** consists of the following values: `consumption_based_kw`, `consumption_based_kva`, `breaker_spec_based_kw`, and `breaker_spec_based_kva`.
-
-If there are no narrow groups, only one estimate set is given.
-
-If there is at least one narrow group then two estimate sets are given:
-
-- **`direct`**:  which uses the `max` estimates for the narrow groups;
-- **`narrow`**:  which uses the `min` estimates for the narrow groups.
+A worked example, kept current by a golden-file test: [`tests/fixtures/Session_Report_Diagram.report.md`](tests/fixtures/Session_Report_Diagram.report.md), walked through step by step in [`docs/session-grouping.md`](docs/session-grouping.md).
 
 ## Technical Notes
 
@@ -177,46 +168,86 @@ ids the second copy would be silently discarded on insertion, defeating the purp
 it. Note also that **both copies carry the full `Energy_Use`**, so a duplicated session contributes
 to the peak in both candidate hours.
 
-### `min` and `max` estimates for narrow groups
+### Boundaries and the time grid
 
-The `max` estimates for a narrow group are the `direct` estimates themselves.
+Half-open is what makes session groups properly cover all sessions over the interval of interest without overlaps between groups: consecutive groups meet at a single instant that belongs to the later one, so no instant falls in two groups. Closed intervals (i.e., the end is included) cannot do this — adjacent groups would either share an instant, and so disagree about which sessions were active at it, or leave a one-tick gap. It is also what makes *abutting* distinguishable from *overlapping*, which is significant for the estimates.
 
-The `min` estimates for a narrow group `g` spanning the interval `[g.start, g.end)` are defined in terms of a thought experiment:
+The padding is a full `R` rather than one tick less for the same reason. A session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`, so `16:35:00` — exclusive — is the bound that contains it wherever it fell.
 
-- Take `[g.start, g.end)`as the interval of interest in an arbitrarily fine time grid.
-- For each session `s` participating in group `g`, define a legal nudged version of `s`:
-  - If `s` starts before and ends after `g` then its end-points remain unchanged.
-  - If `s` starts before `g` and ends in `g`, i.e., `s.conn_end <= g.end`: let`nudge(s, ε)` be the modification of `s` by adding a small positive or negative `ε` to `s.conn_end` while keeping the nudged session ending within `g`.
-  - If `s` ends after `g` and starts in `g`, i.e., `s.conn_start >= g.start`: let `nudge(s, ε)` be the modification of `s` by adding a small positive or negative `ε` to `s.conn_start` while keeping the nudged session starting within `g`.
-  - If `s` lies entirely within `g`, i.e., `s.conn_start >= g.start && s.conn_end <= g.end`: let `nudge(s, ε1, ε2)` be the modification of `s` by adding small positive or negative `ε1` and `ε2` to `s.conn_start` and `s.conn_end`, respectively, while keeping the nudged session within `g`.
-- Obtain a legal nudged version of each of the participating sessions and apply the `direct` estimating algorithm to them with`[g.start, g.end)` as the interval of interest, producing a pair `(max_kw, max_size)`.
+**The time grid** is a consequence rather than a rule imposed on the software. Reported start and end times lie on the `R` grid; `Adj_conn_end` adds exactly one `R`, so it lies on it too; and an end-point clamped into the interval of interest lands on one of `I`'s own bounds, which are multiples of 15 minutes. Every group boundary therefore lies on the `R` grid, and every group duration is a multiple of `R` — **provided `R` divides 15 minutes**. That last is a requirement on the *report format*, not on this software, and the current 60 seconds satisfies it. Both claims in [Dubious groups](#dubious-groups) rest on it.
+
+### Dubious groups
+
+Every member of a group runs the group's whole span. The sweep emits the run `[run_start, time)` *before* applying any end-point at `time`, so `conn_start <= g.start` and `adj_conn_end >= g.end` for every member. No member, then, literally starts or ends inside its own group; what varies is whether each of those two relations is strict, and that is what sorts the members into four classes:
+
+| set | `conn_start` | `adj_conn_end` | what is certain |
+| --------------- | ------------ | -------------- | ----------------------------- |
+| `ba_sessions`   | `< g.start`  | `> g.end`      | runs through all of `g` |
+| `bi_sessions`   | `< g.start`  | `== g.end`     | its true end falls inside `g` |
+| `ia_sessions`   | `== g.start` | `> g.end`      | its true start falls inside `g` |
+| `ii_sessions`   | `== g.start` | `== g.end`     | both its true end-points fall inside `g` |
+
+The tests read each session's **own** `conn_start` and `adj_conn_end` — never `conn_end`, whose padding has not yet been applied, and never the end-points clamped into the interval of interest, which would make a session running through `I`'s edge look like one confined to the group.
+
+A group of duration exactly `R` is called ***narrow***. For a narrow group the right-hand column above follows exactly: a member with `adj_conn_end == g.end` has its true end in `[g.end - R, g.end)`, which *is* `[g.start, g.end)`; a member with `conn_start == g.start` has its true start in `[g.start, g.start + R)`, likewise `g`. So the members that can be moved around inside `g` are precisely those outside `ba_sessions`, and which pairs of them can be arranged not to overlap decides whether the group is dubious:
+
+| pair | can be disjoint | why |
+| ------------- | --- | ---------------------------------------------- |
+| `bi` & `ia`   | yes | one ends inside, the other starts inside |
+| `bi` & `ii`   | yes | |
+| `ia` & `ii`   | yes | |
+| `ii` & `ii`   | yes | both float freely inside `g` |
+| `bi` & `bi`   | no  | both start before `g`, so both run at `g.start` |
+| `ia` & `ia`   | no  | both run past `g.end`, so both run just before it |
+| `ba` & any    | no  | `ba` covers all of `g` |
+
+A group is therefore dubious exactly when `bi_sessions` and `ia_sessions` are both non-empty, or `ii_sessions` is non-empty and there are at least two members outside `ba_sessions`. That condition is equivalent to `min_size < size`, which is how the software tests it. A narrow group whose movable members all sit in one of `bi_sessions` or `ia_sessions` is **not** dubious, and neither is one all of whose members span it — which is possible, since a group's two boundaries can both be created by sessions that are not its members.
+
+**No group longer than `R` can be dubious.** Group durations are multiples of `R`, so a group that is not narrow is at least `2R` long. Every member's true start is before `g.start + R`, and every member's true end is at or after `g.end - R`, which is at or after `g.start + R`. Take `t` to be the latest true start among the members: `t` is at or after every true start, and `t < g.start + R <=` every true end, so every member is running at `t`. No pair can be disjoint, whatever the true times turn out to be.
+
+### `min` and `max` estimates for dubious groups
+
+The `max` estimates for a dubious group are the `nominal` estimates themselves.
+
+The `min` estimates for a dubious group `g` spanning the interval `[g.start, g.end)` are defined in terms of a thought experiment:
+
+- Take `[g.start, g.end)` as the interval of interest in an arbitrarily fine time grid.
+- For each session `s` participating in group `g`, define a legal nudged version of `s`, by the class `s` falls in above:
+  - `ba_sessions`: its end-points remain unchanged.
+  - `bi_sessions`: let `nudge(s, ε)` be the modification of `s` by adding a small positive or negative `ε` to `s.adj_conn_end` while keeping the nudged session ending within `g`.
+  - `ia_sessions`: let `nudge(s, ε)` be the modification of `s` by adding a small positive or negative `ε` to `s.conn_start` while keeping the nudged session starting within `g`.
+  - `ii_sessions`: let `nudge(s, ε1, ε2)` be the modification of `s` by adding small positive or negative `ε1` and `ε2` to `s.conn_start` and `s.adj_conn_end`, respectively, while keeping the nudged session within `g`.
+- Obtain a legal nudged version of each of the participating sessions and apply the `nominal` estimating algorithm to them with `[g.start, g.end)` as the interval of interest, producing a pair `(max_kw, max_size)`.
 - The `min` estimates for `g`:
   - The `min_agg_avg_kw` estimate is the minimum, over all possible legal nudge combinations, of the `max_kw` component of the above pairs.
   - The `min_size` estimate is the minimum, over all possible legal nudge combinations, of the `max_size` component of the above pairs.
 
-The computations of the `min` and `max` estimates for `g` are straightforward:
+The minimum is attained rather than merely approached: only the pattern of which sessions overlap affects the result, and there are finitely many such patterns.
 
-- `max` is the result of the direct estimates produced without regard for `g`'s narrow nature.
-- `min` computation:
-  - Let `ba_sessions` be the set of sessions that start before and end after `g`.
-  - Let `bi_sessions` be the set of sessions that start before and end in `g`.
-  - Let `ia_sessions` be the set of sessions that start in and end after `g`.
-  - Let `ii_sessions` be the set of sessions that start and end in `g`.
-  - Let the sum of `avg_kw` of and size of each of these sets be named by prepending the set name to `_avg_kw` and `size`, respectively.
+The computations of the `min` and `max` estimates for `g` are straightforward. Write `ba_sessions_avg_kw` for the sum of `avg_kw` over `ba_sessions` and `ba_sessions_size` for its size, and likewise for the other three sets.
 
-- `min_agg_avg_kw` is ``ba_sessions_avg_kw` plus the maximum of the following:
+- `max` is the result of the `nominal` estimates, produced without regard for `g`'s dubious nature.
+- `min_agg_avg_kw` is `ba_sessions_avg_kw` plus the maximum of the following:
   - `bi_sessions_avg_kw`.
   - `ia_sessions_avg_kw`.
   - maximum `avg_kw` over `ii_sessions`.
 - `min_size` is `ba_sessions_size` plus the maximum of the following:
-  - `bi_sessions_size`
-  - `ia_sessions_size`
+  - `bi_sessions_size`.
+  - `ia_sessions_size`.
   - `1` if `ii_sessions` is non-empty, `0` otherwise.
+
+The `ba_sessions` term is unconditional because those sessions certainly run throughout `g`; the maximum over the other three is the best arrangement available, with every `bi` member ending as early inside `g` as it can, every `ia` member starting as late as it can, and the `ii` members spread out between them. Both figures are bounded above by the corresponding `max`, since each is a sum over a subset of the same members, so `min_overlap <= nominal` follows for the whole estimate set.
+
+### Assumptions
+
+- **Session end times are truncated, not rounded.** `Adj_conn_end = Conn_DateTime_End + R` is the exclusive bound of the window the true end lies in only because the reported end is the true end rounded *down* to `R`. Under rounding to nearest, or under a convention where the reported end is the first instant the vehicle was no longer drawing power, the correct padding would differ — in the latter case it would be zero. The resolution `R` and the padding are two separate facts about the report, and only the first is settled by observation; `Questions_for_Evolute.md` carries the outstanding question about the second.
+- **Breaker ratings are uniform across panels.** `breaker_spec_based_kw` and `breaker_spec_based_kva` are a session count multiplied by a single rating, so an installation mixing breakers of different ratings would skew both. Nothing else in the estimates depends on how many panels there are or on which panel a session ran: the session report carries no panel ID, and none is needed.
+- **Clock drift is not modelled.** The interval of interest comes from Toronto Hydro's metering data and the session times from the Evolute panel, and nothing reconciles the two clocks. Drift is assumed small against `R`.
 
 ### Other
 
 - Every session in the report is written to the workbook, anomalous ones included: the sheet is a faithful rendering of the session report, and which sessions take part in an estimate is decided on the reading side.
-- Each session is checked for internal consistency, and the test is *derived* rather than chosen. Truncation puts the true start somewhere in `[Conn_start, Adj_conn_start)` and the true end somewhere in `[Conn_end, Adj_conn_end)` — two half-open windows one `SESSION_BOUNDARY_RESOLUTION` wide, the same convention used everywhere else. An honest `Conn_Duration` carries some instant of the first window to some instant of the second, so the record is sound exactly when the first window, shifted by the duration, still *meets* the second:
+- Each session is checked for internal consistency, and the test is *derived* rather than chosen. Truncation puts the true start somewhere in `[Conn_start, Conn_start + R)` and the true end somewhere in `[Conn_end, Adj_conn_end)` — two half-open windows one `R` wide, the same convention used everywhere else. An honest `Conn_Duration` carries some instant of the first window to some instant of the second, so the record is sound exactly when the first window, shifted by the duration, still *meets* the second:
 
   ```
   sound  <=>  Conn_start + Conn_Duration  <  Adj_conn_end
@@ -225,7 +256,7 @@ The computations of the `min` and `max` estimates for `g` are straightforward:
 
   Both bounds are strict, because both windows are half-open at the same end. That makes this the one band in the design that is open rather than half-open — an instance of the convention rather than an exception to it, since it is the *intersection* condition of two half-open windows and not an interval anyone chose. The band is not slack: it is precisely what truncation to whole minutes accounts for, and the sample data reaches to within 3 seconds of its lower edge.
 - A session outside that band is flagged `InconsistentDuration` and excluded from the estimates. Both directions are faults: if a record's own fields disagree by more than the reporting can explain, neither its duration nor the span the grouping logic would place it on can be relied on. The overshoot direction subsumes the case of a session ending before it starts, since with `Conn_DateTime_End` a minute or more before `Conn_DateTime_Start` no non-negative duration can satisfy the test.
-- These are the *only* sessions excluded from the estimates. The boundary margin described under *Session boundaries* flags a session rather than excluding it: a doubtful session still counts in `direct`, and only the `narrow` sets leave it out.
+- These are the *only* sessions excluded from the estimates. Nothing else removes a session: the doubt described under [Dubious groups](#dubious-groups) changes which figures a group reports, never which sessions belong to it.
 - Excluded sessions get a section of their own in the report, listing **every** one in the workbook rather than only those near the interval of interest, with a column saying whether each appears to fall in that interval. Appears only: a record whose own fields contradict each other cannot be trusted to say which window it belongs in, so filtering on that judgement could hide exactly the session a reader most needs to see.
 - Sessions with zero `Energy_Use` and non-zero `Active_Charge_Time` do not contribute to `consumption_based_kw` and `consumption_based_kva` but they do contribute to `breaker_spec_based_kw` and `breaker_spec_based_kva`.
 - A session with zero `Active_Charge_Time` delivered energy in no time at all, so its average power is unbounded or undefined.

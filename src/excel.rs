@@ -18,7 +18,7 @@ use crate::{Anomaly, AnomalyKind, SESSION_BOUNDARY_RESOLUTION, Session, time_zon
 const EXCEL_EPOCH_UNIX_SECS: i64 = -2_209_161_600;
 
 /// [`SESSION_BOUNDARY_RESOLUTION`] in the signed form the timestamp arithmetic needs.
-/// See README.md, "New fields".
+/// See README.md, "Excel workbook".
 const END_PADDING: SignedDuration =
     SignedDuration::from_secs(SESSION_BOUNDARY_RESOLUTION.as_secs() as i64);
 
@@ -121,7 +121,7 @@ const REQUIRED_HEADERS: &[&str] = &[
 ///
 /// The domain rules — the UTC conversion and its DST policy, the definitions of `Adj_conn_end` and
 /// `Adj_conn_duration`, and the treatment of zero-`Energy_Use` sessions — are specified in
-/// `README.md` under "Time zone", "New fields" and "Other". They are shared with the peak power
+/// `README.md` under "Time zone", "Excel workbook" and "Other". They are shared with the peak power
 /// contribution logic and are not restated here.
 ///
 /// What this function adds on top of those rules:
@@ -370,7 +370,7 @@ impl CsvSession {
             .into_iter()
             .map(|(start_utc, suffix)| {
                 let end_utc = self.resolve_end(tz, start_utc)?;
-                // See README.md, "New fields".
+                // See README.md, "Excel workbook".
                 let adj_end_utc = end_utc + END_PADDING;
 
                 let mut anomalies = common.clone();
@@ -689,7 +689,7 @@ fn add_comments(sheet: &mut Worksheet) {
              reported minute; the session is recorded as the half-open span [Conn_DateTime_Start, \
              Adj_conn_end), which contains it wherever in that minute it fell. Because the end is \
              excluded, a session starting at this exact time does NOT overlap this one. See \
-             README.md, \"New fields\".",
+             README.md, \"Excel workbook\".",
         ),
         (
             Source::AdjConnDuration,
