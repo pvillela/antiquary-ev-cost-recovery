@@ -169,6 +169,27 @@ fn anomalies_are_scoped_to_the_interval() {
     );
 }
 
+/// `ExcessiveAvgPower` carries its figure in the table cell, while the kind itself stays a bare
+/// token.
+///
+/// The value is written into the cell rather than onto the enum, so the workbook's `Anomalies`
+/// column remains a list of variant names `AnomalyKind::from_token` can read back, and the glossary
+/// under the table still explains each kind once rather than once per session. `EXCESS` draws 6.9 kW
+/// against a 6.7 kW breaker.
+#[test]
+fn an_excessive_average_power_is_reported_with_its_figure() {
+    let md = fs::read_to_string(fixtures().join("Session_Report_Anomalies.report.md")).unwrap();
+    assert!(
+        md.contains("| ExcessiveAvgPower(6.900) |"),
+        "the figure is missing from the cell:\n{md}"
+    );
+    // The glossary explains the kind, so it names the kind and not one session's figure.
+    assert!(
+        md.contains("- ExcessiveAvgPower - average power above"),
+        "the glossary entry is missing or carries a figure:\n{md}"
+    );
+}
+
 /// A skew margin is reported when it beats the interval of interest, and dropped when it does not —
 /// each margin judged on its own.
 ///

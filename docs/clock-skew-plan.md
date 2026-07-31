@@ -116,6 +116,63 @@ estimate sets.
 This is the ordinary narrow-group rule with `g` happening to be the strip. Nothing about strips
 changes it.
 
+## `AnomalyKind::ExcessiveAvgPower`
+
+Not part of the clock-skew work, and folded in here because building the skew-margin fixture is what
+surfaced it. A first draft of that fixture gave its sessions 21 kW apiece, and the report printed:
+
+```
+The likely kW values are in the range from 41.429 kW (consumption-based) to
+13.400 kW (breaker-spec-based).
+```
+
+The bracket inverted. `consumption_based_kw` is a group's aggregate average power while
+`breaker_spec_based_kw` is that group's member count times a single rating, so the first exceeds the
+second whenever a session draws more than the rating — which the hardware is supposed to make
+impossible, and which nothing in the code checked. The fixture was corrected to stay under the
+rating; the gap it exposed is closed by a new anomaly kind.
+
+12. **The kind carries no payload.** `AnomalyKind` stays a plain classification and the figure is
+    written into the report cell instead — `ExcessiveAvgPower(6.900)`. A payload would have cost
+    three things: the `as_str`/`from_token` round-trip through the workbook's `Anomalies` column
+    would have had to encode and re-parse a float; `Eq` would have gone (an `f64` is not `Eq`), and
+    with it exact comparison of kinds; and the report's glossary, which deduplicates on the kind,
+    would have printed one explanatory line per *session* rather than one per kind — silently, since
+    it still compiles.
+
+13. **Raised in `excel.rs`, with the other kinds.** So it reaches the workbook's `Anomalies` column
+    and round-trips like the rest. Detecting it at report time would leave it invisible in the sheet.
+
+14. **Informational only.** The session still takes part in every estimate. The figure says something
+    is wrong with `Energy_Use` or `Active_Charge_Time` but not which, or whether either is;
+    `InconsistentDuration` remains the only kind that excludes a session, as README.md, "Other"
+    states.
+
+15. **The test is `avg_power > EVOLUTE_BREAKER_KW_RATING`, exactly, with no tolerance.** An earlier
+    draft rounded to the nearest 0.1 kW — equivalently `>= 6.75` — on the grounds that the report
+    prints three decimals and a smaller discrepancy is invisible beside the figure. That was
+    abandoned: it left a band, `(6.7, 6.75)`, in which a session inverts the bracket without being
+    flagged, and members sitting in that band invert a group by up to 0.05 kW each, which *is*
+    visible at three decimals.
+
+    Exactness buys a clean guarantee. A group prints a backwards range only when its aggregate
+    exceeds its member count times the rating, which by the pigeonhole principle requires some member
+    above the rating — and every such member is now flagged. An inverted bracket therefore always has
+    a flagged session behind it.
+
+    The price is that a session meant to sit exactly at the rating may or may not be flagged, since
+    `Energy_Use / Active_Charge_Time` need not land on `6.7` in binary floating point. It errs
+    towards reporting, which is the right direction for a flag that excludes nothing.
+
+16. **The figure is looked up from the tilings.** An anomaly record carries a row, an id and a kind
+    and nothing else, so the renderer builds a session id → `avg_power` map from every tiling it
+    holds. Every session with an anomaly intersects one of the three windows and so appears in some
+    group of that window, which makes the lookup total. The excluded-sessions table needs no lookup —
+    it holds the `Session` values themselves.
+
+    A spike's figure is the one the estimating logic substituted, not the sheet's `#DIV/0!`. That is
+    the number that fed the totals, which is the one worth seeing.
+
 ## README changes
 
 1. **§Estimation logic — the four-value bullet list.** After the bracket bullets, a short passage:
@@ -143,6 +200,11 @@ changes it.
 
 7. **Fix in passing**: "Includine" → "Include", and the stray leading space indenting the paragraph
    and list at the section's head.
+
+8. **§Assumptions, breaker-ratings bullet.** A sub-bullet for `ExcessiveAvgPower`: a session drawing
+   above the rating contradicts that assumption directly, is flagged rather than excluded, and would
+   invert the reported bracket if its group's aggregate exceeded the member count times the rating.
+   States the rounded comparison (decisions 12–16).
 
 ## Code changes
 
@@ -194,11 +256,25 @@ changes it.
    `interval_length` and `mmss` assume at most an hour; a strip is 60s, so they are safe, but check
    the assumption rather than inherit it.
 
-7. **Tests.** `tests/report_rendering.rs` and both golden fixtures under `tests/fixtures/` are
+7. **`ExcessiveAvgPower`.** The variant, its `as_str`/`from_token` tokens and its `Display` prose in
+   `src/common.rs`; the test in `src/excel.rs`, in the `else` arm of the zero-charge-time branch so a
+   spike cannot collect both; and `anomaly_cell` in `src/report.rs`, used by both the anomalies table
+   and the excluded-sessions table so the same kind renders one way in both.
+
+8. **Tests.** `tests/report_rendering.rs` and both golden fixtures under `tests/fixtures/` are
    affected — at minimum by the widened anomaly scope, whether or not a strip qualifies. Add coverage
-   where a strip beats `I` and where it does not, so the trigger is exercised in both directions.
-   `docs/session-grouping.md` walks the diagram fixture through step by step and will need a note if
-   that fixture's output changes.
+   where a strip beats `I` and where it does not, so the trigger is exercised in both directions, and
+   one session drawing above the breaker rating. `docs/session-grouping.md` walks the diagram fixture
+   through step by step and will need a note if that fixture's output changes.
+
+   A fixture that exercises `ExcessiveAvgPower` must keep its *groups* under the rating even while
+   one session exceeds it, or the golden file bakes in the inverted bracket sentence and reads as an
+   endorsement of it.
+
+   Expect existing `excel` tests to start failing: their records were built with a flat
+   `energy_use: 10.0` regardless of duration, drawing 12–20 kW, and two inline CSVs draw 7.2 kW.
+   Fix the *data* rather than loosening the assertions to `contains` — a test record that draws three
+   times what the hardware permits is wrong on its own terms, whatever it was written to check.
 
 ## Deliberately not done
 
@@ -207,3 +283,9 @@ changes it.
 - No change to the caller-facing interval boundary rules or to `estimates`' validation (decision 10).
 - No marker in the README distinguishing specified-but-unbuilt behaviour; present tense throughout,
   per the user's direction.
+- **No guard on the inverted bracket itself.** `ExcessiveAvgPower` flags the cause, but the sentence
+  that states the bracket still reads "from {consumption} to {breaker-spec}" unconditionally, and
+  would print a range running downwards if a group's aggregate average power ever exceeded its member
+  count times the rating. The anomaly makes that visible rather than impossible — reliably so, since
+  decision 15's exact threshold guarantees such a group carries at least one flagged member. Whether
+  the renderer should also detect the inversion and reword is left open.

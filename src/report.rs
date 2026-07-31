@@ -21,7 +21,7 @@ use crate::{
     WindowSpans, Windows, time_zone,
 };
 use jiff::{Timestamp, Zoned};
-use std::{fmt, rc::Rc, time::Duration};
+use std::{collections::HashMap, fmt, rc::Rc, time::Duration};
 
 /// Width the prose is wrapped to. Comfortably inside 80 columns, leaving room for a quoting prefix
 /// in an email reply.
@@ -321,9 +321,11 @@ impl PowerEstimatesReport {
                     ymd_hm(s.conn_start),
                     ymd_hm(s.adj_conn_end),
                     windows_label(Windows::of_session(s, &spans)),
+                    // An excluded session is in no tiling, but the report holds the session itself
+                    // here, so its figure needs no lookup.
                     s.anomalies
                         .iter()
-                        .map(|k| k.as_str())
+                        .map(|k| anomaly_cell(*k, Some(s.avg_power)))
                         .collect::<Vec<_>>()
                         .join(", "),
                 ]
@@ -515,6 +517,22 @@ fn push_membership_list(groups: &[Rc<SessionGroup>], out: &mut Vec<String>) {
     }
 }
 
+/// An anomaly's cell: the bare kind, except where the kind is about a figure, in which case the
+/// figure is written into it.
+///
+/// The value lives here rather than on [`crate::AnomalyKind`], which stays a plain classification.
+/// That keeps the workbook's `Anomalies` column a list of bare variant names that
+/// [`crate::AnomalyKind::from_token`] can read back, and keeps the glossary below the table
+/// explaining each kind once rather than once per session.
+///
+/// Three decimals, matching every other kW figure in the report.
+fn anomaly_cell(kind: AnomalyKind, avg_power: Option<f64>) -> String {
+    match (kind, avg_power) {
+        (AnomalyKind::ExcessiveAvgPower, Some(kw)) => format!("{}({kw:.3})", kind.as_str()),
+        _ => kind.as_str().to_owned(),
+    }
+}
+
 /// The windows a session appears to reach, as a report cell.
 fn windows_label(w: Windows) -> String {
     let mut parts: Vec<&str> = Vec::new();
@@ -535,6 +553,28 @@ fn windows_label(w: Windows) -> String {
 }
 
 impl PowerEstimatesReport {
+    /// Average power per session id, gathered from every tiling the report holds.
+    ///
+    /// The tilings are the report's only handle on the sessions themselves: an anomaly record
+    /// carries a row, an id and a kind, and nothing else. Every session with an anomaly intersects
+    /// one of the estimated windows, and so appears in some group of that window's tiling, so
+    /// anything the anomaly list can name is reachable here.
+    ///
+    /// A spike's figure is the one the estimating logic substituted, not the sheet's `#DIV/0!` — the
+    /// number that actually fed the totals, which is the one worth seeing beside an anomaly.
+    fn avg_power_by_session(&self) -> HashMap<String, f64> {
+        self.session_groups
+            .iter()
+            .chain(
+                self.skew_margins
+                    .iter()
+                    .flat_map(|m| m.session_groups.iter()),
+            )
+            .flat_map(|g| g.session_iter())
+            .map(|s| (s.id.clone(), s.avg_power))
+            .collect()
+    }
+
     fn push_groups(&self, out: &mut Vec<String>) {
         out.push(h2("Session groups"));
         out.push(String::new());
@@ -575,6 +615,7 @@ impl PowerEstimatesReport {
             return;
         }
 
+        let avg_power = self.avg_power_by_session();
         let rows: Vec<Vec<String>> = self
             .session_anomalies
             .iter()
@@ -583,7 +624,10 @@ impl PowerEstimatesReport {
                     a.anomaly.row.to_string(),
                     a.anomaly.session_id.clone(),
                     windows_label(a.windows),
-                    a.anomaly.kind.as_str().to_owned(),
+                    anomaly_cell(
+                        a.anomaly.kind,
+                        avg_power.get(a.anomaly.session_id.as_str()).copied(),
+                    ),
                 ]
             })
             .collect();

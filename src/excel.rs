@@ -11,7 +11,10 @@ use jiff::{
 };
 use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
 
-use crate::{Anomaly, AnomalyKind, SESSION_BOUNDARY_RESOLUTION, Session, time_zone};
+use crate::{
+    Anomaly, AnomalyKind, EVOLUTE_BREAKER_KW_RATING, SESSION_BOUNDARY_RESOLUTION, Session,
+    time_zone,
+};
 
 /// Excel's day-zero for the 1900 date system, as a Unix timestamp.
 /// 1899-12-30T00:00:00Z; verified by [`test::excel_epoch_constant_matches_jiff`].
@@ -331,6 +334,21 @@ impl CsvSession {
         // is just as undefined, and the session becomes a spike either way.
         if self.active_charge_time.is_zero() {
             common.push(AnomalyKind::ZeroActiveChargeTime);
+        } else {
+            // Above the breaker rating is something the hardware should not permit, so the record
+            // says something is wrong with `Energy_Use` or `Active_Charge_Time` — but not which,
+            // which is why this only reports and never excludes.
+            //
+            // Compared against the rating exactly, with no tolerance. That is what makes the flag
+            // a complete account of the inversion the reported bracket can suffer: a group prints
+            // a backwards range only when its aggregate exceeds its member count times the rating,
+            // which by the pigeonhole principle needs some member above the rating — and every such
+            // member is flagged here. A tolerance would leave a band of members that invert the
+            // bracket silently.
+            let avg_power = self.energy_use / (self.active_charge_time.as_secs_f64() / 3600.0);
+            if avg_power > EVOLUTE_BREAKER_KW_RATING {
+                common.push(AnomalyKind::ExcessiveAvgPower);
+            }
         }
 
         let ambiguous = tz.to_ambiguous_timestamp(self.start_local);
@@ -955,13 +973,17 @@ mod test {
     }
 
     fn session(start: &str, end: &str, conn: &str) -> CsvSession {
+        let active_charge_time = parse_duration(conn, 1, "Active_Charge_Time").unwrap();
         CsvSession {
             id: "S1".to_owned(),
             start_local: dt(start),
             end_local: dt(end),
             conn_duration: parse_duration(conn, 1, "Conn_Duration").unwrap(),
-            active_charge_time: parse_duration(conn, 1, "Active_Charge_Time").unwrap(),
-            energy_use: 10.0,
+            active_charge_time,
+            // 6 kW, under the breaker rating, so a record built here carries only the anomaly the
+            // test that built it is about. A flat energy figure would draw far above the rating on
+            // the shorter durations and pick up `ExcessiveAvgPower` throughout.
+            energy_use: 6.0 * active_charge_time.as_secs_f64() / 3600.0,
         }
     }
 
@@ -1451,8 +1473,8 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
     fn duplicated_record_yields_two_rows_and_two_anomalies() {
         const CSV: &str = "\
 Charge_Session_ID,Conn_DateTime_Start,Conn_DateTime_End,Conn_Duration,Active_Charge_Time,Energy_Use
-S1,2026-11-01 01:10,2026-11-01 01:40,0:30:00,0:29:00,3.5
-S2,2026-11-02 08:00,2026-11-02 09:00,1:00:00,0:59:00,7.0
+S1,2026-11-01 01:10,2026-11-01 01:40,0:30:00,0:29:00,2.9
+S2,2026-11-02 08:00,2026-11-02 09:00,1:00:00,0:59:00,5.9
 ";
         let xlsx = convert("duplicated", CSV);
         let book = umya_spreadsheet::reader::xlsx::read(&xlsx).unwrap();
@@ -1492,7 +1514,7 @@ S2,2026-11-02 08:00,2026-11-02 09:00,1:00:00,0:59:00,7.0
     fn conversion_report_anomalies_carry_excel_rows() {
         const CSV: &str = "\
 Charge_Session_ID,Conn_DateTime_Start,Conn_DateTime_End,Conn_Duration,Active_Charge_Time,Energy_Use
-S1,2026-11-01 01:10,2026-11-01 01:40,0:30:00,0:29:00,3.5
+S1,2026-11-01 01:10,2026-11-01 01:40,0:30:00,0:29:00,2.9
 S2,2026-11-02 08:00,2026-11-02 08:00,0:00:00,0:00:00,4.2
 ";
         let dir = temp_dir("excel_rows");

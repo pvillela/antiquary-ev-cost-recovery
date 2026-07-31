@@ -130,6 +130,28 @@ pub enum AnomalyKind {
     /// Only fold starts are checked this way; the same inconsistency on any other date is caught,
     /// if at all, by [`AnomalyKind::InconsistentDuration`]. See README.md, "Time zone".
     DstUnresolvable,
+    /// The session's average power exceeds [`EVOLUTE_BREAKER_KW_RATING`], which the hardware is
+    /// supposed to make impossible.
+    ///
+    /// Informational only: the session still takes part in every estimate, since nothing about the
+    /// figure says *which* of `Energy_Use` and `Active_Charge_Time` is wrong, or whether either is.
+    /// [`AnomalyKind::InconsistentDuration`] remains the only kind that excludes a session.
+    ///
+    /// It matters because two things quietly assume it cannot happen. The breaker-spec figures are
+    /// a session count times a single rating, so a session drawing more than that rating breaks the
+    /// assumption they rest on — see README.md, "Assumptions". And the report states its bracket as
+    /// running from the consumption-based figure up to the breaker-spec one, which inverts if a
+    /// group's aggregate average power exceeds its member count times the rating.
+    ///
+    /// The comparison is against the rating exactly, with no tolerance, which is what makes this
+    /// flag a complete account of that inversion: it takes a member above the rating to push a
+    /// group's aggregate past its member count times the rating, and every such member is flagged.
+    /// A tolerance would leave a band of sessions that invert the bracket silently.
+    ///
+    /// One consequence of exactness: a session meant to sit exactly at the rating may or may not be
+    /// flagged, according to how its `Energy_Use / Active_Charge_Time` rounds in binary floating
+    /// point. That is the price of the guarantee above, and it errs towards reporting.
+    ExcessiveAvgPower,
 }
 
 impl AnomalyKind {
@@ -143,6 +165,7 @@ impl AnomalyKind {
             Self::DstAmbiguousDuplicated => "DstAmbiguousDuplicated",
             Self::DstGapShifted => "DstGapShifted",
             Self::DstUnresolvable => "DstUnresolvable",
+            Self::ExcessiveAvgPower => "ExcessiveAvgPower",
         }
     }
 
@@ -154,6 +177,7 @@ impl AnomalyKind {
             "DstAmbiguousDuplicated" => Self::DstAmbiguousDuplicated,
             "DstGapShifted" => Self::DstGapShifted,
             "DstUnresolvable" => Self::DstUnresolvable,
+            "ExcessiveAvgPower" => Self::ExcessiveAvgPower,
             _ => return None,
         })
     }
@@ -187,6 +211,11 @@ impl fmt::Display for AnomalyKind {
             Self::DstUnresolvable => {
                 "DST fold: neither EDT nor EST reproduces the reported end, so the record is \
                  inconsistent; assumed EDT, timestamps may be an hour early"
+            }
+            Self::ExcessiveAvgPower => {
+                "average power above the Evolute breaker rating, which the hardware should not \
+                 allow; the session still counts towards every estimate, but the breaker-spec \
+                 figures assume no session draws more than that rating"
             }
         };
         f.write_str(s)

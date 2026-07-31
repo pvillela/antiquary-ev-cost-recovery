@@ -10,12 +10,12 @@ Estimates
 
 | Estimate           |     kW |    kVA | Group |
 |:-------------------|-------:|-------:|------:|
-| Consumption-based  | 18.700 | 19.684 |     3 |
-| Breaker-spec-based | 20.100 | 22.500 |     3 |
+| Consumption-based  | 25.600 | 26.947 |     4 |
+| Breaker-spec-based | 26.800 | 30.000 |     4 |
 
-The likely kW values are in the range from 18.700 kW (consumption-based) to
-20.100 kW (breaker-spec-based). The likely kVA values are in the range from
-19.684 kVA (consumption-based) to 22.500 kVA (breaker-spec-based).
+The likely kW values are in the range from 25.600 kW (consumption-based) to
+26.800 kW (breaker-spec-based). The likely kVA values are in the range from
+26.947 kVA (consumption-based) to 30.000 kVA (breaker-spec-based).
 
 2 sessions in the workbook were excluded from every figure above, having
 reported times that contradict each other. They are listed under Excluded
@@ -45,14 +45,16 @@ dropped on its say-so.
 Session groups
 --------------
 
-| # | From     | To       |   Len | Count |     kW |
-|--:|:---------|:---------|------:|------:|-------:|
-| 0 | 16:00:00 | 16:01:00 |  1:00 |     1 |  6.000 |
-| 1 | 16:10:00 | 16:15:00 |  5:00 |     1 |  6.000 |
-| 2 | 16:15:00 | 16:22:00 |  7:00 |     2 | 12.000 |
-| 3 | 16:22:00 | 16:23:00 |  1:00 |     3 | 18.700 |
-| 4 | 16:23:00 | 16:36:00 | 13:00 |     2 | 12.000 |
-| 5 | 16:36:00 | 16:41:00 |  5:00 |     1 |  6.000 |
+| # | From     | To       |  Len | Count |     kW |
+|--:|:---------|:---------|-----:|------:|-------:|
+| 0 | 16:00:00 | 16:01:00 | 1:00 |     1 |  6.000 |
+| 1 | 16:10:00 | 16:15:00 | 5:00 |     1 |  6.000 |
+| 2 | 16:15:00 | 16:20:00 | 5:00 |     2 | 12.000 |
+| 3 | 16:20:00 | 16:22:00 | 2:00 |     3 | 18.900 |
+| 4 | 16:22:00 | 16:23:00 | 1:00 |     4 | 25.600 |
+| 5 | 16:23:00 | 16:31:00 | 8:00 |     3 | 18.900 |
+| 6 | 16:31:00 | 16:36:00 | 5:00 |     2 | 12.000 |
+| 7 | 16:36:00 | 16:41:00 | 5:00 |     1 |  6.000 |
 
 Times are local (ET). Groups are half-open: each runs from its From up to
 but not including its To, so no instant falls in two groups and no session
@@ -65,17 +67,20 @@ Group membership
 - Group 0 - MARGIN
 - Group 1 - N1
 - Group 2 - N1, N2
-- Group 3 - N1, N2, SPIKE
-- Group 4 - N1, N2
-- Group 5 - N1
+- Group 3 - EXCESS, N1, N2
+- Group 4 - EXCESS, N1, N2, SPIKE
+- Group 5 - EXCESS, N1, N2
+- Group 6 - N1, N2
+- Group 7 - N1
 
 
 Anomalies
 ---------
 
-| Row | Session | Window   | Anomaly              |
-|----:|:--------|:---------|:---------------------|
-|   6 | SPIKE   | interval | ZeroActiveChargeTime |
+| Row | Session | Window   | Anomaly                  |
+|----:|:--------|:---------|:-------------------------|
+|   6 | SPIKE   | interval | ZeroActiveChargeTime     |
+|   9 | EXCESS  | interval | ExcessiveAvgPower(6.900) |
 
 Row numbers are workbook rows, so each one can be looked up directly.
 "Window" is which of the estimated windows the session reaches - the
@@ -87,4 +92,8 @@ for that margin may rest on it.
   its energy in no time at all and has no finite average power; the
   estimating logic substitutes one, and the session is worth reviewing
   individually.
+- ExcessiveAvgPower - average power above the Evolute breaker rating, which
+  the hardware should not allow; the session still counts towards every
+  estimate, but the breaker-spec figures assume no session draws more than
+  that rating.
 
