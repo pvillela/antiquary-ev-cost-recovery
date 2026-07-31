@@ -605,7 +605,7 @@ mod test {
             excluded_sessions: Vec::new(),
             source: PathBuf::from("/tmp/Session_Report_Test.xlsx"),
             interval: (ts(LO), ts(HI)),
-            estimates: crate::peak_est::estimates_for_groups(&groups),
+            estimates: crate::estimates::estimates_for_groups(&groups),
             session_groups: groups,
             session_anomalies: anomalies,
         }
@@ -768,7 +768,7 @@ mod test {
             excluded_sessions: Vec::new(),
             source: PathBuf::from("Fold.xlsx"),
             interval: (lo, hi),
-            estimates: crate::peak_est::estimates_for_groups(&groups),
+            estimates: crate::estimates::estimates_for_groups(&groups),
             session_groups: groups,
             session_anomalies: Vec::new(),
         };
