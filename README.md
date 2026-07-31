@@ -180,18 +180,20 @@ The padding is a full `R` rather than one tick less for the same reason. A sessi
 
 ### Dubious groups
 
-Every member of a group runs the group's whole span. That is what a group is: a stretch of time over which the set of active sessions does not change, whose members are the sessions active throughout it. A session active at every instant of `[g.start, g.end)` must start at or before `g.start` and end at or after `g.end` — so `conn_start <= g.start` and `adj_conn_end >= g.end` for every member.
+Every member of a group runs the group's whole span, in the only sense the grouping can use: a session is taken to be active over `[conn_start, adj_conn_end)`. That is what a group is: a stretch of time over which the set of active sessions does not change, whose members are the sessions active throughout it. A session active at every instant of `[g.start, g.end)` must start at or before `g.start` and end at or after `g.end` — so `conn_start <= g.start` and `adj_conn_end >= g.end` for every member.
+
+Neither `conn_start` nor `adj_conn_end` is an instant the session actually started or stopped at. `conn_start` is the true start truncated down to the minute, and `adj_conn_end` is one `R` past `conn_end`, which is the true end truncated down the same way. Each of the two therefore stands for a whole minute, with the true instant lying somewhere in it. Where in that minute it lies is what the rest of this section is about — and a member's true span need not cover all of `g`.
 
 A group of duration exactly `R` is called ***narrow***. Only a narrow group can be dubious, as shown at the end of this section, so take `g` to be narrow from here on.
 
 Each of the above start and end comparisons holds either with equality or as a strict inequality, and the difference is what the rest of this section turns on. Reading them on the grid established above:
 
-- **`adj_conn_end == g.end`.** The true end lies in `[adj_conn_end - R, adj_conn_end)`, which for a narrow group *is* `[g.start, g.end)`. The session stopped somewhere inside `g` and the report does not say where.
-- **`adj_conn_end > g.end`.** Then `adj_conn_end` is at least `g.end + R`, so the true end lies at or after `g.end`. The session was drawing power throughout `g`, wherever in its last minute it truly stopped.
+- **`adj_conn_end == g.end`.** The true end lies in `[adj_conn_end - R, adj_conn_end)`, which for a narrow group *is* `[g.start, g.end)`. The session stopped somewhere inside `g` and the report does not say where. It did draw power somewhere in `g`, though: the reported end is the minute the session was last drawing in, truncated down (see [Assumptions](#assumptions)), and for a narrow group that minute is `g` itself. Had the session been off for all of `g`, the report would have named an earlier minute.
+- **`adj_conn_end > g.end`.** Then `adj_conn_end` is at least `g.end + R`, so the true end lies at or after `g.end`. The session did not stop inside `g`: wherever in its last minute it truly stopped, that was at or after `g.end`.
 - **`conn_start == g.start`.** The true start lies in `[g.start, g.start + R)`, again `g` itself. Inside the group, position unknown.
 - **`conn_start < g.start`.** Then `conn_start` is at most `g.start - R`, so the true start lies before `g.start`. The session was already drawing power when `g` began.
 
-A strict inequality therefore *settles* that end of the session: it unequivocally covers the group whatever the truncation hid. Only an equality leaves an end-point loose inside the group. Two comparisons, two ways each, gives four classes, whose names say where the true start and the true end lie — **b** before the group, **i** inside it, **a** after it:
+A strict inequality therefore *settles* that end of the session: the true instant falls outside `g` — before `g.start` for a start, at or after `g.end` for an end — so on that side the session covers `g` right up to the boundary, and no truncation can pull it inside. Only an equality leaves an end-point loose inside the group. A session needs both inequalities strict to cover the group outright. Two comparisons, two ways each, gives four classes, whose names say where the true start and the true end lie — **b** before the group, **i** inside it, **a** after it:
 
 | set | `conn_start` | `adj_conn_end` | true start | true end |
 | ------------- | ------------ | ---------- | --------------------- | --------------------- |
@@ -202,7 +204,7 @@ A strict inequality therefore *settles* that end of the session: it unequivocall
 
 The above comparisons read each session's **own** `conn_start` and `adj_conn_end` — never `conn_end`, whose padding has not yet been applied, and never the end-points clamped into the interval of interest, which would make a session running through `I`'s edge look like one confined to the group.
 
-`ba_sessions` have nothing loose in them: they cover `g`, unequivocally extending beyond `g` on both ends. Every other session category has at least one end-point free to "move" inside `g` and we refer to such sessions as "movable". That "freedom to move" is the whole source of doubt — which pairs of them can be arranged not to overlap is what decides whether the group is dubious:
+`ba_sessions` have nothing loose in them: their true start is before `g.start` and their true end at or after `g.end`, so they cover `g` whatever the truncation hid. Every other session category has at least one end-point free to "move" inside `g` and we refer to such sessions as "movable". That "freedom to move" is the whole source of doubt — which pairs of them can be arranged not to overlap is what decides whether the group is dubious:
 
 | pair | can be disjoint | why |
 | ------------- | --- | ---------------------------------------------- |
@@ -210,15 +212,15 @@ The above comparisons read each session's **own** `conn_start` and `adj_conn_end
 | `bi` & `ii`   | yes | one ends inside, the other floats freely inside `g` |
 | `ia` & `ii`   | yes | one starts inside, the other floats freely inside `g` |
 | `ii` & `ii`   | yes | both float freely inside `g` |
-| `bi` & `bi`   | no  | both start before `g`, so both run at `g.start` |
+| `bi` & `bi`   | no  | both start before `g` and still draw in it, so both run at `g.start` |
 | `ia` & `ia`   | no  | both run past `g.end`, so both run just before it |
 | `ba` & any    | no  | `ba` covers all of `g` |
 
 Intuitively, a group is ***dubious*** exactly when it is narrow and has at least two "movable" members that are not anchored to the same end of the group. Formally, a narrow group is dubious if and only if:
 - `bi_sessions` and `ia_sessions` are both non-empty, or
-- `ii_sessions` is non-empty and there is at least one other group member outside `ba_sessions`.
+- `ii_sessions` is non-empty and the group has a further member outside `ba_sessions` — a second `ii` member, or a `bi` or `ia` one.
 
-This condition is provably equivalent to `min_size < size` (see definitions in the section below), which is how the software checks it. A narrow group whose movable members all sit in one of `bi_sessions` or `ia_sessions` is **not** dubious, and neither is one all of whose members span it — which is possible, since a group's two boundaries can both be created by sessions that are not its members.
+This condition is equivalent to `min_size < size`, which is how the software checks it; it is derived from the `min_size` formula in [`min` and `max` estimates for dubious groups](#min-and-max-estimates-for-dubious-groups) below. A narrow group whose movable members all sit in one of `bi_sessions` or `ia_sessions` is **not** dubious, and neither is one all of whose members span it — which is possible, since a group's two boundaries can both be created by sessions that are not its members.
 
 **No group longer than `R` can be dubious.** Group durations are multiples of `R`, so a group that is not narrow is at least `2R` long. Every member's true start is before `g.start + R`, and every member's true end is at or after `g.end - R`, which is at or after `g.start + R`. Take `t` to be the latest true start among the members: `t` is at or after every true start, and `t < g.start + R <=` every true end, so every member is running at `t`. No pair can be disjoint, whatever the true times turn out to be.
 
@@ -231,7 +233,7 @@ The `min` estimates for a dubious group `g` spanning the interval `[g.start, g.e
 - Take `[g.start, g.end)` as the interval of interest in an arbitrarily fine time grid.
 - For each session `s` participating in group `g`, define a legal nudged version of `s`, by the class `s` falls in above:
   - `ba_sessions`: its end-points remain unchanged.
-  - `bi_sessions`: let `nudge(s, ε)` be the modification of `s` by adding a small positive or negative `ε` to `s.adj_conn_end` while keeping the nudged session ending within `g`.
+  - `bi_sessions`: let `nudge(s, ε)` be the modification of `s` by adding a small positive or negative `ε` to `s.adj_conn_end` while keeping the nudged session ending within `g` and after `g.start` — it was still drawing power somewhere in `g`, as shown in the previous section, so it cannot be nudged out of `g` altogether.
   - `ia_sessions`: let `nudge(s, ε)` be the modification of `s` by adding a small positive or negative `ε` to `s.conn_start` while keeping the nudged session starting within `g`.
   - `ii_sessions`: let `nudge(s, ε1, ε2)` be the modification of `s` by adding small positive or negative `ε1` and `ε2` to `s.conn_start` and `s.adj_conn_end`, respectively, while keeping the nudged session within `g`.
 - Obtain a legal nudged version of each of the participating sessions and apply the `nominal` estimating algorithm to them with `[g.start, g.end)` as the interval of interest, producing a pair `(max_kw, max_size)`.
@@ -254,6 +256,18 @@ The computations of the `min` and `max` estimates for `g` are straightforward. W
   - `1` if `ii_sessions` is non-empty, `0` otherwise.
 
 The `ba_sessions` term is unconditional because those sessions certainly run throughout `g`; the maximum over the other three is the best arrangement available, with every `bi` member ending as early inside `g` as it can, every `ia` member starting as late as it can, and the `ii` members spread out between them. Both figures are bounded above by the corresponding `max`, since each is a sum over a subset of the same members, so `min_overlap <= nominal` follows for the whole estimate set.
+
+**The dubiousness condition follows from the `min_size` formula.** Write `n_ba`, `n_bi`, `n_ia`, `n_ii` for the four class sizes, and `[n_ii > 0]` for `1` when `ii_sessions` is non-empty and `0` otherwise. Then `size` is `n_ba + n_bi + n_ia + n_ii` and `min_size` is `n_ba + max(n_bi, n_ia, [n_ii > 0])`. The `n_ba` term is on both sides and cancels:
+
+```
+min_size < size  <=>  max(n_bi, n_ia, [n_ii > 0])  <  n_bi + n_ia + n_ii
+```
+
+- **`ii_sessions` empty.** The condition reads `max(n_bi, n_ia) < n_bi + n_ia`. If either class is empty the maximum *is* the whole sum, and the group is not dubious; if both are non-empty the sum strictly exceeds the maximum, and it is. That is the first clause of the condition stated [above](#dubious-groups).
+- **`ii_sessions` non-empty with nothing else outside `ba_sessions`** — that is, `n_ii == 1` and `n_bi == n_ia == 0`. Both sides are `1`, so the group is not dubious: a single member loose inside `g` has nothing to fail to overlap.
+- **`ii_sessions` non-empty with a further member outside `ba_sessions`.** The right-hand side then exceeds the left by at least one. If `n_ii >= 2`, the `ii` members alone account for the `[n_ii > 0]` term and contribute at least one more than it. If `n_ii == 1` and one of `n_bi`, `n_ia` is positive, the maximum is that class's own size and the remaining two terms add at least one. Either way the group is dubious, which is the second clause.
+
+Note that `min_size == size` therefore holds in exactly four shapes: no movable members at all, `bi` members only, `ia` members only, or a single `ii` member. In each of them the `min_agg_avg_kw` formula reduces to `ba_sessions_avg_kw` plus the whole movable sum — the same value as `max` — so the power figure never falls unless the size figure does. That is why the software decides dubiousness on the size figure alone. The converse does not hold: a dubious group whose surplus members draw no power reports the same kW in both readings, and the report then withholds the second estimate set only if all four figures agree.
 
 ### Assumptions
 
