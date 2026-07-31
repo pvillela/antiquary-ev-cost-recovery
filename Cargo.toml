@@ -11,4 +11,3 @@ umya-spreadsheet = "3.0.1"
 eframe = "0.35"
 egui_extras = { version = "0.35", features = ["datepicker"] }
 rfd = "0.17.2"
-calamine = "0.36"
