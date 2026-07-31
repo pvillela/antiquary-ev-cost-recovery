@@ -16,16 +16,16 @@ pub const TIME_ZONE_NAME: &str = "America/Toronto";
 /// - The width of a *narrow* group, the only width at which a group can be
 ///   [dubious](crate::SessionGroup::is_dubious).
 ///
-/// It is deliberately *not* a general error margin. Clock drift between the Toronto Hydro meter
-/// and the Evolute panel is unmodelled — folding it in here would be wrong in any case, since
-/// truncation is one-sided and forward while drift is two-sided and applies to both end-points.
-///
 /// Must divide 15 minutes without leaving a remainder, or an end-point clamped into the interval
 /// of interest lands off the grid and group durations stop being multiples of this value. That is
 /// a requirement on the report format rather than on this software.
 ///
 /// See README.md, "Boundaries and the time grid".
 pub const SESSION_BOUNDARY_RESOLUTION: Duration = Duration::from_secs(60);
+
+/// Max of [`SESSION_BOUNDARY_RESOLUTION`] and the absolute clock skey between Toronto Hydro
+/// and Evolute timekeeping. The latter is assumed to <= 5 seconds.
+pub const CLOCK_SKEW_MARGIN: Duration = SESSION_BOUNDARY_RESOLUTION;
 
 pub const EV_POWER_FACTOR: f64 = 0.95;
 pub const EVOLUTE_BREAKER_KW_RATING: f64 = 6.7;
