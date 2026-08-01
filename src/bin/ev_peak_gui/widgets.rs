@@ -1,6 +1,13 @@
 //! Small pieces of chrome the two tabs share.
 
+use crate::theme;
 use eframe::egui;
+
+/// A tab's title, in the app's colour. Headings are the one place colour does structural work:
+/// they say where a screen begins without a rule across the window.
+pub fn heading(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).heading().color(theme::accent(ui)));
+}
 
 /// The colour a failure is shown in, in whichever theme is on.
 fn error_color(ui: &egui::Ui) -> egui::Color32 {

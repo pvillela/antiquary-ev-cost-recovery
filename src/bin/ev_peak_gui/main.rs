@@ -13,14 +13,8 @@ mod app;
 mod convert;
 mod estimate;
 mod state;
+mod theme;
 mod widgets;
-
-/// The window and taskbar icon. Falling back to an empty icon is right if it ever fails to
-/// decode: an app without an icon is a great deal better than an app that will not start.
-fn icon() -> eframe::egui::IconData {
-    eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon.png"))
-        .unwrap_or_default()
-}
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -28,7 +22,7 @@ fn main() -> eframe::Result<()> {
             .with_title(app::APP_NAME)
             .with_inner_size([900.0, 700.0])
             .with_min_inner_size([560.0, 420.0])
-            .with_icon(icon()),
+            .with_icon(app::icon()),
         ..Default::default()
     };
 
@@ -39,6 +33,7 @@ fn main() -> eframe::Result<()> {
             // egui follows the system light/dark setting on its own; all that is wanted here is
             // slightly larger text than the default, on top of whatever the display's scaling is.
             cc.egui_ctx.set_zoom_factor(1.15);
+            theme::apply(&cc.egui_ctx);
             Ok(Box::<app::App>::default())
         }),
     )

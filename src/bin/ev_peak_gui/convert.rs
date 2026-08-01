@@ -8,7 +8,7 @@ use std::path::PathBuf;
 /// Draws the tab. Returns the workbook the user asked to carry over to the Estimate tab, if any:
 /// the app offers the handoff and the user takes it, rather than being moved.
 pub fn ui(ui: &mut egui::Ui, state: &mut ConvertState) -> Option<PathBuf> {
-    ui.heading("Convert a session report");
+    widgets::heading(ui, "Convert a session report");
     widgets::note(
         ui,
         "Turns Evolute's monthly session report into a workbook, computing the derived columns and \

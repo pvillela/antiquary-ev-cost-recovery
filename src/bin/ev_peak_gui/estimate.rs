@@ -1,13 +1,13 @@
 //! The Estimate tab: a workbook and an interval of interest in, the peak-contribution report out.
 
 use crate::state::{EstimateState, report_sections};
-use crate::widgets;
+use crate::{theme, widgets};
 use eframe::egui;
 use egui_extras::DatePickerButton;
 use ev_peak_contrib::{EstimateSet, IntervalLength, LEGAL_START_MINUTES, PowerEstimates};
 
 pub fn ui(ui: &mut egui::Ui, state: &mut EstimateState) {
-    ui.heading("Estimate peak contribution");
+    widgets::heading(ui, "Estimate peak contribution");
     widgets::note(
         ui,
         "Estimates what EV charging contributed to the building's peak demand over one interval of \
@@ -186,7 +186,12 @@ fn results(ui: &mut egui::Ui, state: &mut EstimateState) {
     }
     {
         let outcome = state.outcome.as_ref().expect("just checked");
-        ui.label(egui::RichText::new(&outcome.heading).heading().size(20.0));
+        ui.label(
+            egui::RichText::new(&outcome.heading)
+                .heading()
+                .size(20.0)
+                .color(theme::accent(ui)),
+        );
         if let Some(workbook) = &state.workbook {
             widgets::note(ui, &workbook.name());
         }
@@ -230,14 +235,18 @@ fn headline(ui: &mut egui::Ui, estimates: &PowerEstimates, has_margins: bool) {
             ui.label(egui::RichText::new("kVA").strong());
             ui.end_row();
 
+            // The two rows are the two ends of the bracket, and are coloured as such: one figure
+            // is the consumption-based floor, the other the breaker-spec ceiling.
+            let floor = theme::accent(ui);
             ui.label("Likely at least");
-            figure(ui, low.consumption_based_kw.value);
-            figure(ui, low.consumption_based_kva.value);
+            figure(ui, low.consumption_based_kw.value, floor);
+            figure(ui, low.consumption_based_kva.value, floor);
             ui.end_row();
 
+            let ceiling = theme::ceiling(ui);
             ui.label("Likely at most");
-            figure(ui, high.breaker_specs_based_kw.value);
-            figure(ui, high.breaker_specs_based_kva.value);
+            figure(ui, high.breaker_specs_based_kw.value, ceiling);
+            figure(ui, high.breaker_specs_based_kva.value, ceiling);
             ui.end_row();
         });
 
@@ -265,11 +274,12 @@ fn headline(ui: &mut egui::Ui, estimates: &PowerEstimates, has_margins: bool) {
     }
 }
 
-fn figure(ui: &mut egui::Ui, value: f64) {
+fn figure(ui: &mut egui::Ui, value: f64, color: egui::Color32) {
     ui.label(
         egui::RichText::new(format!("{value:.3}"))
             .monospace()
-            .size(22.0),
+            .size(22.0)
+            .color(color),
     );
 }
 
