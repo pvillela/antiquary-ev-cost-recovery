@@ -32,9 +32,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
+          # All three binaries: the desktop app, and the two command-line tools. The `.exe` and
+          # bare names are both listed because one matrix entry produces each; `if-no-files-found:
+          # ignore` is what lets the other be absent.
           path: |
-            target/${{ matrix.target }}/release/ev_estimates_cli
-            target/${{ matrix.target }}/release/ev_estimates_cli.exe
+            target/${{ matrix.target }}/release/ev_peak_gui
+            target/${{ matrix.target }}/release/ev_peak_gui.exe
+            target/${{ matrix.target }}/release/ev_peak_cli
+            target/${{ matrix.target }}/release/ev_peak_cli.exe
+            target/${{ matrix.target }}/release/ev_csv_to_xlsx
+            target/${{ matrix.target }}/release/ev_csv_to_xlsx.exe
           if-no-files-found: ignore
       - name: Run tests
         run: cargo test --verbose

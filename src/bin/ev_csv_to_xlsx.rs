@@ -5,7 +5,7 @@ use ev_peak_contrib::session_csv_to_xlsx;
 const USAGE: &str = "\
 Converts a charging session report from CSV to .xlsx.
 
-Usage: csv_to_xlsx <SESSION_REPORT.csv>...
+Usage: ev_csv_to_xlsx <SESSION_REPORT.csv>...
 
 Each workbook is written beside its input with the extension replaced. Rows needing a judgement
 call — an ambiguous DST fold, a wall time in the DST gap, a session with no charge time, one whose

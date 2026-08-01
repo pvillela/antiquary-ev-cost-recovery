@@ -10,6 +10,9 @@ pub use excel::*;
 mod grouping;
 pub use grouping::*;
 
+mod interval;
+pub use interval::*;
+
 mod report;
 
 #[allow(unused)]

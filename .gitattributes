@@ -6,3 +6,7 @@
 # The inputs those goldens are generated from, pinned for the same reason: the conversion should not
 # depend on the platform the repository was checked out on.
 tests/fixtures/*.csv text eol=lf
+
+# The app icon: embedded into the Windows executables by build.rs and into the GUI binary by
+# `include_bytes!`. Marked binary so that no checkout can rewrite a byte of it.
+assets/* binary

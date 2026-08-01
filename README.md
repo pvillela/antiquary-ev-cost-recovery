@@ -30,19 +30,36 @@ This is the typical workflow used with this software to estimate the impact of E
 
 ## Tools
 
-Two binaries, matching the workflow steps:
+The same work is available two ways: a desktop app covering the whole workflow, and two command-line binaries, one per workflow step. Both compute their figures with the same library code, and a report saved from the app is byte-for-byte what the command line prints.
+
+### Desktop app
+
+`ev_peak_gui` is a single self-contained binary — no installer, no runtime to put on the machine first. It opens on a choice of the two jobs, and neither is entered until it is asked for:
+
+- **Convert** — pick an Evolute session report CSV; the workbook is written beside it, and the rows that needed a judgement call are listed. Converting over an existing workbook asks first.
+- **Estimate** — pick a workbook, choose the interval of interest, read the figures. The report is shown in full, and can be copied or saved.
+
+The interval is chosen from controls rather than typed, and they offer only intervals the boundary rules allow: the start minute is one of `:00 :15 :30 :45`, and `1 hour` is on offer only from `HH:00`. Selecting a workbook reads it once, to show what it covers and to start the date on the first day it has anything to say about.
+
+The two DST transitions appear where they matter and nowhere else. On the night the clocks go forward, the skipped hour is simply absent from the hour list. On the night they go back, choosing the repeated hour asks which of the two is meant, and Estimate stays disabled until that is answered.
+
+**Running it.** On Windows, double-click `ev_peak_gui.exe`. It is not code-signed, so the first run shows SmartScreen's "Windows protected your PC" — choose *More info* then *Run anyway*; later runs are silent. On Linux, mark it executable once (`chmod +x ev_peak_gui`) and run it.
+
+### Command line
 
 | Command                                                      | Purpose                                                      |
 | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| `csv_to_xlsx <SESSION_REPORT.csv>...`                        | Converts a session report to a workbook, computing the derived columns and flagging rows that need review. |
-| `estimates <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM [EST\|EDT]> [15m\|1h]` | Prints the peak estimate report for one interval of interest. |
+| `ev_csv_to_xlsx <SESSION_REPORT.csv>...`                     | Converts a session report to a workbook, computing the derived columns and flagging rows that need review. Takes several files at once; the app takes one. |
+| `ev_peak_cli <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM [EST\|EDT]> [15m\|1h]` | Prints the peak estimate report for one interval of interest. |
 
-`estimates` takes the interval start in **local time (ET)**. The length defaults to `1h` when the start is on the hour and `15m` otherwise. An interval breaking the boundary rules described earlier is rejected rather than estimated.
+`ev_peak_cli` takes the interval start in **local time (ET)**. The length defaults to `1h` when the start is on the hour and `15m` otherwise. An interval breaking the boundary rules described earlier is rejected rather than estimated.
 
 The two DST transitions are treated differently, because they are different problems.
 
-- On the night DST **ends**, an hour of wall time occurs twice. That is a question the caller can answer, so `estimates` asks it: a bare `"2026-11-01 01:30"` is refused, and `"2026-11-01 01:30 EST"` or `"... EDT"` resolves it. The designator is accepted on any date and **checked against it** — `"2026-06-01 16:00 EST"` is an error, not a silently ignored hint — so naming the wrong one cannot produce a figure for the wrong hour.
+- On the night DST **ends**, an hour of wall time occurs twice. That is a question the caller can answer, so `ev_peak_cli` asks it: a bare `"2026-11-01 01:30"` is refused, and `"2026-11-01 01:30 EST"` or `"... EDT"` resolves it. The designator is accepted on any date and **checked against it** — `"2026-06-01 16:00 EST"` is an error, not a silently ignored hint — so naming the wrong one cannot produce a figure for the wrong hour.
 - On the night DST **begins**, an hour of wall time never happens. There is nothing to choose between, so such a start is refused outright and no designator helps.
+
+These rules live in one place, `src/interval.rs`, and both front-ends come through it, so the app and the command line cannot disagree about what interval a bill may be argued from.
 
 ## Excel workbook
 
