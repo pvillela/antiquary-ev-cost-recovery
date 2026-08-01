@@ -81,12 +81,21 @@ impl eframe::App for App {
                         landing(ui, &mut self.state, &logo)
                     }
                     Some(Tab::Convert) => {
-                        if let Some(workbook) = convert::ui(ui, &mut self.state.convert) {
-                            self.state.estimate.select_workbook(workbook);
+                        if convert::ui(ui, &mut self.state.convert, &mut self.state.working_dir) {
                             self.state.tab = Some(Tab::Estimate);
                         }
                     }
-                    Some(Tab::Estimate) => estimate::ui(ui, &mut self.state.estimate),
+                    Some(Tab::Estimate) => {
+                        // A conversion hands its workbook on when the user arrives here, by the
+                        // button at the foot of the Convert tab or by clicking the tab itself.
+                        // Collected in one place so the two routes cannot behave differently —
+                        // which is exactly how they came to differ before.
+                        if let Some(workbook) = self.state.convert.take_handoff() {
+                            self.state.working_dir.remember(&workbook);
+                            self.state.estimate.adopt_workbook(workbook);
+                        }
+                        estimate::ui(ui, &mut self.state.estimate, &mut self.state.working_dir)
+                    }
                 });
         });
     }

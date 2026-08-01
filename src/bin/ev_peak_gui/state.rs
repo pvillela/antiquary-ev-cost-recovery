@@ -11,7 +11,7 @@ use ev_peak_contrib::{
     session_csv_to_xlsx, session_list,
 };
 use jiff::{Timestamp, civil, tz::TimeZone};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Which of the two jobs the user is doing. `None` is the landing screen: the app opens with
 /// neither tab chosen, so that converting and estimating are both deliberate acts.
@@ -26,6 +26,33 @@ pub struct AppState {
     pub tab: Option<Tab>,
     pub convert: ConvertState,
     pub estimate: EstimateState,
+    pub working_dir: WorkingDir,
+}
+
+/// The folder the user is working in, shared by every file dialog in the app.
+///
+/// A month's CSV, the workbook made from it and the reports taken out of it all live together, and
+/// the two tabs are two halves of one job — so this is one folder for the whole app rather than one
+/// per dialog. It lasts as long as the app does and no longer: nothing is written to disk, so a
+/// fresh launch starts wherever the system would have started anyway.
+#[derive(Default)]
+pub struct WorkingDir(Option<PathBuf>);
+
+impl WorkingDir {
+    /// The folder a dialog should open in, or `None` before the user has picked anything.
+    pub fn get(&self) -> Option<&Path> {
+        self.0.as_deref()
+    }
+
+    /// Remembers where a file was picked from or written to.
+    pub fn remember(&mut self, file: &Path) {
+        // A bare filename's parent is `""`, which would send the next dialog nowhere in particular.
+        if let Some(dir) = file.parent()
+            && !dir.as_os_str().is_empty()
+        {
+            self.0 = Some(dir.to_path_buf());
+        }
+    }
 }
 
 // --------------------------------------------------------------------------------------------
@@ -47,6 +74,12 @@ pub struct ConvertState {
     /// Set when the workbook about to be written already exists. Replacing the file the estimates
     /// were argued from is the one destructive thing this app can do, so it is asked about.
     pub confirm_overwrite: Option<PathBuf>,
+    /// The workbook a conversion has just written, waiting for the Estimate tab to collect it.
+    ///
+    /// Held rather than pushed, so that arriving at the Estimate tab by the button at the foot of
+    /// this one and arriving by clicking the tab come to the same thing. Collected once: a
+    /// workbook the user has since replaced by hand is not re-imposed on them.
+    handoff: Option<PathBuf>,
 }
 
 impl ConvertState {
@@ -80,6 +113,7 @@ impl ConvertState {
                 output_path,
                 anomalies,
             }) => {
+                self.handoff = Some(output_path.clone());
                 self.outcome = Some(ConvertOutcome {
                     workbook: output_path,
                     anomalies: anomalies.iter().map(|a| a.to_string()).collect(),
@@ -87,6 +121,11 @@ impl ConvertState {
             }
             Err(e) => self.error = Some(format!("{}: {e}", csv.display())),
         }
+    }
+
+    /// Takes the workbook a conversion left waiting, if it has not been taken already.
+    pub fn take_handoff(&mut self) -> Option<PathBuf> {
+        self.handoff.take()
     }
 }
 
@@ -129,6 +168,9 @@ pub struct EstimateState {
     pub length: IntervalLength,
     /// The answer to the twice-a-year question, once it has been given.
     pub designator: Option<&'static str>,
+    /// Whether the workbook in hand arrived from a conversion rather than being chosen here. The
+    /// tab says so: a picker that fills itself in should account for itself.
+    pub carried_over: bool,
     pub outcome: Option<EstimateOutcome>,
     pub error: Option<String>,
 }
@@ -146,6 +188,7 @@ impl Default for EstimateState {
             minute: 0,
             length: IntervalLength::Hour,
             designator: None,
+            carried_over: false,
             outcome: None,
             error: None,
         }
@@ -155,8 +198,16 @@ impl Default for EstimateState {
 impl EstimateState {
     /// Reads the workbook once, to learn what it covers and to start the picker on a day it has
     /// something to say about. A workbook is last month's; today would be wrong nearly every time.
+    /// Takes up the workbook a conversion just wrote. The same as choosing it here, except that
+    /// the tab will say where it came from.
+    pub fn adopt_workbook(&mut self, path: PathBuf) {
+        self.select_workbook(path);
+        self.carried_over = self.workbook.is_some();
+    }
+
     pub fn select_workbook(&mut self, path: PathBuf) {
         self.clear_results();
+        self.carried_over = false;
         match session_list(&path) {
             Ok(report) => {
                 let covers = covered_range(&report);
@@ -687,6 +738,66 @@ mod test {
                 .collect();
             assert_eq!(titles, expected, "{fixture}");
         }
+    }
+
+    /// A conversion leaves its workbook waiting, and the Estimate tab collects it on arrival —
+    /// once. The route taken to get there is not part of the story, which is the whole point: the
+    /// button at the foot of the Convert tab and a click on the tab itself now do the same thing.
+    #[test]
+    fn a_conversion_hands_its_workbook_on_exactly_once() {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let dir = std::env::temp_dir().join(format!("ev_peak_handoff_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let csv = dir.join("Session_Report_Diagram.csv");
+        std::fs::copy(fixtures.join("Session_Report_Diagram.csv"), &csv).unwrap();
+
+        let mut convert = ConvertState::default();
+        assert_eq!(convert.take_handoff(), None, "nothing to hand on yet");
+
+        convert.select_csv(csv);
+        convert.start();
+        assert!(convert.error.is_none(), "{:?}", convert.error);
+
+        let handed = convert
+            .take_handoff()
+            .expect("a conversion hands its workbook on");
+        assert_eq!(handed, dir.join("Session_Report_Diagram.xlsx"));
+        assert_eq!(
+            convert.take_handoff(),
+            None,
+            "collected once: a workbook the user has since replaced is not re-imposed"
+        );
+
+        // Taking it up is choosing it, plus a note saying where it came from.
+        let mut estimate = EstimateState::default();
+        estimate.adopt_workbook(handed.clone());
+        assert!(estimate.workbook.is_some());
+        assert!(estimate.carried_over);
+
+        // Choosing one by hand is not carried over, and clears the note.
+        estimate.select_workbook(handed);
+        assert!(!estimate.carried_over);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The working folder follows whatever file was last touched, so the next dialog opens where
+    /// the user already is.
+    #[test]
+    fn the_working_folder_follows_the_last_file_used() {
+        let mut dir = WorkingDir::default();
+        assert_eq!(dir.get(), None, "nothing is assumed before the first pick");
+
+        dir.remember(Path::new("/data/June/Session_Report.csv"));
+        assert_eq!(dir.get(), Some(Path::new("/data/June")));
+
+        // A save into a different folder moves it; that is where the user now is.
+        dir.remember(Path::new("/data/reports/June_1600.report.md"));
+        assert_eq!(dir.get(), Some(Path::new("/data/reports")));
+
+        // A bare filename has no folder to speak of, and must not blank out the one held.
+        dir.remember(Path::new("bare.xlsx"));
+        assert_eq!(dir.get(), Some(Path::new("/data/reports")));
     }
 
     /// The workbook a conversion writes is the one `csv_to_xlsx` would write, since the overwrite

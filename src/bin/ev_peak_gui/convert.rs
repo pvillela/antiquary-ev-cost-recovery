@@ -1,13 +1,12 @@
 //! The Convert tab: an Evolute session report CSV in, a workbook out.
 
-use crate::state::ConvertState;
+use crate::state::{ConvertState, WorkingDir};
 use crate::widgets;
 use eframe::egui;
-use std::path::PathBuf;
 
-/// Draws the tab. Returns the workbook the user asked to carry over to the Estimate tab, if any:
-/// the app offers the handoff and the user takes it, rather than being moved.
-pub fn ui(ui: &mut egui::Ui, state: &mut ConvertState) -> Option<PathBuf> {
+/// Draws the tab. Returns whether the user asked to move on to the Estimate tab; the workbook
+/// itself travels as a handoff on [`ConvertState`], collected wherever the user arrives.
+pub fn ui(ui: &mut egui::Ui, state: &mut ConvertState, working: &mut WorkingDir) -> bool {
     widgets::heading(ui, "Convert a session report");
     widgets::note(
         ui,
@@ -18,16 +17,14 @@ pub fn ui(ui: &mut egui::Ui, state: &mut ConvertState) -> Option<PathBuf> {
 
     ui.horizontal(|ui| {
         if ui.button("Select CSV…").clicked()
-            && let Some(path) = rfd::FileDialog::new()
+            && let Some(path) = widgets::dialog(working)
                 .add_filter("Session report", &["csv"])
                 .pick_file()
         {
+            working.remember(&path);
             state.select_csv(path);
         }
-        match &state.csv {
-            Some(path) => ui.label(path.display().to_string()),
-            None => ui.weak("No file chosen"),
-        };
+        widgets::picked_file(ui, state.csv.as_deref(), "No file chosen");
     });
 
     ui.add_space(12.0);
@@ -43,13 +40,13 @@ pub fn ui(ui: &mut egui::Ui, state: &mut ConvertState) -> Option<PathBuf> {
         widgets::error_block(ui, message);
     }
 
-    let mut carry_over = None;
+    let mut move_on = false;
     if let Some(outcome) = &state.outcome {
         ui.add_space(16.0);
         ui.separator();
         ui.add_space(8.0);
         ui.label(egui::RichText::new("Workbook written").strong());
-        ui.label(outcome.workbook.display().to_string());
+        ui.add(egui::Label::new(outcome.workbook.display().to_string()).wrap());
 
         ui.add_space(12.0);
         if outcome.anomalies.is_empty() {
@@ -71,12 +68,12 @@ pub fn ui(ui: &mut egui::Ui, state: &mut ConvertState) -> Option<PathBuf> {
 
         ui.add_space(12.0);
         if ui.button("Estimate with this workbook").clicked() {
-            carry_over = Some(outcome.workbook.clone());
+            move_on = true;
         }
     }
 
     overwrite_prompt(ui, state);
-    carry_over
+    move_on
 }
 
 /// Asked before a workbook is replaced. Re-converting is the one act of this app that can destroy

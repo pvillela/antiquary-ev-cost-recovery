@@ -1,12 +1,12 @@
 //! The Estimate tab: a workbook and an interval of interest in, the peak-contribution report out.
 
-use crate::state::{EstimateState, report_sections};
+use crate::state::{EstimateState, WorkingDir, report_sections};
 use crate::{theme, widgets};
 use eframe::egui;
 use egui_extras::DatePickerButton;
 use ev_peak_contrib::{EstimateSet, IntervalLength, LEGAL_START_MINUTES, PowerEstimates};
 
-pub fn ui(ui: &mut egui::Ui, state: &mut EstimateState) {
+pub fn ui(ui: &mut egui::Ui, state: &mut EstimateState, working: &mut WorkingDir) {
     widgets::heading(ui, "Estimate peak contribution");
     widgets::note(
         ui,
@@ -15,7 +15,7 @@ pub fn ui(ui: &mut egui::Ui, state: &mut EstimateState) {
     );
     ui.add_space(12.0);
 
-    workbook_row(ui, state);
+    workbook_row(ui, state, working);
     ui.add_space(12.0);
     interval_controls(ui, state);
 
@@ -36,23 +36,25 @@ pub fn ui(ui: &mut egui::Ui, state: &mut EstimateState) {
         ui.add_space(16.0);
         ui.separator();
         ui.add_space(8.0);
-        results(ui, state);
+        results(ui, state, working);
     }
 }
 
-fn workbook_row(ui: &mut egui::Ui, state: &mut EstimateState) {
+fn workbook_row(ui: &mut egui::Ui, state: &mut EstimateState, working: &mut WorkingDir) {
     ui.horizontal(|ui| {
         if ui.button("Select workbook…").clicked()
-            && let Some(path) = rfd::FileDialog::new()
+            && let Some(path) = widgets::dialog(working)
                 .add_filter("Session report workbook", &["xlsx"])
                 .pick_file()
         {
+            working.remember(&path);
             state.select_workbook(path);
         }
-        match &state.workbook {
-            Some(workbook) => ui.label(workbook.name()),
-            None => ui.weak("No workbook chosen"),
-        };
+        widgets::picked_file(
+            ui,
+            state.workbook.as_ref().map(|w| w.path.as_path()),
+            "No workbook chosen",
+        );
     });
 
     // What the workbook covers is worth saying plainly: it is both a check that the right month
@@ -61,6 +63,10 @@ fn workbook_row(ui: &mut egui::Ui, state: &mut EstimateState) {
         match workbook.covers {
             Some((first, last)) => widgets::note(ui, &format!("Covers {first} to {last}")),
             None => widgets::note(ui, "This workbook holds no sessions."),
+        }
+        // A picker that fills itself in should account for itself.
+        if state.carried_over {
+            widgets::note(ui, "Carried over from the conversion you just ran.");
         }
     }
 }
@@ -180,7 +186,7 @@ fn fold_question(ui: &mut egui::Ui, state: &mut EstimateState) {
 // --------------------------------------------------------------------------------------------
 // Results
 
-fn results(ui: &mut egui::Ui, state: &mut EstimateState) {
+fn results(ui: &mut egui::Ui, state: &mut EstimateState, working: &mut WorkingDir) {
     if state.outcome.is_none() {
         return;
     }
@@ -206,7 +212,7 @@ fn results(ui: &mut egui::Ui, state: &mut EstimateState) {
     }
 
     ui.add_space(14.0);
-    export_row(ui, state);
+    export_row(ui, state, working);
     ui.add_space(10.0);
 
     let sections = report_sections(&state.outcome.as_ref().expect("just checked").text);
@@ -283,7 +289,7 @@ fn figure(ui: &mut egui::Ui, value: f64, color: egui::Color32) {
     );
 }
 
-fn export_row(ui: &mut egui::Ui, state: &mut EstimateState) {
+fn export_row(ui: &mut egui::Ui, state: &mut EstimateState, working: &mut WorkingDir) {
     let Some(outcome) = &state.outcome else {
         return;
     };
@@ -297,13 +303,17 @@ fn export_row(ui: &mut egui::Ui, state: &mut EstimateState) {
         if ui.button("Save…").clicked() {
             // The saved file is byte-for-byte what the command line prints, so a report kept from
             // the app and one piped from the terminal are the same document.
-            if let Some(path) = rfd::FileDialog::new()
+            if let Some(path) = widgets::dialog(working)
                 .set_file_name(&default_name)
                 .add_filter("Report", &["md"])
                 .save_file()
-                && let Err(e) = std::fs::write(&path, &text)
             {
-                state.error = Some(format!("{}: {e}", path.display()));
+                // Remembered whether or not the write succeeds: it is where the user just chose to
+                // be either way.
+                working.remember(&path);
+                if let Err(e) = std::fs::write(&path, &text) {
+                    state.error = Some(format!("{}: {e}", path.display()));
+                }
             }
         }
         widgets::note(
