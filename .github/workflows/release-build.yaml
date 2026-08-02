@@ -13,7 +13,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pinned rather than `ubuntu-latest`: glibc is only backward compatible, so the binary
+          # runs on the build image's release and newer, never older. 22.04 is the oldest release
+          # we support, and building there is what makes the result run everywhere above it.
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -26,24 +29,28 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # Ahead of the build so a failure stops the release before any artifact is uploaded.
+      - name: Run tests
+        run: cargo test --verbose
       - name: Run Build
         run: cargo build --release --target ${{ matrix.target }} --verbose
-      - name: Upload Artifact
+      # `upload-artifact` zips its inputs and drops the Unix mode bits, so an uploaded binary
+      # arrives without its executable bit. Tarring first carries the mode through ourselves.
+      - name: Package Linux binary
+        if: runner.os == 'Linux'
+        run: tar -czf ev_peak_gui-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release ev_peak_gui
+      - name: Upload Linux Artifact
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
-          # All three binaries: the desktop app, and the two command-line tools. The `.exe` and
-          # bare names are both listed because one matrix entry produces each; `if-no-files-found:
-          # ignore` is what lets the other be absent.
-          path: |
-            target/${{ matrix.target }}/release/ev_peak_gui
-            target/${{ matrix.target }}/release/ev_peak_gui.exe
-            # target/${{ matrix.target }}/release/ev_estimate_cli
-            # target/${{ matrix.target }}/release/ev_estimate_cli.exe
-            # target/${{ matrix.target }}/release/ev_csv_to_xlsx
-            # target/${{ matrix.target }}/release/ev_csv_to_xlsx.exe
-          if-no-files-found: ignore
-      - name: Run tests
-        run: cargo test --verbose
+          path: ev_peak_gui-${{ matrix.target }}.tar.gz
+      # No tarball on Windows: nothing there depends on a permission bit surviving the trip.
+      - name: Upload Windows Artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/ev_peak_gui.exe
 
 
