@@ -10,14 +10,14 @@ use std::{
 const USAGE: &str = "\
 Estimates the EV charging contribution to peak demand over an interval of interest.
 
-Usage: ev_peak_cli <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM [EST|EDT]> [15m|1h]
+Usage: ev_estimate_cli <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM [EST|EDT]> [15m|1h]
 
 The interval start is given in local time (ET), because that is what Toronto Hydro's metering data
 is stated in. Length defaults to 1h when the start is on the hour and 15m otherwise.
 
-  ev_peak_cli June.xlsx \"2026-06-01 16:00\" 1h
-  ev_peak_cli June.xlsx \"2026-06-01 16:45\"
-  ev_peak_cli Nov.xlsx  \"2026-11-01 01:30 EDT\" 15m
+  ev_estimate_cli June.xlsx \"2026-06-01 16:00\" 1h
+  ev_estimate_cli June.xlsx \"2026-06-01 16:45\"
+  ev_estimate_cli Nov.xlsx  \"2026-11-01 01:30 EDT\" 15m
 
 On the night DST ends, one hour of wall time occurs twice; add EST or EDT to say which is meant.
 The designator is accepted at any time and checked against the date, so a wrong one is an error
@@ -171,7 +171,7 @@ mod test {
     /// The first argument is checked before the interval is, so omitting the workbook is reported as
     /// the missing workbook rather than as an unreadable timestamp.
     ///
-    /// `ev_peak_cli "2026-06-01 16:00" 1h` is what prompted this: two arguments is a legal shape,
+    /// `ev_estimate_cli "2026-06-01 16:00" 1h` is what prompted this: two arguments is a legal shape,
     /// since the length is optional, so the start was read as the path and `1h` as the start.
     #[test]
     fn a_first_argument_that_is_not_a_workbook_is_caught_before_the_interval() {

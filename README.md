@@ -50,13 +50,13 @@ The two DST transitions appear where they matter and nowhere else. On the night 
 | Command                                                      | Purpose                                                      |
 | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | `ev_csv_to_xlsx <SESSION_REPORT.csv>...`                     | Converts a session report to a workbook, computing the derived columns and flagging rows that need review. Takes several files at once; the app takes one. |
-| `ev_peak_cli <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM [EST\|EDT]> [15m\|1h]` | Prints the peak estimate report for one interval of interest. |
+| `ev_estimate_cli <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM [EST\|EDT]> [15m\|1h]` | Prints the peak estimate report for one interval of interest. |
 
-`ev_peak_cli` takes the interval start in **local time (ET)**. The length defaults to `1h` when the start is on the hour and `15m` otherwise. An interval breaking the boundary rules described earlier is rejected rather than estimated.
+`ev_estimate_cli` takes the interval start in **local time (ET)**. The length defaults to `1h` when the start is on the hour and `15m` otherwise. An interval breaking the boundary rules described earlier is rejected rather than estimated.
 
 The two DST transitions are treated differently, because they are different problems.
 
-- On the night DST **ends**, an hour of wall time occurs twice. That is a question the caller can answer, so `ev_peak_cli` asks it: a bare `"2026-11-01 01:30"` is refused, and `"2026-11-01 01:30 EST"` or `"... EDT"` resolves it. The designator is accepted on any date and **checked against it** — `"2026-06-01 16:00 EST"` is an error, not a silently ignored hint — so naming the wrong one cannot produce a figure for the wrong hour.
+- On the night DST **ends**, an hour of wall time occurs twice. That is a question the caller can answer, so `ev_estimate_cli` asks it: a bare `"2026-11-01 01:30"` is refused, and `"2026-11-01 01:30 EST"` or `"... EDT"` resolves it. The designator is accepted on any date and **checked against it** — `"2026-06-01 16:00 EST"` is an error, not a silently ignored hint — so naming the wrong one cannot produce a figure for the wrong hour.
 - On the night DST **begins**, an hour of wall time never happens. There is nothing to choose between, so such a start is refused outright and no designator helps.
 
 These rules live in one place, `src/interval.rs`, and both front-ends come through it, so the app and the command line cannot disagree about what interval a bill may be argued from.

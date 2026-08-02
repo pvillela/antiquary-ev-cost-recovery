@@ -1,9 +1,10 @@
 //! The GUI for the two tools in this crate: converting an Evolute session report to a workbook,
 //! and estimating the EV contribution to peak demand over an interval of interest.
 //!
-//! The same figures as `ev_peak_cli`, computed by the same library code, and saved reports are
-//! byte-for-byte what that command prints. What differs is only the asking: the interval is chosen
-//! from controls that offer nothing off-spec, rather than typed and then checked.
+//! The estimates are the same as those from `ev_estimate_cli`; computed by the same library code,
+//! and saved reports are byte-for-byte what that command prints. What differs is only the asking:
+//! the interval is chosen from controls that offer nothing off-spec, rather than typed and then
+//! checked.
 
 // A GUI has no use for a console, and on Windows one would open behind the window. Kept in debug
 // builds, where a panic message on stderr is worth more than the tidiness.

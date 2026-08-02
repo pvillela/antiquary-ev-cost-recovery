@@ -39,7 +39,7 @@ Facts established while planning:
 | Persistence | **None** — fresh every launch |
 | Targets | Linux x86_64 and Windows x86_64 only (the matrix CI already has) |
 | Double-click | Windows: no console window + embedded icon. Linux: plain binary, documented |
-| Naming | New `ev_peak_gui`; rename `ev_estimates_cli` → `ev_peak_cli` |
+| Naming | New `ev_peak_gui`; rename `ev_estimates_cli` → `ev_estimate_cli` |
 | Appearance | Follow OS light/dark, zoom 1.15, 900×700 resizable |
 | Errors | Inline red block below the button pressed, library message verbatim |
 | Running | Explicit Estimate button, no live recompute |
@@ -66,7 +66,7 @@ with the code; the CLI keeps only `split_designator` and its own text parsing.
 
 ### 2. Rename the CLI
 
-`src/bin/ev_estimates_cli.rs` → `src/bin/ev_peak_cli.rs`. Three places refer to the old name and
+`src/bin/ev_estimates_cli.rs` → `src/bin/ev_estimate_cli.rs`. Three places refer to the old name and
 must agree afterwards:
 
 - `.github/workflows/release-build.yaml` — artifact paths name `ev_estimates_cli`.
@@ -137,7 +137,7 @@ you would rather keep it as a scratchpad.
 
 - `cargo test` — the moved interval rules keep their tests; golden-file report tests must still
   pass untouched, since nothing in `report.rs` changes.
-- `cargo run --bin ev_peak_cli -- data/Session_Report_June_1_2026-June_30_2026-what-if.xlsx "2026-06-15 16:00" 1h`
+- `cargo run --bin ev_estimate_cli -- data/Session_Report_June_1_2026-June_30_2026-what-if.xlsx "2026-06-15 16:00" 1h`
   still prints what it prints today, after the rename and the rules move.
 - `cargo run --bin ev_peak_gui` and, against
   `data/Session_Report_June_1_2026-June_30_2026-what-if.xlsx` and the fixtures in `tests/fixtures/`:

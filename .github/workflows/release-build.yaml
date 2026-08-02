@@ -38,8 +38,8 @@ jobs:
           path: |
             target/${{ matrix.target }}/release/ev_peak_gui
             target/${{ matrix.target }}/release/ev_peak_gui.exe
-            target/${{ matrix.target }}/release/ev_peak_cli
-            target/${{ matrix.target }}/release/ev_peak_cli.exe
+            target/${{ matrix.target }}/release/ev_estimate_cli
+            target/${{ matrix.target }}/release/ev_estimate_cli.exe
             target/${{ matrix.target }}/release/ev_csv_to_xlsx
             target/${{ matrix.target }}/release/ev_csv_to_xlsx.exe
           if-no-files-found: ignore
