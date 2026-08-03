@@ -75,7 +75,7 @@ None of the data in the Excel workbook (or the source CSV) should be modified by
 
 ## Estimation logic
 
-### Estimating algorithm overview
+### Estimation algorithm overview
 
 Given a time interval of interest **`I`** as described above, the estimation of EV peak power demand during the interval proceeds as follows:
 
