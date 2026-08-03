@@ -89,7 +89,7 @@ impl Load {
     }
 
     /// Scale every component by a common factor.
-    fn scaled(self, factor: f64) -> Self {
+    pub(crate) fn scaled(self, factor: f64) -> Self {
         Self {
             real_kw: self.real_kw * factor,
             reactive_kvar: self.reactive_kvar * factor,
@@ -124,14 +124,21 @@ pub fn ev_pilot_current_a() -> f64 {
 /// Apparent power of one charging vehicle. The load is current-limited, so
 /// this follows from voltage and current alone and is unaffected by power
 /// factor.
-fn ev_apparent_kva() -> f64 {
+pub fn ev_apparent_power_kva() -> f64 {
     PANEL_VOLTAGE_V * ev_pilot_current_a() / VA_PER_KVA
+}
+
+/// Real power of one charging vehicle.
+///
+/// Equal to [`ev_apparent_power_kva()`] * [`EV_TRUE_POWER_FACTOR`]
+pub fn ev_real_power_kw() -> f64 {
+    ev_apparent_power_kva() * EV_TRUE_POWER_FACTOR
 }
 
 /// Ceiling on true power factor imposed by current distortion alone. This is
 /// the distortion factor: true PF is the product of displacement PF and this
 /// term, so unity displacement PF is the best any load can do at a given THD.
-fn max_true_power_factor() -> f64 {
+pub fn max_true_power_factor() -> f64 {
     1.0 / (1.0 + EV_CURRENT_THD.powi(2)).sqrt()
 }
 
@@ -153,10 +160,10 @@ pub fn ev_load() -> Load {
         EV_CURRENT_THD
     );
 
-    let apparent = ev_apparent_kva();
+    let apparent = ev_apparent_power_kva();
     let fundamental_apparent = apparent * max_true_power_factor();
 
-    let real = apparent * EV_TRUE_POWER_FACTOR;
+    let real = ev_real_power_kw();
     let distortion = fundamental_apparent * EV_CURRENT_THD;
     // Displacement reactive power is whatever the fundamental apparent power
     // holds beyond the real component. The assertion above guarantees this
@@ -174,7 +181,7 @@ pub fn ev_load() -> Load {
 ///
 /// No-load loss and magnetizing current are fixed. Copper loss and leakage
 /// reactive power scale with the square of loading.
-fn transformer_load(secondary: Load) -> Load {
+pub(crate) fn transformer_load(secondary: Load) -> Load {
     let loading = secondary.apparent_kva() / XFMR_RATING_KVA;
     let loading_squared = loading.powi(2);
 
@@ -218,12 +225,12 @@ mod tests {
     #[test]
     fn vehicle_apparent_power_is_current_limited() {
         // 208 V x 32 A, independent of power factor.
-        assert_close(ev_apparent_kva(), 6.656);
+        assert_close(ev_apparent_power_kva(), 6.656);
     }
 
     #[test]
     fn vehicle_components_recombine_to_apparent_power() {
-        assert_close(ev_load().apparent_kva(), ev_apparent_kva());
+        assert_close(ev_load().apparent_kva(), ev_apparent_power_kva());
     }
 
     #[test]

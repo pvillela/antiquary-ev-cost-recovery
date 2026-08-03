@@ -12,8 +12,7 @@ use jiff::{
 use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
 
 use crate::{
-    Anomaly, AnomalyKind, EVOLUTE_BREAKER_KW_RATING, SESSION_BOUNDARY_RESOLUTION, Session,
-    time_zone,
+    Anomaly, AnomalyKind, SESSION_BOUNDARY_RESOLUTION, Session, ev_real_power_kw, time_zone,
 };
 
 /// Excel's day-zero for the 1900 date system, as a Unix timestamp.
@@ -346,7 +345,7 @@ impl CsvSession {
             // member is flagged here. A tolerance would leave a band of members that invert the
             // bracket silently.
             let avg_power = self.energy_use / (self.active_charge_time.as_secs_f64() / 3600.0);
-            if avg_power > EVOLUTE_BREAKER_KW_RATING {
+            if avg_power > ev_real_power_kw() {
                 common.push(AnomalyKind::ExcessiveAvgPower);
             }
         }

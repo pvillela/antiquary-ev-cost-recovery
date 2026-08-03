@@ -128,6 +128,10 @@ A skew margin's sets appear only when the margin could raise the estimate: when 
 
 A worked example, kept current by a golden-file test: [`tests/fixtures/Session_Report_Diagram.report.md`](tests/fixtures/Session_Report_Diagram.report.md), walked through step by step in [`docs/session-grouping.md`](docs/session-grouping.md).
 
+### Interval of interest with no EVs charging
+
+In such cases, the EV charging infrastructure still impacts the overall building's peak kW and kVA, but the impact is small (currently ~ 0.35 kW and 1.54 kVA for the transformer). The software just indicates that no sessions intersected the interval of interest.
+
 ## Technical Notes
 
 ### Time zone

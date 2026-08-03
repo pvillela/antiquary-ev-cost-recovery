@@ -1,4 +1,4 @@
-use crate::{RSession, Session, quicksort};
+use crate::{Load, RSession, Session, ev_load, quicksort, site_load, transformer_load};
 use jiff::Timestamp;
 use std::{
     cell::{Ref, RefCell},
@@ -97,17 +97,33 @@ impl View {
     }
 }
 
-/// The figures a group reports under one [`View`].
+/// The Figures a group reports under one [`View`].
 #[derive(Debug, Clone, Copy)]
-struct Figures {
-    size: usize,
-    agg_avg_power: f64,
+pub struct Metrics {
+    pub size: usize,
+    pub agg_avg_power: f64,
 }
 
-/// The [`Figures`] for both views, indexed by [`View::index`]. Computed once, when the sweep closes
+impl Metrics {
+    fn site_load(&self) -> Load {
+        site_load(self.size as u32)
+    }
+
+    pub fn size_basis_site_load(&self) -> Load {
+        self.site_load()
+    }
+
+    pub fn power_basis_site_load(&self) -> Load {
+        let single_ev_real_kw = ev_load().real_kw;
+        let secondary = ev_load().scaled(self.agg_avg_power / single_ev_real_kw);
+        secondary + transformer_load(secondary)
+    }
+}
+
+/// The [`Metrics`] for both views, indexed by [`View::index`]. Computed once, when the sweep closes
 /// the group: each entry is a fold over the members, and the report asks for both of them.
 #[derive(Debug, Clone)]
-struct SessionGroupCache([Figures; 2]);
+struct SessionGroupCache([Metrics; 2]);
 
 /// Where a member sits relative to its group's two ends, which is what decides how far its true
 /// times can be moved inside the group. See [`SessionGroup::min_overlap_figures`].
@@ -176,21 +192,22 @@ impl SessionGroup {
         SessionIter(self.sessions.iter())
     }
 
-    fn figures(&self, view: View) -> Figures {
+    /// Aggregate average power and count over the sessions in the group's specified `view`.
+    pub fn metrics(&self, view: View) -> Metrics {
         match &self.cache {
             Some(cache) => cache.0[view.index()],
             None => panic!("SessionGroup cache not initialized"),
         }
     }
 
-    /// Aggregate average power over the members `view` counts.
+    /// Aggregate average power over the sessions in the group's specified `view`.
     pub fn agg_avg_power_in(&self, view: View) -> f64 {
-        self.figures(view).agg_avg_power
+        self.metrics(view).agg_avg_power
     }
 
-    /// Number of members `view` counts.
+    /// Number of sessions in the group's specified `view`.
     pub fn size_in(&self, view: View) -> usize {
-        self.figures(view).size
+        self.metrics(view).size
     }
 
     /// Aggregate average power of the group exactly as reported. Shorthand for [`View::Nominal`],
@@ -247,8 +264,8 @@ impl SessionGroup {
     }
 
     /// The figures with every member taken at face value.
-    fn nominal_figures(&self) -> Figures {
-        Figures {
+    fn nominal_figures(&self) -> Metrics {
+        Metrics {
             size: self.sessions.len(),
             agg_avg_power: self
                 .sessions
@@ -302,7 +319,7 @@ impl SessionGroup {
     /// enough to defeat [`crate::max_group_by`]'s tie-break in the very case it exists for, where a
     /// dubious group's minimum reading reproduces a neighbouring group's membership exactly. Summed
     /// in one order, equal multisets give equal totals and the tie is a real tie.
-    fn min_overlap_figures(&self) -> Figures {
+    fn min_overlap_figures(&self) -> Metrics {
         if self.duration() > crate::SESSION_BOUNDARY_RESOLUTION {
             return self.nominal_figures();
         }
@@ -363,7 +380,7 @@ impl SessionGroup {
         // The size is the same choice made on counts rather than on power, so the two may name
         // different classes — a class can hold the most sessions and the least load.
         let ba_size = total(Bucket::Ba).0;
-        Figures {
+        Metrics {
             size: ba_size
                 + bi_size
                     .max(ia_size)
@@ -372,7 +389,7 @@ impl SessionGroup {
         }
     }
 
-    /// Fills the [`Figures`] for both views. `View::ALL` is in [`View::index`] order, so the array
+    /// Fills the [`Metrics`] for both views. `View::ALL` is in [`View::index`] order, so the array
     /// `map` lands each entry where `figures` will look for it.
     pub(crate) fn initialize_cache(&mut self) {
         let cache = SessionGroupCache(View::ALL.map(|view| match view {

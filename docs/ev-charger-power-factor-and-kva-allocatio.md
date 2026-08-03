@@ -62,24 +62,71 @@ If a bound is needed for one vehicle in isolation, **7.0 kVA** covers nominal pl
 
 ## 3. Transformer model
 
-Typical values for a 75 kVA dry-type unit:
+Typical values for a 75 kVA dry-type unit. Bold entries are declared constants; the reactive figures are products of a per-unit constant and the rating:
 
 | Parameter | Value | Scales with |
 |---|---|---|
-| Exciting current ≈ 2% → magnetizing reactive | 1.5 kvar | **Nothing** — constant while energized |
-| No-load (core) loss | 0.35 kW | **Nothing** — constant while energized |
-| Full-load load loss (copper) | 1.6 kW at 75 kVA | Loading² |
-| Impedance ≈ 4.5%, X ≈ 4% → leakage reactive | 3.0 kvar at 75 kVA | Loading² |
+| Magnetizing current, 2% pu → 1.5 kvar | *derived* | **Nothing** — constant while energized |
+| No-load (core) loss | **0.35 kW** | **Nothing** — constant while energized |
+| Full-load load loss (copper) | **1.6 kW** at rated | Loading² |
+| Impedance ≈ 4.5%, X ≈ 4% pu → 3.0 kvar | *derived* | Loading² |
 
-With `N` vehicles at full current and loading fraction `x = 6.656N / 75`:
+### 3.1 Formulas
 
-$$P = 6.589N + 0.35 + 1.6x^2 \qquad Q = 0.890N + 1.5 + 3.0x^2 \qquad D = 0.299N$$
+Stated symbolically (see [3.2 Symbol reference](#32-symbol-reference) below), so that every quantity traces to a declared constant. No numeric literals appear below; §3.2 maps each symbol to its program identifier and value.
+
+**Per vehicle** — apparent power is set by current, then resolved into components:
+
+$$S_{EV} = \frac{V \cdot I_b \cdot k}{1000} \qquad S_1 = \frac{S_{EV}}{\sqrt{1 + THD^2}}$$
+
+$$P_{EV} = S_{EV} \cdot PF \qquad D_{EV} = S_1 \cdot THD \qquad Q_{EV} = \sqrt{S_1^2 - P_{EV}^2}$$
+
+**Site**, for `N` vehicles at full current, with loading fraction $x = N \cdot S_{EV} / S_{rated}$:
+
+$$P = N \cdot P_{EV} + P_{NL} + P_{LL} \cdot x^2$$
+
+$$Q = N \cdot Q_{EV} + m \cdot S_{rated} + X \cdot S_{rated} \cdot x^2$$
+
+$$D = N \cdot D_{EV}$$
 
 $$S = \sqrt{P^2 + Q^2 + D^2} \qquad PF_{true} = P / S$$
 
 The three components are orthogonal, so they combine in quadrature rather than by simple addition.
 
-### Energised but idle
+**Constraint.** $PF \le 1/\sqrt{1 + THD^2}$. True power factor is the product of displacement power factor and the distortion factor, so the distortion factor is a ceiling reached only at unity displacement. At `THD = 0.045` the ceiling is 0.99899, leaving 0.90% headroom above `PF = 0.99`. The program asserts this rather than clamping, so incompatible constants fail loudly instead of silently yielding $Q_{EV} = 0$.
+
+### 3.2 Symbol reference
+
+**Declared constants** — the only values that may be edited:
+
+| Symbol | Program identifier | Value |
+|---|---|---|
+| $V$ | `PANEL_VOLTAGE_V` | 208.0 V |
+| $I_b$ | `BREAKER_RATING_A` | 40.0 A |
+| $k$ | `CONTINUOUS_DUTY_DERATE` | 0.80 |
+| — | `BREAKER_COUNT` | 10 |
+| $PF$ | `EV_TRUE_POWER_FACTOR` | 0.99 |
+| $THD$ | `EV_CURRENT_THD` | 0.045 |
+| $S_{rated}$ | `XFMR_RATING_KVA` | 75.0 kVA |
+| $P_{NL}$ | `XFMR_NO_LOAD_LOSS_KW` | 0.35 kW |
+| $P_{LL}$ | `XFMR_FULL_LOAD_LOSS_KW` | 1.6 kW |
+| $m$ | `XFMR_MAGNETIZING_PU` | 0.02 pu |
+| $X$ | `XFMR_REACTANCE_PU` | 0.04 pu |
+
+**Derived quantities** — computed, never declared. Figures shown for reference only; changing a constant above changes all of them:
+
+| Symbol | Where computed | Value |
+|---|---|---|
+| $S_{EV}$ | `ev_apparent_kva()` | 6.656 kVA |
+| $S_1$ | `fundamental_apparent`, local in `ev_load()` | 6.649 kVA |
+| $P_{EV}$ | `ev_load().real_kw` | **6.589 kW** |
+| $Q_{EV}$ | `ev_load().reactive_kvar` | 0.890 kvar |
+| $D_{EV}$ | `ev_load().distortion_kvar` | 0.299 kvar |
+| $m \cdot S_{rated}$ | inline in `transformer_load()` | 1.5 kvar |
+| $X \cdot S_{rated}$ | inline in `transformer_load()` | 3.0 kvar |
+| $x$ | `loading`, local in `transformer_load()` | 0 to 0.887 |
+
+### 3.3 Energised but idle
 
 With the transformer live and no vehicle charging:
 
@@ -249,7 +296,27 @@ For CEC Section 8 and Section 86 purposes, the calculated load is the connected 
 
 ---
 
-## 9. Summary
+## 9. Superseded figures
+
+Earlier working notes in this analysis contained values that the model in §3 replaces. For clarity:
+
+| Item | Earliest value | Intermediate | **Current value** | Reason |
+|---|---|---|---|---|
+| Per-EV displacement kvar | 0.94 | 0.91 | **0.89** | Now derived from PF and THD rather than a rounded intermediate |
+| Site PF at N=1 | 0.951 | 0.943 | **0.944** | Follows from the above |
+| Site PF at N≥3 (plateau) | 0.981–0.985 | 0.976–0.981 | **0.976–0.982** | Follows from the above |
+| Site kVA at N=10 | 68.6 / 68.98 | 68.81 | **68.77** | Consistent recomputation |
+| Per-EV block, two-part | 6.75 | 6.82 | **6.82** | Standing block removed vectorially, not by scalar subtraction |
+| Minimum of S/N curve | "N = 7–8" | N ≈ 6 (6.86) | **N ≈ 6 (6.85)** | Consistent recomputation |
+| Marginal kVA of 1st EV | 7.39 | 5.83 | **5.82** | Measured against the energised-idle baseline, as marginal cost requires |
+| Taper-scenario PF | 0.7–0.85 | — | **0.85–0.95, unmodelled** | Earliest figure assumed more leading current than is typical |
+| Single blended per-EV figure | 6.9 | 6.9 | **6.9** | Unchanged throughout |
+
+The final column now matches `ev_site_load.rs` exactly. The residual differences between the intermediate and current columns are all below 0.1% and arise from one change: displacement reactive power is now derived from `EV_TRUE_POWER_FACTOR` and `EV_CURRENT_THD` rather than entered as a rounded figure. They are far smaller than the uncertainty in the transformer's assumed loss and excitation characteristics, which are typical values rather than measured nameplate data.
+
+---
+
+## 10. Summary
 
 1. The vehicle's onboard charger, not the EVSE, sets power factor. Design value **0.99** at full current.
 2. Per-EV apparent power is **6.66 kVA**, fixed by V × I. Use **7.0 kVA** if voltage tolerance must be covered.

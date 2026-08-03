@@ -60,9 +60,9 @@ pub static CLOCK_SKEW_MARGIN: LazyLock<Duration> = LazyLock::new(|| {
     Duration::from_secs_f64(secs)
 });
 
-pub const EV_POWER_FACTOR: f64 = 0.95;
-pub const EVOLUTE_BREAKER_KW_RATING: f64 = 6.7;
-pub const EVOLUTE_BREAKER_KVA_RATING: f64 = 7.5;
+// pub const EV_POWER_FACTOR: f64 = 0.95; // REPLACE WITH EV_TRUE_POWER_FACTOR
+// pub const EVOLUTE_BREAKER_KW_RATING: f64 = 6.7; // REPLACE WITH `ev_real_power_kw()`
+// pub const EVOLUTE_BREAKER_KVA_RATING: f64 = 7.5; // REPLACE WITH `ev_real_power_kva()`
 
 pub(crate) fn time_zone() -> TimeZone {
     TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid time-zone name")

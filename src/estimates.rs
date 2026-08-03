@@ -1,7 +1,6 @@
 use crate::{
-    Anomaly, CLOCK_SKEW_MARGIN, EV_POWER_FACTOR, EVOLUTE_BREAKER_KVA_RATING,
-    EVOLUTE_BREAKER_KW_RATING, RSession, Session, SessionGroup, SessionReport, View,
-    groups_for_interval, session_list,
+    Anomaly, CLOCK_SKEW_MARGIN, RSession, Session, SessionGroup, SessionReport, View,
+    ev_real_power_kw, groups_for_interval, session_list,
 };
 use jiff::{SignedDuration, Timestamp};
 use std::{
@@ -244,7 +243,7 @@ pub fn max_power_estimates_for_interval(
         s.avg_power = if s.energy_use == 0.0 {
             0.0
         } else {
-            EVOLUTE_BREAKER_KW_RATING
+            ev_real_power_kw()
         };
         s
     });
@@ -384,26 +383,41 @@ fn collect_session_anomalies(spans: &WindowSpans, rsessions: &[RSession]) -> Vec
 
 /// The four estimates for `groups` under one [`View`], or `None` when there are no groups.
 ///
-/// Each figure selects its own peak group *through the same `view`* it reports. Selecting by one
-/// view and reporting another would name a group that did not peak.
+/// When there are no groups, i.e., no sessions intersecting the interval of interest,
+/// the EV charging infrastructure still impacts the overall building's peak kW and kVA,
+/// but the impact is small (currently ~ 0.35 kW and 1.54 kVA) and not reported.
+///
+/// Each estimating basis selects its own peak group.
 fn estimate_set(groups: &[Rc<SessionGroup>], view: View) -> Option<EstimateSet> {
-    let power_idx = max_group_by(groups, |g| g.agg_avg_power_in(view))?;
-    let size_idx = max_group_by(groups, |g| g.size_in(view))?;
+    let power_basis_idx = max_group_by(groups, |g| g.agg_avg_power_in(view))?;
+    let size_basis_idx = max_group_by(groups, |g| g.size_in(view))?;
 
-    let max_kw = groups[power_idx].agg_avg_power_in(view);
-    let max_size = groups[size_idx].size_in(view) as f64;
+    let power_basis_metrics = groups[power_basis_idx].metrics(view);
+    let size_basis_metrics = groups[size_basis_idx].metrics(view);
 
-    let at = |value: f64, idx: usize| PowerEstimate {
+    let estimate = |value: f64, idx: usize| PowerEstimate {
         value,
         session_group_idx: idx,
         group: groups[idx].clone(),
     };
 
     Some(EstimateSet {
-        consumption_based_kw: at(max_kw, power_idx),
-        consumption_based_kva: at(max_kw / EV_POWER_FACTOR, power_idx),
-        breaker_specs_based_kw: at(max_size * EVOLUTE_BREAKER_KW_RATING, size_idx),
-        breaker_specs_based_kva: at(max_size * EVOLUTE_BREAKER_KVA_RATING, size_idx),
+        consumption_based_kw: estimate(
+            power_basis_metrics.power_basis_site_load().real_kw,
+            power_basis_idx,
+        ),
+        consumption_based_kva: estimate(
+            power_basis_metrics.power_basis_site_load().apparent_kva(),
+            power_basis_idx,
+        ),
+        breaker_specs_based_kw: estimate(
+            size_basis_metrics.size_basis_site_load().real_kw,
+            size_basis_idx,
+        ),
+        breaker_specs_based_kva: estimate(
+            size_basis_metrics.size_basis_site_load().apparent_kva(),
+            size_basis_idx,
+        ),
     })
 }
 
