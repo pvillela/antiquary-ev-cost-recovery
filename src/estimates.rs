@@ -31,8 +31,8 @@ impl PowerEstimate {
 pub struct EstimateSet {
     pub consumption_based_kw: PowerEstimate,
     pub consumption_based_kva: PowerEstimate,
-    pub breaker_specs_based_kw: PowerEstimate,
-    pub breaker_specs_based_kva: PowerEstimate,
+    pub evems_specs_based_kw: PowerEstimate,
+    pub evems_specs_based_kva: PowerEstimate,
 }
 
 impl EstimateSet {
@@ -47,8 +47,8 @@ impl EstimateSet {
         [
             self.consumption_based_kw.value,
             self.consumption_based_kva.value,
-            self.breaker_specs_based_kw.value,
-            self.breaker_specs_based_kva.value,
+            self.evems_specs_based_kw.value,
+            self.evems_specs_based_kva.value,
         ]
     }
 }
@@ -410,11 +410,11 @@ fn estimate_set(groups: &[Rc<SessionGroup>], view: View) -> Option<EstimateSet> 
             power_basis_metrics.power_basis_site_load().apparent_kva(),
             power_basis_idx,
         ),
-        breaker_specs_based_kw: estimate(
+        evems_specs_based_kw: estimate(
             size_basis_metrics.size_basis_site_load().real_kw,
             size_basis_idx,
         ),
-        breaker_specs_based_kva: estimate(
+        evems_specs_based_kva: estimate(
             size_basis_metrics.size_basis_site_load().apparent_kva(),
             size_basis_idx,
         ),
@@ -555,7 +555,7 @@ mod test {
         assert_eq!(est.nominal.consumption_based_kw.value, 9.0);
         let min = est.min_overlap.expect("the figures differ, so it is given");
         assert_eq!(min.consumption_based_kw.value, 5.0);
-        assert_eq!(min.breaker_specs_based_kw.value, EVOLUTE_BREAKER_KW_RATING);
+        assert_eq!(min.evems_specs_based_kw.value, EVOLUTE_BREAKER_KW_RATING);
     }
 
     /// A dubious group away from every peak changes no figure, so no second table is produced —

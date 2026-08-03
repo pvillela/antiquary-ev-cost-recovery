@@ -161,9 +161,9 @@ fn estimate_rows(set: &EstimateSet) -> Vec<Vec<String>> {
         ],
         vec![
             "Breaker-spec-based".to_owned(),
-            format!("{:.3}", set.breaker_specs_based_kw.value),
-            format!("{:.3}", set.breaker_specs_based_kva.value),
-            set.breaker_specs_based_kw.session_group_idx.to_string(),
+            format!("{:.3}", set.evems_specs_based_kw.value),
+            format!("{:.3}", set.evems_specs_based_kva.value),
+            set.evems_specs_based_kw.session_group_idx.to_string(),
         ],
     ]
 }
@@ -435,11 +435,11 @@ fn push_estimate_sets(estimates: &PowerEstimates, out: &mut Vec<String>) {
                  {:.3} kVA ({}consumption-based) to {:.3} kVA ({}breaker-spec-based).",
             low.2.consumption_based_kw.value,
             name(low.0),
-            high.2.breaker_specs_based_kw.value,
+            high.2.evems_specs_based_kw.value,
             name(high.0),
             low.2.consumption_based_kva.value,
             name(low.0),
-            high.2.breaker_specs_based_kva.value,
+            high.2.evems_specs_based_kva.value,
             name(high.0),
         ),
         "",

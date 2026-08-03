@@ -144,14 +144,12 @@ fn diagram_scenario_produces_the_expected_tiling_and_estimates() {
     // The nominal estimates peak at group 5, the sliver, on both figures.
     let nominal = &estimates.nominal;
     assert_eq!(nominal.consumption_based_kw.session_group_idx, 5);
-    assert_eq!(nominal.breaker_specs_based_kw.session_group_idx, 5);
+    assert_eq!(nominal.evems_specs_based_kw.session_group_idx, 5);
 
     assert!((nominal.consumption_based_kw.value - 31.4).abs() < 1e-9);
     assert!((nominal.consumption_based_kva.value - 31.4 / EV_POWER_FACTOR).abs() < 1e-9);
-    assert!((nominal.breaker_specs_based_kw.value - 5.0 * EVOLUTE_BREAKER_KW_RATING).abs() < 1e-9);
-    assert!(
-        (nominal.breaker_specs_based_kva.value - 5.0 * EVOLUTE_BREAKER_KVA_RATING).abs() < 1e-9
-    );
+    assert!((nominal.evems_specs_based_kw.value - 5.0 * EVOLUTE_BREAKER_KW_RATING).abs() < 1e-9);
+    assert!((nominal.evems_specs_based_kva.value - 5.0 * EVOLUTE_BREAKER_KVA_RATING).abs() < 1e-9);
 
     // An estimate can name the group it came from.
     assert_eq!(nominal.consumption_based_kw.group().size(), 5);
@@ -184,13 +182,13 @@ fn diagram_scenario_produces_the_expected_tiling_and_estimates() {
         .expect("group 5 is dubious and carries both peaks");
     assert!((min_overlap.consumption_based_kw.value - 24.7).abs() < 1e-9);
     assert!(
-        (min_overlap.breaker_specs_based_kw.value - 4.0 * EVOLUTE_BREAKER_KW_RATING).abs() < 1e-9
+        (min_overlap.evems_specs_based_kw.value - 4.0 * EVOLUTE_BREAKER_KW_RATING).abs() < 1e-9
     );
 
     // Group 4 reaches 24.7 kW beyond doubt while group 5 only may, so the tie is attributed to
     // group 4 — the peak moves between the two sets.
     assert_eq!(min_overlap.consumption_based_kw.session_group_idx, 4);
-    assert_eq!(min_overlap.breaker_specs_based_kw.session_group_idx, 4);
+    assert_eq!(min_overlap.evems_specs_based_kw.session_group_idx, 4);
 
     // The ordering holds on all four figures.
     for (m, n) in min_overlap.values().iter().zip(nominal.values()) {
@@ -199,8 +197,8 @@ fn diagram_scenario_produces_the_expected_tiling_and_estimates() {
 
     // The brackets from README, "Estimation logic": the consumption-based figure is the lower end
     // of each pair, the breaker-spec figure the upper.
-    assert!(nominal.consumption_based_kw.value < nominal.breaker_specs_based_kw.value);
-    assert!(nominal.consumption_based_kva.value < nominal.breaker_specs_based_kva.value);
+    assert!(nominal.consumption_based_kw.value < nominal.evems_specs_based_kw.value);
+    assert!(nominal.consumption_based_kva.value < nominal.evems_specs_based_kva.value);
 
     fs::remove_dir_all(xlsx.parent().unwrap()).ok();
 }

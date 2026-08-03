@@ -127,7 +127,7 @@ The likely kW values are in the range from 41.429 kW (consumption-based) to
 ```
 
 The bracket inverted. `consumption_based_kw` is a group's aggregate average power while
-`breaker_spec_based_kw` is that group's member count times a single rating, so the first exceeds the
+`evems_specs_based_kw` is that group's member count times a single rating, so the first exceeds the
 second whenever a session draws more than the rating — which the hardware is supposed to make
 impossible, and which nothing in the code checked. The fixture was corrected to stay under the
 rating; the gap it exposed is closed by a new anomaly kind.

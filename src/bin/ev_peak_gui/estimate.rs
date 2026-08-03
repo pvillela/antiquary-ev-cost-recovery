@@ -251,8 +251,8 @@ fn headline(ui: &mut egui::Ui, estimates: &PowerEstimates, has_margins: bool) {
 
             let ceiling = theme::ceiling(ui);
             ui.label("Likely at most");
-            figure(ui, high.breaker_specs_based_kw.value, ceiling);
-            figure(ui, high.breaker_specs_based_kva.value, ceiling);
+            figure(ui, high.evems_specs_based_kw.value, ceiling);
+            figure(ui, high.evems_specs_based_kva.value, ceiling);
             ui.end_row();
         });
 
