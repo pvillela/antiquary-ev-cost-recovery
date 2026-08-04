@@ -865,7 +865,7 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
             energy_use,
             // Zero charge time makes this infinite or NAN, which is the answer: the division is left to
             // say so rather than being guarded against.
-            avg_power: energy_use / (charge_time.as_secs_f64() / 3600.0),
+            avg_kw: energy_use / (charge_time.as_secs_f64() / 3600.0),
             anomalies,
         };
 
@@ -1611,7 +1611,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00001,,2026-06-03 09:00,2026-06-0
         assert!(report.excluded.is_empty());
         assert_eq!(report.sessions.len(), 2);
         assert_eq!(report.sessions[1].id, "S13577");
-        assert_eq!(report.sessions[1].avg_power, 0.0);
+        assert_eq!(report.sessions[1].avg_kw, 0.0);
 
         let s = &report.sessions[0];
         assert_eq!(s.id, "S69865");
@@ -1628,12 +1628,12 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00001,,2026-06-03 09:00,2026-06-0
         assert!((s.energy_use - 30.6).abs() < 1e-9);
 
         let expected = 30.6 / (s.charge_time.as_secs_f64() / 3600.0);
-        assert!((s.avg_power - expected).abs() < 1e-9, "{}", s.avg_power);
+        assert!((s.avg_kw - expected).abs() < 1e-9, "{}", s.avg_kw);
         // Matches the sheet's own formula, Energy_Use / (Active_Charge_Time * 24).
         assert!(
-            (s.avg_power - 5.963_620_614_984_84).abs() < 1e-9,
+            (s.avg_kw - 5.963_620_614_984_84).abs() < 1e-9,
             "{}",
-            s.avg_power
+            s.avg_kw
         );
 
         fs::remove_dir_all(xlsx.parent().unwrap()).ok();
@@ -1646,13 +1646,13 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00001,,2026-06-03 09:00,2026-06-0
 
         assert_eq!(report.sessions.len(), 1);
         assert_eq!(report.sessions[0].id, "S69865");
-        assert!(report.sessions[0].avg_power.is_finite());
+        assert!(report.sessions[0].avg_kw.is_finite());
 
         assert_eq!(report.spikes.len(), 1);
         let spike = &report.spikes[0];
         assert_eq!(spike.id, "S00001");
         assert!(spike.charge_time.is_zero());
-        assert!(spike.avg_power.is_infinite(), "{}", spike.avg_power);
+        assert!(spike.avg_kw.is_infinite(), "{}", spike.avg_kw);
         // The energy is still there to be accounted for; that is why it is returned at all.
         assert!((spike.energy_use - 4.2).abs() < 1e-9);
 

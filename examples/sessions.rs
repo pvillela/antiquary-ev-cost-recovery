@@ -63,6 +63,6 @@ fn main() -> ExitCode {
 fn line(session: &Session) -> String {
     format!(
         "{:<14} {}  {:>8.3}  {:>9.3} kW",
-        session.id, session.conn_start, session.energy_use, session.avg_power
+        session.id, session.conn_start, session.energy_use, session.avg_kw
     )
 }

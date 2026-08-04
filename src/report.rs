@@ -325,7 +325,7 @@ impl PowerEstimatesReport {
                     // here, so its figure needs no lookup.
                     s.anomalies
                         .iter()
-                        .map(|k| anomaly_cell(*k, Some(s.avg_power)))
+                        .map(|k| anomaly_cell(*k, Some(s.avg_kw)))
                         .collect::<Vec<_>>()
                         .join(", "),
                 ]
@@ -571,7 +571,7 @@ impl PowerEstimatesReport {
                     .flat_map(|m| m.session_groups.iter()),
             )
             .flat_map(|g| g.session_iter())
-            .map(|s| (s.id.clone(), s.avg_power))
+            .map(|s| (s.id.clone(), s.avg_kw))
             .collect()
     }
 
@@ -741,7 +741,7 @@ mod test {
             conn_duration: adj_conn_end.duration_since(conn_start).unsigned_abs(),
             charge_time: Duration::from_secs(60),
             energy_use: 1.0,
-            avg_power,
+            avg_kw: avg_power,
             anomalies: Vec::new(),
         }))
     }

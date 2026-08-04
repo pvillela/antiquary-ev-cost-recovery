@@ -1,5 +1,5 @@
 use jiff::{Timestamp, Zoned, tz::TimeZone};
-use std::{cell::RefCell, fmt, rc::Rc, sync::LazyLock, time::Duration};
+use std::{cell::RefCell, collections::BTreeSet, fmt, rc::Rc, time::Duration};
 
 /// Time zone the session report's timestamps are stated in. See README.md, "Time zone".
 pub const TIME_ZONE_NAME: &str = "America/Toronto";
@@ -23,49 +23,205 @@ pub const TIME_ZONE_NAME: &str = "America/Toronto";
 /// See README.md, "Boundaries and the time grid".
 pub const SESSION_BOUNDARY_RESOLUTION: Duration = Duration::from_secs(60);
 
-/// Assumed upper bound on the disagreement between the two clocks the estimates depend on: the
-/// Toronto Hydro meter, which fixes the interval of interest, and Evolute, which fixes the session
-/// times. Nothing reconciles them, and they may drift apart over the reporting period.
-///
-/// It bounds the maximum absolute skew between the two clocks *plus* the sum of each clock's
-/// absolute drift over the period. Unverifiable rather than merely unverified — Evolute's clock
-/// discipline is undocumented and Toronto Hydro's is not ours to ask about.
-///
-/// Nothing depends on the figure itself, only on [`CLOCK_SKEW_MARGIN`] being derived from it. A
-/// larger bound widens the skew margins, which costs conservatism but breaks nothing.
-///
-/// See README.md, "Clock skew and drift".
-pub const CLOCK_SKEW_BOUND: Duration = Duration::from_secs(5);
-
-/// Width of the *skew margin* interval placed at each end of the interval of interest, to bound
-/// every window the interval could really name given [`CLOCK_SKEW_BOUND`].
-///
-/// `CLOCK_SKEW_BOUND` rounded **up** to a whole [`SESSION_BOUNDARY_RESOLUTION`]. The rounding is
-/// what keeps the margin bounds on the `R` grid: an interval of interest's bounds are multiples of
-/// 15 minutes, so offsetting them by a whole number of `R` leaves every group boundary on the grid
-/// and every group duration a multiple of `R`. A raw `5s` margin would put both off it. Taking the
-/// greater of the bound and `R` would do as well while the bound stays under `R`, and silently stop
-/// working above it.
-///
-/// That this currently *equals* `SESSION_BOUNDARY_RESOLUTION` is arithmetic, not identity. The two
-/// measure different things: truncation is one-sided and forward and applies to the reported session
-/// times, while skew is two-sided and applies to the interval's end-points. `R` is a floor on the
-/// margin because of the grid, not because the two are the same kind of quantity.
-///
-/// See README.md, "Clock skew and drift".
-pub static CLOCK_SKEW_MARGIN: LazyLock<Duration> = LazyLock::new(|| {
-    let skew = CLOCK_SKEW_BOUND.as_secs_f64();
-    let step = SESSION_BOUNDARY_RESOLUTION.as_secs_f64();
-    let secs = (skew / step).ceil() * step;
-    Duration::from_secs_f64(secs)
-});
-
-// pub const EV_POWER_FACTOR: f64 = 0.95; // REPLACE WITH EV_TRUE_POWER_FACTOR
-// pub const EVOLUTE_BREAKER_KW_RATING: f64 = 6.7; // REPLACE WITH `ev_real_power_kw()`
-// pub const EVOLUTE_BREAKER_KVA_RATING: f64 = 7.5; // REPLACE WITH `ev_real_power_kva()`
+/// The duration of the interval of interest should be a multiple of this.
+pub const SEGMENT_DURATION: Duration = Duration::from_mins(15);
 
 pub(crate) fn time_zone() -> TimeZone {
     TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid time-zone name")
+}
+
+pub(crate) fn duration(start: Timestamp, end: Timestamp) -> Duration {
+    Duration::try_from(end.duration_since(start))
+        .unwrap_or_else(|_| panic!("interval ends at {} before it starts at {}", end, start))
+}
+
+// ---------------------------------------------------------------------------
+// Interval
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
+pub struct Interval {
+    pub start: Timestamp,
+    pub duration: Duration,
+}
+
+impl Interval {
+    pub fn new(start: Timestamp, end: Timestamp) -> Interval {
+        let duration = duration(start, end);
+        Self { start, duration }
+    }
+
+    pub fn end(&self) -> Timestamp {
+        self.start + self.duration
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.duration == Duration::ZERO
+    }
+
+    pub fn intersection(&self, other: &Interval) -> Self {
+        let start = self.start.max(other.start);
+        let end = self.end().min(other.end());
+        let duration = if start <= end {
+            duration(start, end)
+        } else {
+            Duration::ZERO
+        };
+        Self { start, duration }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session
+// ---------------------------------------------------------------------------
+
+pub(crate) type RSession = Rc<RefCell<Session>>;
+
+#[derive(Debug)]
+/// Charging session
+pub struct Session {
+    /// From `session report`.
+    pub id: String,
+    /// Row number in the Excel workbook. The header occupies row 1, so the lowest possible value
+    /// is 2. This is *not* the CSV row: a record duplicated to resolve a DST fold occupies two
+    /// workbook rows, so the two diverge from that point on.
+    pub row: usize,
+    /// `Conn_start_UTC`: connection start date-time from `session report`, truncated to the
+    /// minute like every reported time, so the true start lies in
+    /// `[conn_start, conn_start + SESSION_BOUNDARY_RESOLUTION)`.
+    pub conn_start: Timestamp,
+    /// `Conn_end_UTC`: connection end date-time as reported, truncated to the minute.
+    ///
+    /// Held for reporting only. Every calculation wants [`Session::adj_conn_end`], which is the
+    /// bound that actually contains the session.
+    pub conn_end: Timestamp,
+    /// `Adj_conn_end_UTC`: [`Session::conn_end`] padded by one [`SESSION_BOUNDARY_RESOLUTION`],
+    /// which makes it the session's **exclusive** end — the true end lies in
+    /// `[adj_conn_end - SESSION_BOUNDARY_RESOLUTION, adj_conn_end)`.
+    ///
+    /// This is the end the grouping and estimating logic uses throughout, so that
+    /// `[conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the real
+    /// connection. See README.md, "Session boundaries".
+    pub adj_conn_end: Timestamp,
+    /// `Conn_Duration` from `session report`: the physical elapsed time of the connection, which is
+    /// what makes the DST fold inference possible. See README.md, "Time zone".
+    pub conn_duration: Duration,
+    /// Active charge time from `session report`.
+    ///
+    /// May differ from `adj_conn_end - conn_start` for several reasons: the padding on
+    /// `adj_conn_end`, and a car that stays connected without drawing power.
+    pub charge_time: Duration,
+    /// From `session report`.
+    pub energy_use: f64,
+    /// `energy_use / charge_time in hours`.
+    pub avg_kw: f64,
+    /// Anomalies associated with this session.
+    pub anomalies: Vec<AnomalyKind>,
+}
+
+impl Session {
+    /// Whether the session overlaps `interval` at all, both being half-open.
+    ///
+    /// This is the plain overlap test, with no boundary margin: it asks whether the session has
+    /// anything to do with the interval, not whether it may take part in the estimates. The
+    /// grouping logic applies the margin on top of this.
+    ///
+    /// The span is normalised, so a record whose reported end precedes its start still counts as
+    /// touching the window it straddles. Such a record exists — it is precisely what
+    /// [`AnomalyKind::InconsistentDuration`] catches — and it is the last one that should quietly
+    /// disappear from a report, being the one most in need of review.
+    pub fn intersects(&self, interval: (Timestamp, Timestamp)) -> bool {
+        let start = self.conn_start.min(self.adj_conn_end);
+        let end = self.conn_start.max(self.adj_conn_end);
+        start < interval.1 && end > interval.0
+    }
+
+    /// Reported connection start in local time (ET).
+    pub fn conn_start_local(&self) -> Zoned {
+        Zoned::new(self.conn_start, time_zone())
+    }
+
+    /// Reported connection end in local time (ET).
+    pub fn conn_end_local(&self) -> Zoned {
+        Zoned::new(self.conn_end, time_zone())
+    }
+
+    /// Adjusted, exclusive connection end in local time (ET).
+    pub fn adj_conn_end_local(&self) -> Zoned {
+        Zoned::new(self.adj_conn_end, time_zone())
+    }
+
+    /// Session duration from `conn_start` to `adj_conn_end`
+    pub fn adj_duration(&self) -> Duration {
+        duration(self.conn_start, self.adj_conn_end)
+    }
+
+    /// Average power (in kW) of this session over the specified interval.
+    pub(crate) fn interval_overlap_ratio(&self, interval: &Interval) -> f64 {
+        let sess_itvl = Interval::new(self.conn_start, self.adj_conn_end);
+        let overlap = sess_itvl.intersection(&interval);
+        overlap.duration.as_secs_f64() / interval.duration.as_secs_f64()
+    }
+
+    /// Average power (in kW) of this session over the specified interval.
+    pub(crate) fn interval_avg_kw(&self, interval: &Interval) -> f64 {
+        let overlap_ratio = self.interval_overlap_ratio(interval);
+        self.avg_kw * overlap_ratio
+    }
+}
+
+impl PartialEq for Session {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Session {}
+
+impl PartialOrd for Session {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.id.partial_cmp(&other.id)
+    }
+}
+
+impl Ord for Session {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Segment
+// ---------------------------------------------------------------------------
+
+/// A sub-interval of the interval-of-interest over power estimates are computed.
+pub struct Segment {
+    pub interval: Interval,
+    pub sessions: BTreeSet<RSession>,
+}
+
+impl Segment {
+    pub fn start(&self) -> Timestamp {
+        self.interval.start
+    }
+
+    pub fn end(&self) -> Timestamp {
+        self.interval.end()
+    }
+
+    pub fn avg_session_count(&self) -> f64 {
+        self.sessions
+            .iter()
+            .map(|s| s.borrow().interval_overlap_ratio(&self.interval))
+            .sum()
+    }
+
+    pub fn avg_kw(&self) -> f64 {
+        self.sessions
+            .iter()
+            .map(|s| s.borrow().interval_avg_kw(&self.interval))
+            .sum()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,106 +381,5 @@ impl fmt::Display for AnomalyKind {
 impl fmt::Display for Anomaly {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "row {} ({}): {}", self.row, self.session_id, self.kind)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Session
-// ---------------------------------------------------------------------------
-
-pub(crate) type RSession = Rc<RefCell<Session>>;
-
-#[derive(Debug)]
-/// Charging session
-pub struct Session {
-    /// From `session report`.
-    pub id: String,
-    /// Row number in the Excel workbook. The header occupies row 1, so the lowest possible value
-    /// is 2. This is *not* the CSV row: a record duplicated to resolve a DST fold occupies two
-    /// workbook rows, so the two diverge from that point on.
-    pub row: usize,
-    /// `Conn_start_UTC`: connection start date-time from `session report`, truncated to the
-    /// minute like every reported time, so the true start lies in
-    /// `[conn_start, conn_start + SESSION_BOUNDARY_RESOLUTION)`.
-    pub conn_start: Timestamp,
-    /// `Conn_end_UTC`: connection end date-time as reported, truncated to the minute.
-    ///
-    /// Held for reporting only. Every calculation wants [`Session::adj_conn_end`], which is the
-    /// bound that actually contains the session.
-    pub conn_end: Timestamp,
-    /// `Adj_conn_end_UTC`: [`Session::conn_end`] padded by one [`SESSION_BOUNDARY_RESOLUTION`],
-    /// which makes it the session's **exclusive** end — the true end lies in
-    /// `[adj_conn_end - SESSION_BOUNDARY_RESOLUTION, adj_conn_end)`.
-    ///
-    /// This is the end the grouping and estimating logic uses throughout, so that
-    /// `[conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the real
-    /// connection. See README.md, "Session boundaries".
-    pub adj_conn_end: Timestamp,
-    /// `Conn_Duration` from `session report`: the physical elapsed time of the connection, which is
-    /// what makes the DST fold inference possible. See README.md, "Time zone".
-    pub conn_duration: Duration,
-    /// Active charge time from `session report`.
-    ///
-    /// May differ from `adj_conn_end - conn_start` for several reasons: the padding on
-    /// `adj_conn_end`, and a car that stays connected without drawing power.
-    pub charge_time: Duration,
-    /// From `session report`.
-    pub energy_use: f64,
-    /// `energy_use / charge_time in hours`.
-    pub avg_power: f64,
-    /// Anomalies associated with this session.
-    pub anomalies: Vec<AnomalyKind>,
-}
-
-impl Session {
-    /// Whether the session overlaps `interval` at all, both being half-open.
-    ///
-    /// This is the plain overlap test, with no boundary margin: it asks whether the session has
-    /// anything to do with the interval, not whether it may take part in the estimates. The
-    /// grouping logic applies the margin on top of this.
-    ///
-    /// The span is normalised, so a record whose reported end precedes its start still counts as
-    /// touching the window it straddles. Such a record exists — it is precisely what
-    /// [`AnomalyKind::InconsistentDuration`] catches — and it is the last one that should quietly
-    /// disappear from a report, being the one most in need of review.
-    pub fn intersects(&self, interval: (Timestamp, Timestamp)) -> bool {
-        let start = self.conn_start.min(self.adj_conn_end);
-        let end = self.conn_start.max(self.adj_conn_end);
-        start < interval.1 && end > interval.0
-    }
-
-    /// Reported connection start in local time (ET).
-    pub fn conn_start_local(&self) -> Zoned {
-        Zoned::new(self.conn_start, time_zone())
-    }
-
-    /// Reported connection end in local time (ET).
-    pub fn conn_end_local(&self) -> Zoned {
-        Zoned::new(self.conn_end, time_zone())
-    }
-
-    /// Adjusted, exclusive connection end in local time (ET).
-    pub fn adj_conn_end_local(&self) -> Zoned {
-        Zoned::new(self.adj_conn_end, time_zone())
-    }
-}
-
-impl PartialEq for Session {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for Session {}
-
-impl PartialOrd for Session {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.id.partial_cmp(&other.id)
-    }
-}
-
-impl Ord for Session {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.id.cmp(&other.id)
     }
 }

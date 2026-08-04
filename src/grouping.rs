@@ -270,7 +270,7 @@ impl SessionGroup {
             agg_avg_power: self
                 .sessions
                 .iter()
-                .map(|s| s.as_ref().borrow().avg_power)
+                .map(|s| s.as_ref().borrow().avg_kw)
                 .sum(),
         }
     }
@@ -329,10 +329,7 @@ impl SessionGroup {
             .iter()
             .map(|s| {
                 let session = s.as_ref().borrow();
-                (
-                    Bucket::of(&session, self.start, self.end),
-                    session.avg_power,
-                )
+                (Bucket::of(&session, self.start, self.end), session.avg_kw)
             })
             .collect();
 
@@ -522,7 +519,7 @@ mod test {
             conn_duration: Default::default(),
             charge_time: Default::default(),
             energy_use: Default::default(),
-            avg_power: Default::default(),
+            avg_kw: Default::default(),
             anomalies: Default::default(),
         }));
         let data1 = EndPointData {
@@ -554,7 +551,7 @@ mod test {
             conn_duration: adj_conn_end.duration_since(conn_start).unsigned_abs(),
             charge_time: Duration::from_secs(60),
             energy_use: 1.0,
-            avg_power: 1.0,
+            avg_kw: 1.0,
             anomalies: Vec::new(),
         }))
     }
@@ -674,7 +671,7 @@ mod test {
     /// As [`rsession`], with an explicit average power, for the figure arithmetic.
     fn rsession_kw(id: &str, start: &str, end: &str, avg_power: f64) -> RSession {
         let s = rsession(id, start, end);
-        s.borrow_mut().avg_power = avg_power;
+        s.borrow_mut().avg_kw = avg_power;
         s
     }
 
