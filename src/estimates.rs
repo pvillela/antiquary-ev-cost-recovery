@@ -1,6 +1,6 @@
 use crate::{
-    Anomaly, RSession, Session, SessionGroup, SessionReport, View, ev_real_power_kw,
-    groups_for_interval, session_list,
+    Anomaly, Interval, RSession, Segment, Session, SessionGroup, SessionReport, View,
+    ev_real_power_kw, groups_for_interval, session_list,
 };
 use jiff::{SignedDuration, Timestamp};
 use std::{
@@ -10,6 +10,35 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
+
+/// Estimates for an interval of interest.
+pub struct IntervalEstimates {
+    /// Workbook the sessions were read from. Held so the report is self-describing: it can be
+    /// stored or rendered later without a caller having to remember what produced it.
+    pub source: PathBuf,
+
+    /// Interval of interest.
+    pub interval: Interval,
+
+    pub seg_estimates: Vec<(Segment, EstimateSet)>,
+
+    /// Segment that maximizes the energy-based estimates, together with its estimate set.
+    pub energy_based_seg_estimate: (Segment, EstimateSet),
+
+    /// Segment that maximizes the count-based estimates, together with its estimate set.
+    pub count_based_seg_estimate: (Segment, EstimateSet),
+
+    /// Every session excluded from the estimates for
+    /// [`crate::AnomalyKind::InconsistentDuration`] — the whole workbook's worth, not only those
+    /// near this interval.
+    ///
+    /// Unfiltered on purpose. Such a record's own fields contradict each other, so asking whether
+    /// it intersects the interval is asking a question of the very timestamps that are in doubt: a
+    /// session that belongs in this window may well test as falling outside it. The report states
+    /// which ones appear to touch the interval and lists the rest anyway, leaving the judgement to
+    /// a reader who can go back to the source rows.
+    pub excluded_sessions: Vec<Session>,
+}
 
 /// One estimated figure, and the [`SessionGroup`] it was drawn from.
 pub struct PowerEstimate {

@@ -133,20 +133,11 @@ pub struct Session {
 }
 
 impl Session {
-    /// Whether the session overlaps `interval` at all, both being half-open.
-    ///
-    /// This is the plain overlap test, with no boundary margin: it asks whether the session has
-    /// anything to do with the interval, not whether it may take part in the estimates. The
-    /// grouping logic applies the margin on top of this.
-    ///
-    /// The span is normalised, so a record whose reported end precedes its start still counts as
-    /// touching the window it straddles. Such a record exists — it is precisely what
-    /// [`AnomalyKind::InconsistentDuration`] catches — and it is the last one that should quietly
-    /// disappear from a report, being the one most in need of review.
-    pub fn intersects(&self, interval: (Timestamp, Timestamp)) -> bool {
-        let start = self.conn_start.min(self.adj_conn_end);
-        let end = self.conn_start.max(self.adj_conn_end);
-        start < interval.1 && end > interval.0
+    /// Whether the session overlaps with an interval.
+    pub(crate) fn intersects(&self, interval: &Interval) -> bool {
+        let sess_itvl = Interval::from_start_end(self.conn_start, self.adj_conn_end);
+        let overlap = sess_itvl.intersection(&interval);
+        overlap.is_empty()
     }
 
     /// Reported connection start in local time (ET).
@@ -167,6 +158,11 @@ impl Session {
     /// Session duration from `conn_start` to `adj_conn_end`
     pub fn adj_duration(&self) -> Duration {
         duration(self.conn_start, self.adj_conn_end)
+    }
+
+    /// Average power draw in kW: [`Self::energy_use`] / ([`Self::charge_time`] in hours).
+    pub fn avg_kw(&self) -> f64 {
+        self.energy_use / self.charge_time.as_secs_f64() * 3600.0
     }
 
     /// The session's overlap with an interval.
@@ -263,6 +259,10 @@ impl SessionOverlap {
         Bracket::new(min, max, None)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Bracket
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 /// Value subject to uncertainty due to [`SESSION_BOUNDARY_RESOLUTION`].
@@ -392,6 +392,8 @@ impl Sum for Bracket<Duration> {
 // Segment
 // ---------------------------------------------------------------------------
 
+pub type RSegment = Rc<Segment>;
+
 /// A sub-interval of the interval-of-interest over which power estimates are computed.
 pub struct Segment {
     pub interval: Interval,
@@ -399,6 +401,13 @@ pub struct Segment {
 }
 
 impl Segment {
+    pub(crate) fn new(start: Timestamp, duration: Duration) -> Self {
+        Self {
+            interval: Interval::new(start, duration),
+            sessions: Default::default(),
+        }
+    }
+
     pub fn start(&self) -> Timestamp {
         self.interval.start
     }
@@ -407,18 +416,22 @@ impl Segment {
         self.interval.end()
     }
 
-    pub fn avg_session_count(&self) -> Bracket<f64> {
+    pub fn agg_session_count(&self) -> Bracket<f64> {
         self.sessions
             .iter()
             .map(|s| s.borrow().interval_overlap_ratio(&self.interval))
             .sum()
     }
 
-    pub fn avg_kw(&self) -> Bracket<f64> {
+    pub fn agg_kw(&self) -> Bracket<f64> {
         self.sessions
             .iter()
             .map(|s| s.borrow().interval_avg_kw(&self.interval))
             .sum()
+    }
+
+    pub(crate) fn add_session(&mut self, session: RSession) {
+        self.sessions.insert(session);
     }
 }
 
