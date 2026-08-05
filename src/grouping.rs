@@ -1,4 +1,7 @@
-use crate::{Load, RSession, Session, ev_load, quicksort, site_load, transformer_load};
+use crate::{
+    RSession, Session, quicksort,
+    site_load::{Load, ev_load, site_load, transformer_load},
+};
 use jiff::Timestamp;
 use std::{
     cell::{Ref, RefCell},
@@ -100,13 +103,13 @@ impl View {
 /// The Figures a group reports under one [`View`].
 #[derive(Debug, Clone, Copy)]
 pub struct Metrics {
-    pub size: usize,
     pub agg_avg_power: f64,
+    pub agg_size: usize,
 }
 
 impl Metrics {
     fn site_load(&self) -> Load {
-        site_load(self.size as u32)
+        site_load(self.agg_size as u32)
     }
 
     pub fn size_basis_site_load(&self) -> Load {
@@ -207,7 +210,7 @@ impl SessionGroup {
 
     /// Number of sessions in the group's specified `view`.
     pub fn size_in(&self, view: View) -> usize {
-        self.metrics(view).size
+        self.metrics(view).agg_size
     }
 
     /// Aggregate average power of the group exactly as reported. Shorthand for [`View::Nominal`],
@@ -266,7 +269,7 @@ impl SessionGroup {
     /// The figures with every member taken at face value.
     fn nominal_figures(&self) -> Metrics {
         Metrics {
-            size: self.sessions.len(),
+            agg_size: self.sessions.len(),
             agg_avg_power: self
                 .sessions
                 .iter()
@@ -378,7 +381,7 @@ impl SessionGroup {
         // different classes — a class can hold the most sessions and the least load.
         let ba_size = total(Bucket::Ba).0;
         Metrics {
-            size: ba_size
+            agg_size: ba_size
                 + bi_size
                     .max(ia_size)
                     .max(usize::from(strongest_ii.is_some())),

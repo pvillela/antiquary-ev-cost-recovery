@@ -1,19 +1,18 @@
+use crate::{
+    Anomaly, AnomalyKind, SESSION_BOUNDARY_RESOLUTION, Session, site_load::ev_real_power_kw,
+    time_zone,
+};
+use jiff::{
+    SignedDuration, Timestamp, civil,
+    tz::{AmbiguousOffset, TimeZone},
+};
 use std::{
     collections::HashMap,
     error::Error,
     path::{Path, PathBuf},
     time::Duration,
 };
-
-use jiff::{
-    SignedDuration, Timestamp, civil,
-    tz::{AmbiguousOffset, TimeZone},
-};
 use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
-
-use crate::{
-    Anomaly, AnomalyKind, SESSION_BOUNDARY_RESOLUTION, Session, ev_real_power_kw, time_zone,
-};
 
 /// Excel's day-zero for the 1900 date system, as a Unix timestamp.
 /// 1899-12-30T00:00:00Z; verified by [`test::excel_epoch_constant_matches_jiff`].

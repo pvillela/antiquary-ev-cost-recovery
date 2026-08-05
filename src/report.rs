@@ -17,7 +17,7 @@
 //!   a single line and a group of twelve sessions cannot be wrapped inside one.
 
 use crate::{
-    AnomalyKind, EstimateSet, MarginSide, PowerEstimates, PowerEstimatesReport, SessionGroup, View,
+    AnomalyKind, EstimateSet, IntervalEstimates, MarginSide, PowerEstimates, SessionGroup, View,
     WindowSpans, Windows, time_zone,
 };
 use jiff::{Timestamp, Zoned};
@@ -155,15 +155,15 @@ fn estimate_rows(set: &EstimateSet) -> Vec<Vec<String>> {
     vec![
         vec![
             "Consumption-based".to_owned(),
-            format!("{:.3}", set.consumption_based_kw.value),
-            format!("{:.3}", set.consumption_based_kva.value),
-            set.consumption_based_kw.session_group_idx.to_string(),
+            format!("{:.3}", set.energy_based_kw.value),
+            format!("{:.3}", set.energy_based_kva.value),
+            set.energy_based_kw.session_group_idx.to_string(),
         ],
         vec![
             "Breaker-spec-based".to_owned(),
-            format!("{:.3}", set.evems_specs_based_kw.value),
-            format!("{:.3}", set.evems_specs_based_kva.value),
-            set.evems_specs_based_kw.session_group_idx.to_string(),
+            format!("{:.3}", set.count_based_kw.value),
+            format!("{:.3}", set.count_based_kva.value),
+            set.count_based_kw.session_group_idx.to_string(),
         ],
     ]
 }
@@ -171,7 +171,7 @@ fn estimate_rows(set: &EstimateSet) -> Vec<Vec<String>> {
 const ESTIMATE_HEADERS: [&str; 4] = ["Estimate", "kW", "kVA", "Group"];
 const ESTIMATE_ALIGN: [Align; 4] = [Left, Right, Right, Right];
 
-impl PowerEstimatesReport {
+impl IntervalEstimates {
     /// Renders the report as markdown that is also readable as plain text. See the module docs for
     /// what that constraint rules out.
     ///
@@ -433,13 +433,13 @@ fn push_estimate_sets(estimates: &PowerEstimates, out: &mut Vec<String>) {
             "The likely kW values are in the range from {:.3} kW ({}consumption-based) to \
                  {:.3} kW ({}breaker-spec-based). The likely kVA values are in the range from \
                  {:.3} kVA ({}consumption-based) to {:.3} kVA ({}breaker-spec-based).",
-            low.2.consumption_based_kw.value,
+            low.2.energy_based_kw.value,
             name(low.0),
-            high.2.evems_specs_based_kw.value,
+            high.2.count_based_kw.value,
             name(high.0),
-            low.2.consumption_based_kva.value,
+            low.2.energy_based_kva.value,
             name(low.0),
-            high.2.evems_specs_based_kva.value,
+            high.2.count_based_kva.value,
             name(high.0),
         ),
         "",
@@ -552,7 +552,7 @@ fn windows_label(w: Windows) -> String {
     }
 }
 
-impl PowerEstimatesReport {
+impl IntervalEstimates {
     /// Average power per session id, gathered from every tiling the report holds.
     ///
     /// The tilings are the report's only handle on the sessions themselves: an anomaly record
@@ -707,7 +707,7 @@ fn interval_length(lo: Timestamp, hi: Timestamp) -> String {
     }
 }
 
-impl fmt::Display for PowerEstimatesReport {
+impl fmt::Display for IntervalEstimates {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.to_markdown())
     }
@@ -717,8 +717,7 @@ impl fmt::Display for PowerEstimatesReport {
 mod test {
     use super::*;
     use crate::{
-        Anomaly, RSession, Session, WindowedAnomaly, groups_for_interval,
-        max_power_estimates_for_interval,
+        Anomaly, RSession, Session, WindowedAnomaly, groups_for_interval, interval_estimates,
     };
     use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
@@ -750,13 +749,13 @@ mod test {
     ///
     /// The anomalies are marked as reaching the interval of interest, which is where a hand-built
     /// one belongs; the skew margins are exercised through the real entry point instead.
-    fn report_of(sessions: Vec<RSession>, anomalies: Vec<Anomaly>) -> PowerEstimatesReport {
+    fn report_of(sessions: Vec<RSession>, anomalies: Vec<Anomaly>) -> IntervalEstimates {
         let groups = groups_for_interval((ts(LO), ts(HI)), &sessions);
-        PowerEstimatesReport {
+        IntervalEstimates {
             excluded_sessions: Vec::new(),
             source: PathBuf::from("/tmp/Session_Report_Test.xlsx"),
             interval: (ts(LO), ts(HI)),
-            estimates: crate::estimates::estimates_for_groups(&groups),
+            estimates: crate::estimates::maximal_segment_estimate(&groups),
             session_groups: groups,
             skew_margins: Vec::new(),
             session_anomalies: anomalies
@@ -926,11 +925,11 @@ mod test {
             6.0,
         )];
         let groups = groups_for_interval((lo, hi), &mut sessions);
-        let report = PowerEstimatesReport {
+        let report = IntervalEstimates {
             excluded_sessions: Vec::new(),
             source: PathBuf::from("Fold.xlsx"),
             interval: (lo, hi),
-            estimates: crate::estimates::estimates_for_groups(&groups),
+            estimates: crate::estimates::maximal_segment_estimate(&groups),
             session_groups: groups,
             skew_margins: Vec::new(),
             session_anomalies: Vec::new(),
@@ -988,7 +987,7 @@ mod test {
         .unwrap();
         let xlsx = crate::session_csv_to_xlsx(&csv).unwrap().output_path;
 
-        let report = max_power_estimates_for_interval(
+        let report = interval_estimates(
             (ts("2026-06-15T20:00:00Z"), ts("2026-06-15T21:00:00Z")),
             &xlsx,
         )

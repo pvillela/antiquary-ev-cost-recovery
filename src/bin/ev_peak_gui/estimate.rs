@@ -245,14 +245,14 @@ fn headline(ui: &mut egui::Ui, estimates: &PowerEstimates, has_margins: bool) {
             // is the consumption-based floor, the other the breaker-spec ceiling.
             let floor = theme::accent(ui);
             ui.label("Likely at least");
-            figure(ui, low.consumption_based_kw.value, floor);
-            figure(ui, low.consumption_based_kva.value, floor);
+            figure(ui, low.energy_based_kw.value, floor);
+            figure(ui, low.energy_based_kva.value, floor);
             ui.end_row();
 
             let ceiling = theme::ceiling(ui);
             ui.label("Likely at most");
-            figure(ui, high.evems_specs_based_kw.value, ceiling);
-            figure(ui, high.evems_specs_based_kva.value, ceiling);
+            figure(ui, high.count_based_kw.value, ceiling);
+            figure(ui, high.count_based_kva.value, ceiling);
             ui.end_row();
         });
 

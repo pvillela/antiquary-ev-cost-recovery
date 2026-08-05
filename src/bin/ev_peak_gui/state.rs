@@ -6,9 +6,9 @@
 //! and tested here.
 
 use ev_peak_contrib::{
-    ConversionReport, HourEntry, IntervalLength, OFFSETS, PowerEstimatesReport, SessionReport,
-    TIME_ZONE_NAME, checked_interval, hours_of, max_power_estimates_for_interval,
-    session_csv_to_xlsx, session_list,
+    ConversionReport, HourEntry, IntervalEstimates, IntervalLength, OFFSETS, SessionReport,
+    TIME_ZONE_NAME, checked_interval, hours_of, interval_estimates, session_csv_to_xlsx,
+    session_list,
 };
 use jiff::{Timestamp, civil, tz::TimeZone};
 use std::path::{Path, PathBuf};
@@ -151,7 +151,7 @@ impl Workbook {
 /// A finished estimate, with the report and the text of it side by side. The text is what the
 /// command line prints, kept verbatim so that a saved report and a piped one are the same file.
 pub struct EstimateOutcome {
-    pub report: PowerEstimatesReport,
+    pub report: IntervalEstimates,
     pub text: String,
     /// The interval the figures are for, as it is written at the head of the report.
     pub heading: String,
@@ -296,7 +296,7 @@ impl EstimateState {
                 return;
             }
         };
-        match max_power_estimates_for_interval(interval, &workbook.path) {
+        match interval_estimates(interval, &workbook.path) {
             Ok(report) => {
                 self.outcome = Some(EstimateOutcome {
                     text: report.to_markdown(),

@@ -1,6 +1,4 @@
-use ev_peak_contrib::{
-    IntervalLength, OFFSETS, checked_interval, max_power_estimates_for_interval,
-};
+use ev_peak_contrib::{IntervalLength, OFFSETS, checked_interval, interval_estimates};
 use jiff::{Timestamp, civil};
 use std::{
     path::{Path, PathBuf},
@@ -72,7 +70,7 @@ fn main() -> ExitCode {
         }
     };
 
-    match max_power_estimates_for_interval(interval, &path) {
+    match interval_estimates(interval, &path) {
         Ok(report) => {
             print!("{report}");
             ExitCode::SUCCESS

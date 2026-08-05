@@ -98,20 +98,6 @@ impl Load {
     }
 }
 
-impl std::ops::Add for Load {
-    type Output = Self;
-
-    /// Loads add component-wise. Apparent powers must never be added
-    /// directly, since the phase relationship is carried by the components.
-    fn add(self, other: Self) -> Self {
-        Self {
-            real_kw: self.real_kw + other.real_kw,
-            reactive_kvar: self.reactive_kvar + other.reactive_kvar,
-            distortion_kvar: self.distortion_kvar + other.distortion_kvar,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Model
 // ---------------------------------------------------------------------------

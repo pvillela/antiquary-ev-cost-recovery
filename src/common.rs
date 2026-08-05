@@ -1,10 +1,11 @@
+use crate::site_load::{Load, ev_load, transformer_load};
 use jiff::{Timestamp, Zoned, tz::TimeZone};
 use std::{
     cell::RefCell,
     collections::BTreeSet,
     fmt::{self, Debug},
     iter::Sum,
-    ops::Add,
+    ops::{Add, Div, Mul},
     rc::Rc,
     time::Duration,
 };
@@ -47,7 +48,7 @@ pub(crate) fn duration(start: Timestamp, end: Timestamp) -> Duration {
 // Interval
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
 /// Time interval. Must be on the time grid defined by [`SESSION_BOUNDARY_RESOLUTION`].
 pub struct Interval {
     pub start: Timestamp,
@@ -174,21 +175,13 @@ impl Session {
         }
 
         let left = if self.conn_start == overlap.start {
-            Bracket::new(
-                overlap.start,
-                overlap.start + SESSION_BOUNDARY_RESOLUTION,
-                None,
-            )
+            Bracket::new(overlap.start, overlap.start + SESSION_BOUNDARY_RESOLUTION)
         } else {
             Bracket::exact(overlap.start)
         };
 
         let right = if self.adj_conn_end == overlap.end() {
-            Bracket::new(
-                overlap.end() - SESSION_BOUNDARY_RESOLUTION,
-                overlap.end(),
-                None,
-            )
+            Bracket::new(overlap.end() - SESSION_BOUNDARY_RESOLUTION, overlap.end())
         } else {
             Bracket::exact(overlap.end())
         };
@@ -242,10 +235,11 @@ impl SessionOverlap {
     pub fn new(left: Bracket<Timestamp>, right: Bracket<Timestamp>) -> Self {
         Self { left, right }
     }
+
     pub fn empty() -> Self {
         Self {
-            left: Bracket::new(Timestamp::MAX, Timestamp::MAX, None),
-            right: Bracket::new(Timestamp::MIN, Timestamp::MIN, None),
+            left: Bracket::new(Timestamp::MAX, Timestamp::MAX),
+            right: Bracket::new(Timestamp::MIN, Timestamp::MIN),
         }
     }
 
@@ -256,7 +250,7 @@ impl SessionOverlap {
             Duration::ZERO
         };
         let max = duration(self.left.min, self.right.max);
-        Bracket::new(min, max, None)
+        Bracket::new(min, max)
     }
 }
 
@@ -264,25 +258,23 @@ impl SessionOverlap {
 // Bracket
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 /// Value subject to uncertainty due to [`SESSION_BOUNDARY_RESOLUTION`].
 pub struct Bracket<T: Clone> {
     /// Minimum value.
     pub min: T,
     /// Maximum value.
     pub max: T,
-    /// Average value.
-    avg: Option<T>,
 }
 
 impl<T: Clone> Bracket<T> {
     /// Instantiate `Self``.
-    pub fn new(min: T, max: T, avg: Option<T>) -> Self
+    pub fn new(min: T, max: T) -> Self
     where
         T: Debug + PartialOrd,
     {
         assert!(min <= max, "min={min:?} must be <= max={max:?}");
-        Self { min, max, avg }
+        Self { min, max }
     }
 
     /// Instantiates an exact instance.
@@ -290,15 +282,13 @@ impl<T: Clone> Bracket<T> {
         Self {
             min: value.clone(),
             max: value,
-            avg: None,
         }
     }
 
     pub fn map<U: Clone>(&self, mut f: impl FnMut(&T) -> U) -> Bracket<U> {
         let min = f(&self.min);
         let max = f(&self.max);
-        let avg = self.avg.clone().map(|v| f(&v));
-        Bracket { min, max, avg }
+        Bracket { min, max }
     }
 }
 
@@ -307,44 +297,46 @@ impl<T: Clone + Default> Default for Bracket<T> {
         Self {
             min: Default::default(),
             max: Default::default(),
-            avg: Default::default(),
         }
     }
 }
 
-fn add<T: Clone + Add<Output = T>>(
-    lhs: &Bracket<T>,
-    rhs: &Bracket<T>,
-    mid: impl Fn(&Bracket<T>) -> T,
-) -> Bracket<T> {
-    let min = lhs.min.clone() + rhs.min.clone();
-    let max = lhs.max.clone() + rhs.max.clone();
-    let avg = match (lhs.avg.clone(), rhs.avg.clone()) {
-        (None, None) => None,
-        (None, Some(v)) => Some(mid(&lhs) + v),
-        (Some(v), None) => Some(v + mid(&rhs)),
-        (Some(v1), Some(v2)) => Some(v1 + v2),
-    };
-    Bracket { min, max, avg }
-}
-
-impl Bracket<f64> {
-    /// Midpoint of bracket.
-    pub fn mid(&self) -> f64 {
-        (self.max - self.min) / 2.0
-    }
-
-    /// Average margin of error.
-    pub fn avg(&self) -> f64 {
-        self.avg.unwrap_or(self.mid())
-    }
-}
-
-impl Add for Bracket<f64> {
+impl<T: Clone + Add<Output = T>> Add for Bracket<T> {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        add(&self, &rhs, Self::mid)
+        Self {
+            min: self.min + rhs.min,
+            max: self.max + rhs.max,
+        }
+    }
+}
+
+impl<T: Clone + Mul<f64, Output = T>> Mul<f64> for Bracket<T> {
+    type Output = Self;
+
+    fn mul(self, rhs: f64) -> Self::Output {
+        Self {
+            min: self.min * rhs,
+            max: self.max * rhs,
+        }
+    }
+}
+
+impl Bracket<f64> {
+    pub fn mid(&self) -> f64 {
+        (self.min + self.max) / 2.0
+    }
+}
+
+impl Div<f64> for Bracket<f64> {
+    type Output = Self;
+
+    fn div(self, rhs: f64) -> Self::Output {
+        Self {
+            min: self.min / rhs,
+            max: self.max / rhs,
+        }
     }
 }
 
@@ -358,23 +350,14 @@ impl Sum for Bracket<f64> {
     }
 }
 
-impl Bracket<Duration> {
-    /// Midpoint of bracket.
-    pub fn mid(&self) -> Duration {
-        (self.max - self.min) / 2
-    }
-
-    /// Average margin of error.
-    pub fn avg_error(&self) -> Duration {
-        self.avg.unwrap_or(self.mid())
-    }
-}
-
-impl Add for Bracket<Duration> {
+impl Mul<u32> for Bracket<Duration> {
     type Output = Self;
 
-    fn add(self, rhs: Self) -> Self::Output {
-        add(&self, &rhs, Self::mid)
+    fn mul(self, rhs: u32) -> Self::Output {
+        Self {
+            min: self.min * rhs,
+            max: self.max * rhs,
+        }
     }
 }
 
@@ -388,12 +371,25 @@ impl Sum for Bracket<Duration> {
     }
 }
 
+impl Add for Load {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Load {
+            real_kw: self.real_kw + rhs.real_kw,
+            reactive_kvar: self.reactive_kvar + rhs.reactive_kvar,
+            distortion_kvar: self.distortion_kvar + rhs.distortion_kvar,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Segment
 // ---------------------------------------------------------------------------
 
 pub type RSegment = Rc<Segment>;
 
+#[derive(Debug, Clone)]
 /// A sub-interval of the interval-of-interest over which power estimates are computed.
 pub struct Segment {
     pub interval: Interval,
@@ -416,7 +412,7 @@ impl Segment {
         self.interval.end()
     }
 
-    pub fn agg_session_count(&self) -> Bracket<f64> {
+    pub fn agg_count(&self) -> Bracket<f64> {
         self.sessions
             .iter()
             .map(|s| s.borrow().interval_overlap_ratio(&self.interval))
@@ -428,6 +424,22 @@ impl Segment {
             .iter()
             .map(|s| s.borrow().interval_avg_kw(&self.interval))
             .sum()
+    }
+
+    pub fn count_based_load(&self) -> Bracket<Load> {
+        let secondary = self.agg_count().map(|v| ev_load().scaled(*v));
+        secondary + secondary.map(|v| transformer_load(*v))
+    }
+
+    pub fn energy_based_load(&self) -> Bracket<Load> {
+        let single_ev_real_kw = ev_load().real_kw;
+        let scaling = self.agg_kw().map(|v| v / single_ev_real_kw);
+        let secondary = scaling.map(|v| ev_load().scaled(*v));
+
+        // Below 2 lines correspond to `secondary + transforer_load(secondary)` in the implementation
+        // of `site_load::site_load`.`
+        let xfmr_load = secondary.map(|v| transformer_load(*v));
+        secondary + xfmr_load
     }
 
     pub(crate) fn add_session(&mut self, session: RSession) {

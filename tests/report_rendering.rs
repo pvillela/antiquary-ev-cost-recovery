@@ -21,7 +21,7 @@
 //!
 //! cargo test --test report_rendering
 
-use ev_peak_contrib::{max_power_estimates_for_interval, session_csv_to_xlsx};
+use ev_peak_contrib::{interval_estimates, session_csv_to_xlsx};
 use jiff::Timestamp;
 use std::{fs, path::PathBuf};
 
@@ -63,7 +63,7 @@ fn render(stem: &str, lo: &str, hi: &str) -> String {
         .unwrap_or_else(|e| panic!("{stem} converts: {e}"))
         .output_path;
     let interval: (Timestamp, Timestamp) = (lo.parse().unwrap(), hi.parse().unwrap());
-    let report = max_power_estimates_for_interval(interval, &xlsx)
+    let report = interval_estimates(interval, &xlsx)
         .unwrap_or_else(|e| panic!("{stem} estimates: {e}"));
 
     let rendered = report.to_markdown();
