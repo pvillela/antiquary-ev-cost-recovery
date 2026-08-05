@@ -22,15 +22,14 @@ pub const TIME_ZONE_NAME: &str = "America/Toronto";
 ///
 /// - Added to the reported session end to give `Adj_conn_end`, the session's exclusive end.
 /// - The half-width of the band a sound record's `Conn_start + Conn_Duration` must land in.
-/// - The width of a *narrow* group, the only width at which a group can be
-///   [dubious](crate::SessionGroup::is_dubious).
 ///
-/// Must divide 15 minutes without leaving a remainder, or an end-point clamped into the interval
-/// of interest lands off the grid and group durations stop being multiples of this value. That is
-/// a requirement on the report format rather than on this software.
+/// This constant defines the step of the time grid on which this software relies.
+///
+/// Must divide [`SEGMENT_DURATION`] without leaving a remainder. Otherwise, [`Segment`]s
+/// partitioning the interval of interest will not be on the time grid.
 ///
 /// See README.md, "Boundaries and the time grid".
-pub const SESSION_BOUNDARY_RESOLUTION: Duration = Duration::from_secs(60);
+pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
 
 /// The duration of the interval of interest should be a multiple of this.
 pub const SEGMENT_DURATION: Duration = Duration::from_mins(15);
@@ -49,7 +48,7 @@ pub(crate) fn duration(start: Timestamp, end: Timestamp) -> Duration {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
-/// Time interval. Must be on the time grid defined by [`SESSION_BOUNDARY_RESOLUTION`].
+/// Time interval. Must be on the time grid defined by [`TIME_GRID_STEP`].
 pub struct Interval {
     pub start: Timestamp,
     pub duration: Duration,
@@ -102,16 +101,16 @@ pub struct Session {
     pub row: usize,
     /// `Conn_start_UTC`: connection start date-time from `session report`, truncated to the
     /// minute like every reported time, so the true start lies in
-    /// `[conn_start, conn_start + SESSION_BOUNDARY_RESOLUTION)`.
+    /// `[conn_start, conn_start + TIME_GRID_STEP)`.
     pub conn_start: Timestamp,
     /// `Conn_end_UTC`: connection end date-time as reported, truncated to the minute.
     ///
     /// Held for reporting only. Every calculation wants [`Session::adj_conn_end`], which is the
     /// bound that actually contains the session.
     pub conn_end: Timestamp,
-    /// `Adj_conn_end_UTC`: [`Session::conn_end`] padded by one [`SESSION_BOUNDARY_RESOLUTION`],
+    /// `Adj_conn_end_UTC`: [`Session::conn_end`] padded by one [`TIME_GRID_STEP`],
     /// which makes it the session's **exclusive** end — the true end lies in
-    /// `[adj_conn_end - SESSION_BOUNDARY_RESOLUTION, adj_conn_end)`.
+    /// `[adj_conn_end - TIME_GRID_STEP, adj_conn_end)`.
     ///
     /// This is the end the grouping and estimating logic uses throughout, so that
     /// `[conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the real
@@ -175,13 +174,13 @@ impl Session {
         }
 
         let left = if self.conn_start == overlap.start {
-            Bracket::new(overlap.start, overlap.start + SESSION_BOUNDARY_RESOLUTION)
+            Bracket::new(overlap.start, overlap.start + TIME_GRID_STEP)
         } else {
             Bracket::exact(overlap.start)
         };
 
         let right = if self.adj_conn_end == overlap.end() {
-            Bracket::new(overlap.end() - SESSION_BOUNDARY_RESOLUTION, overlap.end())
+            Bracket::new(overlap.end() - TIME_GRID_STEP, overlap.end())
         } else {
             Bracket::exact(overlap.end())
         };
@@ -225,7 +224,7 @@ impl Ord for Session {
 }
 
 /// A [`Session`]'s overlap with an [`Interval`], including quantification of
-/// overlap uncertainty due to [`SESSION_BOUNDARY_RESOLUTION`].
+/// overlap uncertainty due to [`TIME_GRID_STEP`].
 pub(crate) struct SessionOverlap {
     left: Bracket<Timestamp>,
     right: Bracket<Timestamp>,
@@ -259,7 +258,7 @@ impl SessionOverlap {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy)]
-/// Value subject to uncertainty due to [`SESSION_BOUNDARY_RESOLUTION`].
+/// Value subject to uncertainty due to [`TIME_GRID_STEP`].
 pub struct Bracket<T: Clone> {
     /// Minimum value.
     pub min: T,
@@ -456,20 +455,20 @@ pub enum AnomalyKind {
     /// `Active_Charge_Time` is zero so its `Avg_power` cell shows `#DIV/0!`.
     ZeroActiveChargeTime,
     /// `Conn_start + Conn_Duration` misses the reported `Conn_DateTime_End` by a full
-    /// [`SESSION_BOUNDARY_RESOLUTION`] or more, in one direction or the other, so the reported
+    /// [`TIME_GRID_STEP`] or more, in one direction or the other, so the reported
     /// start, end and duration are mutually inconsistent.
     ///
     /// The tolerance is what makes this a real test rather than a formality, and it is not chosen
     /// — it is forced. Truncation puts the true start somewhere in `[Conn_start, Adj_conn_start)`
     /// and the true end somewhere in `[Conn_end, Adj_conn_end)`: two half-open windows one
-    /// [`SESSION_BOUNDARY_RESOLUTION`] wide, the same convention the software uses everywhere
+    /// [`TIME_GRID_STEP`] wide, the same convention the software uses everywhere
     /// else. An honest `Conn_Duration` spans some instant of the first to some instant of the
     /// second, so the record is sound exactly when the first window, shifted by `Conn_Duration`,
     /// still meets the second:
     ///
     /// ```text
     /// sound  <=>  Conn_start + Conn_Duration  <  Adj_conn_end
-    ///        and  Conn_start + Conn_Duration  >  Conn_end - SESSION_BOUNDARY_RESOLUTION
+    ///        and  Conn_start + Conn_Duration  >  Conn_end - TIME_GRID_STEP
     /// ```
     ///
     /// The band is open at both ends, unlike every other interval here, because both windows are
@@ -496,7 +495,7 @@ pub enum AnomalyKind {
     /// The test is a tolerance rather than an equality, and that is what makes failing it mean
     /// something. The reported timestamps are truncated to the whole minute while `Conn_Duration`
     /// carries seconds, so even for a sound record the implied end misses the reported one — by up
-    /// to but never reaching one [`SESSION_BOUNDARY_RESOLUTION`], in either direction. Missing it
+    /// to but never reaching one [`TIME_GRID_STEP`], in either direction. Missing it
     /// is therefore normal; missing it by *a minute
     /// or more under both readings* is not, especially as the two readings sit a full hour apart,
     /// so one of them is ordinarily well inside the tolerance. When neither is, the record's own

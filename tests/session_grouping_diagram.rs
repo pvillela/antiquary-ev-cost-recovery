@@ -14,7 +14,7 @@
 
 // use ev_peak_contrib::{
 //     EV_POWER_FACTOR, EVOLUTE_BREAKER_KVA_RATING, EVOLUTE_BREAKER_KW_RATING,
-//     SESSION_BOUNDARY_RESOLUTION, SessionGroup, View, max_power_estimates_for_interval,
+//     TIME_GRID_STEP, SessionGroup, View, max_power_estimates_for_interval,
 //     session_csv_to_xlsx, session_list,
 // };
 // use jiff::Timestamp;
@@ -114,12 +114,12 @@
 //     // reports starting, and `Adj_conn_end` pads a reported end past the end of its minute — so for
 //     // as long as the report cannot tell us otherwise, the five genuinely overlap. This sliver is
 //     // the reason the arrangement is worth a test: it is the shortest group and the highest load,
-//     // and it is exactly one SESSION_BOUNDARY_RESOLUTION wide because that is the whole of the
+//     // and it is exactly one TIME_GRID_STEP wide because that is the whole of the
 //     // uncertainty the padding represents.
-//     assert_eq!(groups[5].duration(), SESSION_BOUNDARY_RESOLUTION);
+//     assert_eq!(groups[5].duration(), TIME_GRID_STEP);
 //     assert_eq!(
 //         groups.iter().map(|g| g.duration()).min(),
-//         Some(SESSION_BOUNDARY_RESOLUTION),
+//         Some(TIME_GRID_STEP),
 //         "the sliver should be the shortest group"
 //     );
 

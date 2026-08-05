@@ -44,7 +44,7 @@ resolved below. README is specified first, at the user's direction, then the cod
    across groups. `docs/estimate-set-ordering.md` is **deleted**, being entirely about the retired
    four-set lattice and its incomparability counterexample.
 
-6. **`SESSION_BOUNDARY_RESOLUTION` (`R`) is exactly the resolution at which the Evolute report states
+6. **`TIME_GRID_STEP` (`R`) is exactly the resolution at which the Evolute report states
    session *start and end times*** — currently 60s, a plain `const`. `TIME_ERROR_MARGIN` and
    `SESSION_REPORTING_RESOLUTION` are removed: `max(reporting, margin)` is unsound in the only case
    where it does anything, since exceeding the reporting grid admits groups narrower than `R` and
@@ -139,7 +139,7 @@ Typos: README:95 "must contains"; 205 "the sum of `avg_kw` of and size of" and "
 ## Code
 
 ### `src/common.rs`
-Drop `TIME_ERROR_MARGIN` and `SESSION_REPORTING_RESOLUTION`; `SESSION_BOUNDARY_RESOLUTION` returns to
+Drop `TIME_ERROR_MARGIN` and `SESSION_REPORTING_RESOLUTION`; `TIME_GRID_STEP` returns to
 `pub const Duration::from_secs(60)`, documented per decisions 6–8. Delete
 `AnomalyKind::IntersectsBoundaryMarginOnly` (variant, `as_str`, `from_token`, `Display` arm) and
 `Session::overlap_is_certain`.
@@ -183,7 +183,7 @@ Drop `TIME_ERROR_MARGIN` and `SESSION_REPORTING_RESOLUTION`; `SESSION_BOUNDARY_R
 
 ### `src/excel.rs`
 Revert the `LazyLock` churn: `static END_PADDING` back to `const`, and every
-`*SESSION_BOUNDARY_RESOLUTION` deref back to a plain reference. Update the "New fields" doc
+`*TIME_GRID_STEP` deref back to a plain reference. Update the "New fields" doc
 references to the renamed README sections.
 
 ### Docs and fixtures

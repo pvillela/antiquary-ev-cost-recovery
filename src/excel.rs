@@ -1,6 +1,5 @@
 use crate::{
-    Anomaly, AnomalyKind, SESSION_BOUNDARY_RESOLUTION, Session, site_load::ev_real_power_kw,
-    time_zone,
+    Anomaly, AnomalyKind, Session, TIME_GRID_STEP, site_load::ev_real_power_kw, time_zone,
 };
 use jiff::{
     SignedDuration, Timestamp, civil,
@@ -18,10 +17,9 @@ use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
 /// 1899-12-30T00:00:00Z; verified by [`test::excel_epoch_constant_matches_jiff`].
 const EXCEL_EPOCH_UNIX_SECS: i64 = -2_209_161_600;
 
-/// [`SESSION_BOUNDARY_RESOLUTION`] in the signed form the timestamp arithmetic needs.
+/// [`TIME_GRID_STEP`] in the signed form the timestamp arithmetic needs.
 /// See README.md, "Excel workbook".
-const END_PADDING: SignedDuration =
-    SignedDuration::from_secs(SESSION_BOUNDARY_RESOLUTION.as_secs() as i64);
+const END_PADDING: SignedDuration = SignedDuration::from_secs(TIME_GRID_STEP.as_secs() as i64);
 
 /// Widest gap between `Conn_start + Conn_Duration` and the reported end that truncation alone can
 /// explain. Both reported timestamps are truncated to the minute while `Conn_Duration` carries
@@ -1275,7 +1273,7 @@ mod test {
         }
     }
 
-    /// `Conn_start + Conn_Duration` must land strictly inside one `SESSION_BOUNDARY_RESOLUTION`
+    /// `Conn_start + Conn_Duration` must land strictly inside one `TIME_GRID_STEP`
     /// of the reported end, on either side; truncation to the minute explains that much and no
     /// more. Both boundaries are pinned, because getting either off by a second would silently
     /// reclassify real records: the sample data reaches −57s, so the band is exercised almost to

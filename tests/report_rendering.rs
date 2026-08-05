@@ -63,8 +63,8 @@ fn render(stem: &str, lo: &str, hi: &str) -> String {
         .unwrap_or_else(|e| panic!("{stem} converts: {e}"))
         .output_path;
     let interval: (Timestamp, Timestamp) = (lo.parse().unwrap(), hi.parse().unwrap());
-    let report = interval_estimates(interval, &xlsx)
-        .unwrap_or_else(|e| panic!("{stem} estimates: {e}"));
+    let report =
+        interval_estimates(interval, &xlsx).unwrap_or_else(|e| panic!("{stem} estimates: {e}"));
 
     let rendered = report.to_markdown();
     // Display must agree, or there would be two renderings to keep in step.
@@ -226,7 +226,7 @@ fn a_skew_margin_is_reported_only_when_it_beats_the_interval() {
         !md.contains("AFTER"),
         "the right margin beats the interval on nothing and should have been dropped:\n{md}"
     );
-    // The margin's own span, not the interval's, and one `SESSION_BOUNDARY_RESOLUTION` wide.
+    // The margin's own span, not the interval's, and one `TIME_GRID_STEP` wide.
     assert!(
         md.contains("\"Before\" - 2026-06-15 15:59 - 16:00 EDT (1 minute)"),
         "the margin's interval line is wrong:\n{md}"

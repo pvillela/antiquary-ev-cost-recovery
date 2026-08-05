@@ -65,7 +65,7 @@ These rules live in one place, `src/interval.rs`, and both front-ends come throu
 
 The conversion from CSV to Excel includes the addition of new fields:
 
-- `Adj_conn_end`, is computed as: `Conn_DateTime_End + SESSION_BOUNDARY_RESOLUTION` (currently 60 seconds). It is the session's **exclusive** end: a session starting at exactly this time does not overlap this one.
+- `Adj_conn_end`, is computed as: `Conn_DateTime_End + TIME_GRID_STEP` (currently 60 seconds). It is the session's **exclusive** end: a session starting at exactly this time does not overlap this one.
 - `Adj_conn_duration`, is computed as: `Adj_conn_end - Conn_DateTime_Start`.
 - `Conn_start_UTC`, `Conn_end_UTC`, and `Adj_conn_end_UTC`, with UTC values corresponding to the corresponding local time fields.
 - `Avg_power` in kW, is computed as: `Energy_Use / (Active_Charge_Time * 24)`.
@@ -103,7 +103,7 @@ Given a time interval of interest **`I`** as described above, the estimation of 
 
 Sessions, `SessionGroup`s, and intervals of interest are all **half-open**: each includes its left end-point and excludes its right one. Consecutive groups therefore meet at a single instant belonging to the later one, so no instant falls in two groups, and *abutting* stays distinguishable from *overlapping* — a distinction the estimates turn on. See [Boundaries and the time grid](#boundaries-and-the-time-grid).
 
-`SESSION_BOUNDARY_RESOLUTION` — written **`R`** below, currently 60 seconds — is exactly the resolution at which the session report states session **start and end times**. It is not the resolution of everything in the report: `Conn_Duration` and `Active_Charge_Time` are stated more finely, and several of the Technical Notes depend on that difference.
+`TIME_GRID_STEP` — written **`R`** below, currently 60 seconds — is exactly the resolution at which the session report states session **start and end times**. It is not the resolution of everything in the report: `Conn_Duration` and `Active_Charge_Time` are stated more finely, and several of the Technical Notes depend on that difference.
 
 A time stated to the minute is the true time truncated down to the minute, so a session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`. The software therefore records an adjusted end, **`Adj_conn_end`**, one `R` past the reported end — the exclusive bound that contains the true end wherever in that minute it fell. That the report truncates rather than rounds is an assumption; see [Assumptions](#assumptions).
 
@@ -152,7 +152,7 @@ candidate offsets from each other.
 
 Note the assumption holds of the *true* instants, not of the reported ones. Because the report
 truncates start and end to whole minutes, `Conn_start_UTC + Conn_Duration` does not land on
-`Conn_end_UTC` — it misses by strictly less than one `SESSION_BOUNDARY_RESOLUTION`, in either
+`Conn_end_UTC` — it misses by strictly less than one `TIME_GRID_STEP`, in either
 direction, on a perfectly sound record.
 Every test below is stated as a tolerance for that reason, and the exact size of the discrepancy is
 derived in step 2.
@@ -337,7 +337,7 @@ The bound itself is an assumption, and an unverifiable one; see [Assumptions](#a
 
   ```
   sound  <=>  Conn_start + Conn_Duration  <  Adj_conn_end
-         and  Conn_start + Conn_Duration  >  Conn_end - SESSION_BOUNDARY_RESOLUTION
+         and  Conn_start + Conn_Duration  >  Conn_end - TIME_GRID_STEP
   ```
 
   Both bounds are strict, because both windows are half-open at the same end. That makes this the one band in the design that is open rather than half-open — an instance of the convention rather than an exception to it, since it is the *intersection* condition of two half-open windows and not an interval anyone chose. The band is not slack: it is precisely what truncation to whole minutes accounts for, and the sample data reaches to within 3 seconds of its lower edge.

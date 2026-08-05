@@ -34,15 +34,15 @@ is written against, and the gap between it and the code is temporary.
    CLOCK_SKEW_MARGIN = R * ceil(CLOCK_SKEW_BOUND / R)     (currently one R = 60s)
    ```
 
-   The README's `max(absolute clock skew + drift, SESSION_BOUNDARY_RESOLUTION)` is wrong on two
+   The README's `max(absolute clock skew + drift, TIME_GRID_STEP)` is wrong on two
    counts. It reads on the actual skew, which nobody knows, rather than on the assumed bound. And
    `max` restores grid alignment only while the bound does not exceed `R` — a bound of 70s yields
    70s, which is off the grid, and the guarantee of "Boundaries and the time grid" fails silently.
    Rounding *up to a whole `R`* is the operation actually wanted; it coincides with `max` in the
    current range. `src/common.rs` already implements the `ceil` form; only the prose is stale.
 
-3. **`CLOCK_SKEW_MARGIN == SESSION_BOUNDARY_RESOLUTION` is a numeric coincidence, not an identity.**
-   The note deleted from `SESSION_BOUNDARY_RESOLUTION`'s doc comment — that truncation is one-sided
+3. **`CLOCK_SKEW_MARGIN == TIME_GRID_STEP` is a numeric coincidence, not an identity.**
+   The note deleted from `TIME_GRID_STEP`'s doc comment — that truncation is one-sided
    and forward while skew is two-sided and applies to both end-points — is still true and still worth
    stating. `R` is the floor on the margin because of the grid, not because the two quantities are
    the same kind of thing.
@@ -214,7 +214,7 @@ rating; the gap it exposed is closed by a new anomaly kind.
    text sits on the static below it.
 
    The `CLOCK_SKEW_MARGIN` static's doc comment still ends with the superseded
-   `(= max(absolute clock skew + drift, SESSION_BOUNDARY_RESOLUTION))`, which contradicts the `ceil`
+   `(= max(absolute clock skew + drift, TIME_GRID_STEP))`, which contradicts the `ceil`
    formula directly beneath it. Replace it, have the prose read off `CLOCK_SKEW_BOUND` rather than
    restating `5s`, and add decision 3's note.
 

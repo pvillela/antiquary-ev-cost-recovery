@@ -695,7 +695,7 @@ fn interval_line(interval: (Timestamp, Timestamp)) -> String {
 
 /// "1 hour" / "15 minutes", for the header.
 ///
-/// Singular is worth the branch: a skew margin is one `SESSION_BOUNDARY_RESOLUTION` wide, so "1
+/// Singular is worth the branch: a skew margin is one `TIME_GRID_STEP` wide, so "1
 /// minutes" would appear in every report that shows one.
 fn interval_length(lo: Timestamp, hi: Timestamp) -> String {
     let plural = |n: i64, unit: &str| format!("{n} {unit}{}", if n == 1 { "" } else { "s" });

@@ -85,7 +85,7 @@ under-report the peak.
 
 The group is exactly one minute long because a minute is the whole of the uncertainty: it is the
 resolution the report states session boundaries at, and the software carries that one figure as
-`SESSION_BOUNDARY_RESOLUTION`.
+`TIME_GRID_STEP`.
 
 ## The estimates
 
