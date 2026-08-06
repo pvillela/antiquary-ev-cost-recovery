@@ -103,21 +103,21 @@ impl Load {
 // ---------------------------------------------------------------------------
 
 /// Current the pilot signal permits a single vehicle to draw.
-pub fn ev_pilot_current_a() -> f64 {
+pub const fn ev_pilot_current_a() -> f64 {
     BREAKER_RATING_A * CONTINUOUS_DUTY_DERATE
 }
 
 /// Apparent power of one charging vehicle. The load is current-limited, so
 /// this follows from voltage and current alone and is unaffected by power
 /// factor.
-pub fn ev_apparent_power_kva() -> f64 {
+pub const fn ev_apparent_power_kva() -> f64 {
     PANEL_VOLTAGE_V * ev_pilot_current_a() / VA_PER_KVA
 }
 
 /// Real power of one charging vehicle.
 ///
 /// Equal to [`ev_apparent_power_kva()`] * [`EV_TRUE_POWER_FACTOR`]
-pub fn ev_real_power_kw() -> f64 {
+pub const fn ev_real_power_kw() -> f64 {
     ev_apparent_power_kva() * EV_TRUE_POWER_FACTOR
 }
 

@@ -126,8 +126,8 @@ The likely kW values are in the range from 41.429 kW (consumption-based) to
 13.400 kW (breaker-spec-based).
 ```
 
-The bracket inverted. `consumption_based_kw` is a group's aggregate average power while
-`evems_specs_based_kw` is that group's member count times a single rating, so the first exceeds the
+The bracket inverted. `energy_based_kw` is a group's aggregate average power while
+`count_based_kw` is that group's member count times a single rating, so the first exceeds the
 second whenever a session draws more than the rating — which the hardware is supposed to make
 impossible, and which nothing in the code checked. The fixture was corrected to stay under the
 rating; the gap it exposed is closed by a new anomaly kind.
@@ -148,7 +148,7 @@ rating; the gap it exposed is closed by a new anomaly kind.
     `InconsistentDuration` remains the only kind that excludes a session, as README.md, "Other"
     states.
 
-15. **The test is `avg_power > EVOLUTE_BREAKER_KW_RATING`, exactly, with no tolerance.** An earlier
+15. **The test is `avg_power > BREAKER_RATING_KW`, exactly, with no tolerance.** An earlier
     draft rounded to the nearest 0.1 kW — equivalently `>= 6.75` — on the grounds that the report
     prints three decimals and a smaller discrepancy is invisible beside the figure. That was
     abandoned: it left a band, `(6.7, 6.75)`, in which a session inverts the bracket without being

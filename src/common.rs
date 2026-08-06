@@ -1,4 +1,4 @@
-use crate::site_load::{Load, ev_load, transformer_load};
+use crate::site_load::{Load, ev_load, ev_real_power_kw, transformer_load};
 use jiff::{Timestamp, Zoned, tz::TimeZone};
 use std::{
     cell::RefCell,
@@ -33,6 +33,9 @@ pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
 
 /// The duration of the interval of interest should be a multiple of this.
 pub const SEGMENT_DURATION: Duration = Duration::from_mins(15);
+
+/// Continuous use breaker kW rating.
+pub const BREAKER_RATING_KW: f64 = ev_real_power_kw();
 
 pub(crate) fn time_zone() -> TimeZone {
     TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid time-zone name")
@@ -388,7 +391,7 @@ impl Add for Load {
 
 pub type RSegment = Rc<Segment>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 /// A sub-interval of the interval-of-interest over which power estimates are computed.
 pub struct Segment {
     pub interval: Interval,
@@ -508,7 +511,7 @@ pub enum AnomalyKind {
     /// Only fold starts are checked this way; the same inconsistency on any other date is caught,
     /// if at all, by [`AnomalyKind::InconsistentDuration`]. See README.md, "Time zone".
     DstUnresolvable,
-    /// The session's average power exceeds [`EVOLUTE_BREAKER_KW_RATING`], which the hardware is
+    /// The session's average power exceeds [`BREAKER_RATING_KW`], which the hardware is
     /// supposed to make impossible.
     ///
     /// Informational only: the session still takes part in every estimate, since nothing about the

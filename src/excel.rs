@@ -1,6 +1,4 @@
-use crate::{
-    Anomaly, AnomalyKind, Session, TIME_GRID_STEP, site_load::ev_real_power_kw, time_zone,
-};
+use crate::{Anomaly, AnomalyKind, BREAKER_RATING_KW, Session, TIME_GRID_STEP, time_zone};
 use jiff::{
     SignedDuration, Timestamp, civil,
     tz::{AmbiguousOffset, TimeZone},
@@ -335,14 +333,9 @@ impl CsvSession {
             // says something is wrong with `Energy_Use` or `Active_Charge_Time` — but not which,
             // which is why this only reports and never excludes.
             //
-            // Compared against the rating exactly, with no tolerance. That is what makes the flag
-            // a complete account of the inversion the reported bracket can suffer: a group prints
-            // a backwards range only when its aggregate exceeds its member count times the rating,
-            // which by the pigeonhole principle needs some member above the rating — and every such
-            // member is flagged here. A tolerance would leave a band of members that invert the
-            // bracket silently.
+            // Compared against the rating exactly, with no tolerance.
             let avg_power = self.energy_use / (self.active_charge_time.as_secs_f64() / 3600.0);
-            if avg_power > ev_real_power_kw() {
+            if avg_power > BREAKER_RATING_KW {
                 common.push(AnomalyKind::ExcessiveAvgPower);
             }
         }

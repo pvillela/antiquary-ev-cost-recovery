@@ -1,6 +1,6 @@
 use crate::{
-    Anomaly, Bracket, Interval, RSession, SEGMENT_DURATION, Segment, Session, SessionReport,
-    session_list, site_load::ev_real_power_kw,
+    Anomaly, BREAKER_RATING_KW, Bracket, Interval, RSession, SEGMENT_DURATION, Segment, Session,
+    SessionReport, session_list,
 };
 use std::{
     cell::RefCell,
@@ -82,7 +82,7 @@ pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimate
         s.avg_kw = if s.energy_use == 0.0 {
             0.0
         } else {
-            ev_real_power_kw()
+            BREAKER_RATING_KW
         };
         s
     });
