@@ -96,7 +96,7 @@ Given a time interval of interest **`I`** as described above, the estimation of 
 
     - **`energy_based_kva`**: `agg_kw` divided by a power factor that reflects the combination of typical EV chargers and the Evolute infrastructure (~0.98).
 
-    - **`count_based_kw`**: `agg_count` multiplied by the per-EV kW rating of the Evolute infrastructure (~6.7 kW).
+    - **`count_based_kw`**: `agg_count` multiplied by the average per-EV kW rating of the Evolute infrastructure (~6.7 kW).
 
     - **`count_based_kva`**: `count_based_kw` divided by a power factor that reflects the combination of typical EV chargers and the Evolute infrastructure (~0.98).
 
@@ -105,7 +105,7 @@ Given a time interval of interest **`I`** as described above, the estimation of 
 
   - **`energy_based_kw`**: `agg_kw`.
 
-  - **`count_based_kw`**: `agg_count` multiplied by the per-EV kW rating of the Evolute infrastructure (~6.7 kW).
+  - **`count_based_kw`**: `agg_count` multiplied by the average per-EV kW rating of the Evolute infrastructure (~6.7 kW).
 - The identified maximal segments are typically one and the same, but may be distinct in some situations.
 - Report on the maximal segment(s).
 

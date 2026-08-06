@@ -165,7 +165,17 @@ impl Session {
 
     /// Average power draw in kW: [`Self::energy_use`] / ([`Self::charge_time`] in hours).
     pub fn avg_kw(&self) -> f64 {
-        self.energy_use / self.charge_time.as_secs_f64() * 3600.0
+        let kw = self.energy_use / self.charge_time.as_secs_f64() * 3600.0;
+        match kw.is_finite() {
+            true => kw,
+            false => {
+                if self.energy_use == 0.0 {
+                    0.0
+                } else {
+                    BREAKER_RATING_KW
+                }
+            }
+        }
     }
 
     /// The session's overlap with an interval.

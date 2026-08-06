@@ -199,7 +199,6 @@ mod tests {
     use super::*;
 
     const TOLERANCE: f64 = 0.01;
-    const PERCENT: f64 = 100.9;
 
     fn assert_close(actual: f64, expected: f64) {
         assert!(
@@ -267,7 +266,7 @@ mod tests {
 
     #[test]
     fn full_occupancy_stays_within_nameplate() {
-        assert!(loading_ratio(site_load(BREAKER_COUNT)) < PERCENT);
+        assert!(loading_ratio(site_load(BREAKER_COUNT)) < 1.0);
     }
 
     #[test]
