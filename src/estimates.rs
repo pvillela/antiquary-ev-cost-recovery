@@ -1,9 +1,8 @@
 use crate::{
-    Anomaly, BREAKER_RATING_KW, Bracket, Interval, RSession, SEGMENT_DURATION, Segment, Session,
-    SessionReport, session_list,
+    Anomaly, Bracket, Interval, RSession, SEGMENT_DURATION, Segment, Session, SessionReport,
+    session_list,
 };
 use std::{
-    cell::RefCell,
     error::Error,
     path::{Path, PathBuf},
     rc::Rc,
@@ -37,7 +36,12 @@ pub struct IntervalEstimates {
     pub excluded_sessions: Vec<Session>,
 }
 
-/// The four estimates, under one [`View`] of the session groups.
+/// The four estimates for one [`Segment`].
+///
+/// Two derivations times two units. The energy-based pair reads the sessions' own consumption; the
+/// count-based pair reads how many of them were charging against the per-EV rating of the
+/// infrastructure. Each is a [`Bracket`], because the reported session times are stated only to the
+/// minute and the overlap they imply is therefore a range rather than a number.
 pub struct EstimateSet {
     pub energy_based_kw: Bracket<f64>,
     pub energy_based_kva: Bracket<f64>,
@@ -47,12 +51,6 @@ pub struct EstimateSet {
 
 impl EstimateSet {
     /// The four figures, in the order the report tabulates them.
-    ///
-    /// Deduplication compares these exactly, floats and all, which is sound here rather than
-    /// sloppy: a set that differs from another does so because a different subset of the *same*
-    /// `avg_power` values was summed, and dropping a member that contributed 0.0 leaves the sum
-    /// bit-identical. Nothing reaching a group is NaN — a spike's infinite average power is
-    /// substituted before grouping.
     pub fn values(&self) -> [Bracket<f64>; 4] {
         [
             self.energy_based_kw,
@@ -76,22 +74,14 @@ pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimate
         excluded,
     } = session_report;
 
-    // A spike's own avg_power is infinite or NaN, either of which would swamp or poison every group
-    // it entered, so the estimating logic substitutes a finite figure. See README.md, "Other".
-    let spikes = spikes.into_iter().map(|mut s| {
-        s.avg_kw = if s.energy_use == 0.0 {
-            0.0
-        } else {
-            BREAKER_RATING_KW
-        };
-        s
-    });
-
-    // Combine sessions and spikes. Grouping algorithm will sort it out.
-    let rsessions: Vec<_> = sessions
+    // Spikes take part in the estimates on the same footing as any other session. A spike's raw
+    // energy over charge time is infinite or NaN, either of which would swamp or poison any
+    // segment it entered, and [`Session::avg_kw`] substitutes a finite figure for exactly that
+    // reason — so nothing has to be done to a spike here. See README.md, "Other".
+    let rsessions: Vec<RSession> = sessions
         .into_iter()
         .chain(spikes)
-        .map(|s| Rc::new(RefCell::new(s)))
+        .map(Rc::new)
         .collect();
     let segments = segments_for_ioi(ioi, &rsessions);
     let seg_estimates: Vec<(Segment, EstimateSet)> = segments
@@ -113,21 +103,41 @@ pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimate
     })
 }
 
-fn segments_for_ioi(ioi: Interval, sessions: &Vec<RSession>) -> Vec<Segment> {
-    let Interval {
-        start: ioi_start,
-        duration: ioi_dur,
-    } = ioi;
+/// The [`SEGMENT_DURATION`]-wide segments tiling `ioi`, each holding the sessions that intersect
+/// it.
+///
+/// # Panics
+///
+/// If `ioi`'s duration is not a whole number of [`SEGMENT_DURATION`]s, or is zero. That is the
+/// precondition [`SEGMENT_DURATION`] states, and it is checked rather than accommodated.
+///
+/// Rounding the segment count up would make the segments overrun the interval — a 20-minute
+/// interval would tile to 20:00–20:15 and 20:15–20:30 — so a session charging only in the overrun
+/// would be counted into the estimates despite falling outside the interval of interest entirely,
+/// and could be reported as its peak. Rounding down would silently leave part of the interval
+/// unestimated. Neither is a defensible answer to a question that should not have been asked, and
+/// both are wrong in a way no figure in the report would reveal.
+///
+/// The legal interval lengths are 15 minutes and an hour, so nothing coming through
+/// [`crate::checked_interval`] can reach this. The core stays permissive about *when* an interval
+/// starts, which is what exploratory callers and tests rely on; it was never permissive about how
+/// long one may be.
+fn segments_for_ioi(ioi: Interval, sessions: &[RSession]) -> Vec<Segment> {
+    let (ioi_secs, seg_secs) = (ioi.duration.as_secs(), SEGMENT_DURATION.as_secs());
+    assert!(
+        ioi_secs > 0 && ioi_secs % seg_secs == 0,
+        "interval of interest is {ioi_secs}s, which is not a positive whole number of \
+         {seg_secs}s segments; see SEGMENT_DURATION"
+    );
 
-    let nsegs = ioi.duration.as_secs().div_ceil(SEGMENT_DURATION.as_secs()) as usize;
+    let nsegs = (ioi_secs / seg_secs) as usize;
     let mut segments = (0..nsegs)
-        .map(|i| Segment::new(ioi_start + ioi_dur * i as u32, SEGMENT_DURATION))
+        .map(|i| Segment::new(ioi.start + SEGMENT_DURATION * i as u32, SEGMENT_DURATION))
         .collect::<Vec<_>>();
 
     for s in sessions {
-        let session = s.borrow();
         for segment in segments.iter_mut() {
-            if !session.intersects(&segment.interval) {
+            if !s.intersects(&segment.interval) {
                 continue;
             }
             segment.add_session(s.clone());
@@ -148,6 +158,16 @@ pub(crate) fn segment_estimate(segment: &Segment) -> EstimateSet {
     }
 }
 
+/// The segment maximizing `criterion`, with its estimates.
+///
+/// Seeded from the first segment's own criterion rather than from zero, so a segment is never
+/// beaten by one that merely scores above zero — an empty interval's segments all score zero, and
+/// the first of them is as much the maximum as any other.
+///
+/// Ties go to the earliest segment: the comparison is strict and the segments are visited in time
+/// order, so a later segment has to *beat* the incumbent to displace it. That makes the choice
+/// deterministic, which matters because a tie is not rare — every segment of an interval no session
+/// reached is tied at the standing block.
 pub(crate) fn maximal_segment_estimate(
     segments: &[Segment],
     criterion: impl Fn(&Segment) -> f64,
@@ -156,7 +176,7 @@ pub(crate) fn maximal_segment_estimate(
     let first = seg_iter
         .next()
         .expect("`segments` slice expected to be non-empty");
-    let mut hi_crit = 0.0;
+    let mut hi_crit = criterion(first);
     let mut hi_seg = first;
     let mut hi_est = segment_estimate(first);
     for segment in seg_iter {
@@ -177,8 +197,7 @@ pub(crate) fn maximal_segment_estimate(
 fn collect_session_anomalies(interval: &Interval, rsessions: &[RSession]) -> Vec<Anomaly> {
     let mut anomalies: Vec<Anomaly> = rsessions
         .iter()
-        .flat_map(|rs| {
-            let s = rs.borrow();
+        .flat_map(|s| {
             if !s.intersects(interval) {
                 return Vec::new();
             }
@@ -199,3 +218,7 @@ fn collect_session_anomalies(interval: &Interval, rsessions: &[RSession]) -> Vec
     });
     anomalies
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------

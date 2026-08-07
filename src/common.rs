@@ -1,7 +1,6 @@
 use crate::site_load::{Load, ev_load, ev_real_power_kw, transformer_load};
 use jiff::{Timestamp, Zoned, tz::TimeZone};
 use std::{
-    cell::RefCell,
     collections::BTreeSet,
     fmt::{self, Debug},
     iter::Sum,
@@ -31,7 +30,16 @@ pub const TIME_ZONE_NAME: &str = "America/Toronto";
 /// See README.md, "Boundaries and the time grid".
 pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
 
-/// The duration of the interval of interest should be a multiple of this.
+/// The width of the [`Segment`]s an interval of interest is partitioned into.
+///
+/// The duration of the interval of interest **must** be a positive multiple of this, and
+/// [`crate::interval_estimates`] panics otherwise. Not a convention: rounding the segment count up
+/// would tile past the interval's end and count sessions falling outside it, and rounding down
+/// would leave part of it unestimated. Neither error would show in any figure the report prints,
+/// which is why the check is an assertion rather than an accommodation.
+///
+/// The two legal interval lengths — 15 minutes and 1 hour — are both multiples, so nothing coming
+/// through [`crate::checked_interval`] can trip it.
 pub const SEGMENT_DURATION: Duration = Duration::from_mins(15);
 
 /// Continuous use breaker kW rating.
@@ -91,7 +99,7 @@ impl Interval {
 // Session
 // ---------------------------------------------------------------------------
 
-pub(crate) type RSession = Rc<RefCell<Session>>;
+pub(crate) type RSession = Rc<Session>;
 
 #[derive(Debug)]
 /// Charging session
@@ -115,9 +123,9 @@ pub struct Session {
     /// which makes it the session's **exclusive** end — the true end lies in
     /// `[adj_conn_end - TIME_GRID_STEP, adj_conn_end)`.
     ///
-    /// This is the end the grouping and estimating logic uses throughout, so that
+    /// This is the end the estimating logic uses throughout, so that
     /// `[conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the real
-    /// connection. See README.md, "Session boundaries".
+    /// connection. See README.md, "Sessions and segments".
     pub adj_conn_end: Timestamp,
     /// `Conn_Duration` from `session report`: the physical elapsed time of the connection, which is
     /// what makes the DST fold inference possible. See README.md, "Time zone".
@@ -129,18 +137,53 @@ pub struct Session {
     pub charge_time: Duration,
     /// From `session report`.
     pub energy_use: f64,
-    /// `energy_use / charge_time in hours`.
-    pub avg_kw: f64,
     /// Anomalies associated with this session.
     pub anomalies: Vec<AnomalyKind>,
 }
 
 impl Session {
     /// Whether the session overlaps with an interval.
+    ///
+    /// # Panics
+    ///
+    /// If `adj_conn_end` precedes `conn_start`. That is a precondition, not a defensive check: a
+    /// session whose span is inverted has fields that contradict each other, is flagged
+    /// [`AnomalyKind::InconsistentDuration`] on conversion, and is sorted into
+    /// [`crate::SessionReport::excluded`] — so it never reaches the estimating logic at all. The
+    /// implication is not incidental: `conn_duration` is unsigned, so the soundness test's
+    /// `conn_start + conn_duration < adj_conn_end` cannot hold unless `conn_start < adj_conn_end`.
+    ///
+    /// Panicking here is therefore the honest behaviour. Reaching it means an excluded session got
+    /// somewhere it should not have, and that is worth a crash rather than a plausible answer. The
+    /// one caller that legitimately holds excluded sessions — the report, which lists them on
+    /// purpose — asks [`Self::lenient_intersects`] instead.
     pub(crate) fn intersects(&self, interval: &Interval) -> bool {
         let sess_itvl = Interval::from_start_end(self.conn_start, self.adj_conn_end);
-        let overlap = sess_itvl.intersection(&interval);
-        overlap.is_empty()
+        !sess_itvl.intersection(interval).is_empty()
+    }
+
+    /// [`Self::intersects`], but answering for a session whose span is inverted rather than
+    /// panicking on it.
+    ///
+    /// For the reporting module alone, and for one question: whether an *excluded* session appears
+    /// to fall in the interval of interest. That listing covers the whole workbook by design —
+    /// filtering it would apply a judgement to exactly the timestamps that are in doubt — so the
+    /// report has to answer for records the estimating logic never touches, including one whose
+    /// reported end precedes its start.
+    ///
+    /// The answer is only ever "appears to", and README says so where the column is described. The
+    /// two endpoints are read in whichever order puts them the right way round, which is the most
+    /// that can be said for a record whose own fields disagree.
+    ///
+    /// Identical to [`Self::intersects`] for every session that is not inverted.
+    pub(crate) fn lenient_intersects(&self, interval: &Interval) -> bool {
+        let (lo, hi) = match self.conn_start <= self.adj_conn_end {
+            true => (self.conn_start, self.adj_conn_end),
+            false => (self.adj_conn_end, self.conn_start),
+        };
+        !Interval::from_start_end(lo, hi)
+            .intersection(interval)
+            .is_empty()
     }
 
     /// Reported connection start in local time (ET).
@@ -178,12 +221,17 @@ impl Session {
         }
     }
 
-    /// The session's overlap with an interval.
-    pub(crate) fn interval_overlap(&self, interval: &Interval) -> SessionOverlap {
+    /// The session's overlap with an interval, or `None` when the two do not meet.
+    ///
+    /// `None` rather than a zero-width [`SessionOverlap`]: there is no pair of brackets that
+    /// stands for "no overlap" without also standing for some instant, and a sentinel pair built
+    /// from the extremes of the timestamp range only defers the problem to whoever measures its
+    /// duration. The absence is in the type instead.
+    pub(crate) fn interval_overlap(&self, interval: &Interval) -> Option<SessionOverlap> {
         let sess_itvl = Interval::from_start_end(self.conn_start, self.adj_conn_end);
-        let overlap = sess_itvl.intersection(&interval);
+        let overlap = sess_itvl.intersection(interval);
         if overlap.is_empty() {
-            return SessionOverlap::empty();
+            return None;
         }
 
         let left = if self.conn_start == overlap.start {
@@ -198,21 +246,24 @@ impl Session {
             Bracket::exact(overlap.end())
         };
 
-        SessionOverlap { left, right }
+        Some(SessionOverlap { left, right })
     }
 
     /// The duration of the session's overlap with `interval` divided by `interval`'s
     /// duration.
     pub(crate) fn interval_overlap_ratio(&self, interval: &Interval) -> Bracket<f64> {
-        let overlap = self.interval_overlap(&interval);
-        let overlap_dur = overlap.duration();
-        overlap_dur.map(|v| v.as_secs_f64() / interval.duration.as_secs_f64())
+        match self.interval_overlap(interval) {
+            None => Bracket::exact(0.0),
+            Some(overlap) => overlap
+                .duration()
+                .map(|v| v.as_secs_f64() / interval.duration.as_secs_f64()),
+        }
     }
 
     /// Average power (in kW) of this session over `interval`.
     pub(crate) fn interval_avg_kw(&self, interval: &Interval) -> Bracket<f64> {
         let overlap_ratio = self.interval_overlap_ratio(interval);
-        overlap_ratio.map(|v| v * self.avg_kw)
+        overlap_ratio.map(|v| v * self.avg_kw())
     }
 }
 
@@ -226,7 +277,7 @@ impl Eq for Session {}
 
 impl PartialOrd for Session {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.id.partial_cmp(&other.id)
+        Some(self.cmp(other))
     }
 }
 
@@ -244,17 +295,6 @@ pub(crate) struct SessionOverlap {
 }
 
 impl SessionOverlap {
-    pub fn new(left: Bracket<Timestamp>, right: Bracket<Timestamp>) -> Self {
-        Self { left, right }
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            left: Bracket::new(Timestamp::MAX, Timestamp::MAX),
-            right: Bracket::new(Timestamp::MIN, Timestamp::MIN),
-        }
-    }
-
     pub fn duration(&self) -> Bracket<Duration> {
         let min = if self.left.max < self.right.min {
             duration(self.left.max, self.right.min)
@@ -399,8 +439,6 @@ impl Add for Load {
 // Segment
 // ---------------------------------------------------------------------------
 
-pub type RSegment = Rc<Segment>;
-
 #[derive(Debug, Clone, PartialEq)]
 /// A sub-interval of the interval-of-interest over which power estimates are computed.
 pub struct Segment {
@@ -427,14 +465,14 @@ impl Segment {
     pub fn agg_count(&self) -> Bracket<f64> {
         self.sessions
             .iter()
-            .map(|s| s.borrow().interval_overlap_ratio(&self.interval))
+            .map(|s| s.interval_overlap_ratio(&self.interval))
             .sum()
     }
 
     pub fn agg_kw(&self) -> Bracket<f64> {
         self.sessions
             .iter()
-            .map(|s| s.borrow().interval_avg_kw(&self.interval))
+            .map(|s| s.interval_avg_kw(&self.interval))
             .sum()
     }
 
@@ -490,7 +528,7 @@ pub enum AnomalyKind {
     ///
     /// Both directions are faults, and both exclude the session from the estimates: if a record's
     /// own fields disagree by more than the reporting can explain, neither its duration nor the
-    /// span the grouping logic would place it on can be relied on. The overshoot direction also
+    /// span the estimating logic would place it on can be relied on. The overshoot direction also
     /// subsumes a session that ends before it starts — with `Conn_DateTime_End` a minute or more
     /// before `Conn_DateTime_Start`, no non-negative duration satisfies the test.
     ///
@@ -528,16 +566,16 @@ pub enum AnomalyKind {
     /// figure says *which* of `Energy_Use` and `Active_Charge_Time` is wrong, or whether either is.
     /// [`AnomalyKind::InconsistentDuration`] remains the only kind that excludes a session.
     ///
-    /// It matters because two things quietly assume it cannot happen. The breaker-spec figures are
-    /// a session count times a single rating, so a session drawing more than that rating breaks the
-    /// assumption they rest on — see README.md, "Assumptions". And the report states its bracket as
-    /// running from the consumption-based figure up to the breaker-spec one, which inverts if a
-    /// group's aggregate average power exceeds its member count times the rating.
+    /// It matters because the count-based figures are an aggregate session count times a single
+    /// rating, so a session drawing more than that rating breaks the assumption they rest on — see
+    /// README.md, "Assumptions". A reader ordinarily finds the energy-based figures at or below the
+    /// count-based ones, and that ordering inverts exactly when a segment's `agg_kw` exceeds its
+    /// `agg_count` times the rating.
     ///
     /// The comparison is against the rating exactly, with no tolerance, which is what makes this
     /// flag a complete account of that inversion: it takes a member above the rating to push a
-    /// group's aggregate past its member count times the rating, and every such member is flagged.
-    /// A tolerance would leave a band of sessions that invert the bracket silently.
+    /// segment's `agg_kw` past its `agg_count` times the rating, and every such member is flagged.
+    /// A tolerance would leave a band of sessions that invert the two silently.
     ///
     /// One consequence of exactness: a session meant to sit exactly at the rating may or may not be
     /// flagged, according to how its `Energy_Use / Active_Charge_Time` rounds in binary floating
@@ -576,7 +614,7 @@ impl AnomalyKind {
 
 /// A single row that needs review. Never fatal: the conversion still writes the row, and the
 /// estimating logic still produces a figure. Used by both sides — see
-/// [`crate::ConversionReport`] and [`crate::PowerEstimatesReport`].
+/// [`crate::ConversionReport`] and [`crate::IntervalEstimates`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anomaly {
     /// Excel row number.
