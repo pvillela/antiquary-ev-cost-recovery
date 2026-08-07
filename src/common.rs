@@ -642,7 +642,7 @@ impl fmt::Display for AnomalyKind {
                  inconsistent; assumed EDT, timestamps may be an hour early"
             }
             Self::ExcessiveAvgKw => {
-                "average power above the Evolute breaker rating, which the hardware should not \
+                "average kilowatts above the Evolute breaker rating, which the hardware should not \
                  allow; the session still counts towards every estimate, but the breaker-spec \
                  figures assume no session draws more than that rating"
             }

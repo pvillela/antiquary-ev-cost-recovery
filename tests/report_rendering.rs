@@ -197,7 +197,7 @@ fn an_excessive_average_power_is_reported_with_its_figure() {
     );
     // The glossary explains the kind, so it names the kind and not one session's figure.
     assert!(
-        md.contains("- ExcessiveAvgKw - average power above"),
+        md.contains("- ExcessiveAvgKw - average kilowatts above"),
         "the glossary entry is missing or carries a figure:\n{md}"
     );
 }

@@ -68,8 +68,8 @@ Row numbers are workbook rows, so each one can be looked up directly. Only
 sessions reaching the interval of interest are listed here; a session
 anomalous elsewhere in the workbook is not this interval's concern.
 
-- ExcessiveAvgKw - average power above the Evolute breaker rating, which the
-  hardware should not allow; the session still counts towards every
+- ExcessiveAvgKw - average kilowatts above the Evolute breaker rating, which
+  the hardware should not allow; the session still counts towards every
   estimate, but the breaker-spec figures assume no session draws more than
   that rating.
 
