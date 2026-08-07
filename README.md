@@ -68,7 +68,7 @@ The conversion from CSV to Excel includes the addition of new fields:
 - `Adj_conn_end`, is computed as: `Conn_DateTime_End + TIME_GRID_STEP` (currently 60 seconds). It is the session's **exclusive** end: a session starting at exactly this time does not overlap this one.
 - `Adj_conn_duration`, is computed as: `Adj_conn_end - Conn_DateTime_Start`.
 - `Conn_start_UTC`, `Conn_end_UTC`, and `Adj_conn_end_UTC`, with UTC values corresponding to the corresponding local time fields.
-- `Avg_power` in kW, is computed as: `Energy_Use / (Active_Charge_Time * 24)`.
+- `Avg_kw` in kW, is computed as: `Energy_Use / (Active_Charge_Time * 24)`.
 - `Anomalies`, containing a comma-separated list of `AnomalyKind` variant names, is added as the last column.
 
 None of the data in the Excel workbook (or the source CSV) should be modified by the user, as any changes would impact and possibly invalidate the estimates.
@@ -245,7 +245,7 @@ Evolute's own description of how the installation behaves when several vehicles 
 
 - **Session end times are truncated, not rounded.** `Adj_conn_end = Conn_DateTime_End + R` is the exclusive bound of the window the true end lies in only because the reported end is the true end rounded *down* to `R`. Under rounding to nearest, or under a convention where the reported end is the first instant the vehicle was no longer drawing power, the correct padding would differ — in the latter case it would be zero.
 - **Breaker ratings are uniform across panels.** `count_based_kw` and `count_based_kva` are an aggregate session count multiplied by a single rating, so an installation mixing breakers of different ratings would skew both. Nothing else in the estimates depends on how many panels there are or on which panel a session ran: the session report carries no panel ID, and none is needed.
-  - A session whose own average power exceeds that rating contradicts the assumption directly, and is flagged `ExcessiveAvgPower`. It is not excluded — the figure says something is wrong with `Energy_Use` or `Active_Charge_Time`, not which — but it is worth knowing about, because a segment whose aggregate average power exceeds its member count times the rating would put `energy_based_kw` *above* `count_based_kw` and invert the typical order of these two values. A segment can only invert if one of its sessions draws more than the rating, and every such member is flagged.
+  - A session whose own average power exceeds that rating contradicts the assumption directly, and is flagged `ExcessiveAvgKw`. It is not excluded — the figure says something is wrong with `Energy_Use` or `Active_Charge_Time`, not which — but it is worth knowing about, because a segment whose aggregate average power exceeds its member count times the rating would put `energy_based_kw` *above* `count_based_kw` and invert the typical order of these two values. A segment can only invert if one of its sessions draws more than the rating, and every such member is flagged.
 
 ### Other
 
@@ -263,8 +263,8 @@ Evolute's own description of how the installation behaves when several vehicles 
 - Excluded sessions get a section of their own in the report, listing **every** one in the workbook rather than only those near the interval of interest, with an `In interval` column saying whether each *appears* to fall in that interval. Appears only: a record whose own fields contradict each other cannot be trusted to say where it belongs, so filtering on that judgement could hide exactly the session a reader most needs to see. Such a record may even report an end before its start, and the column answers for it rather than refusing to.
 - Sessions with zero `Energy_Use` and non-zero `Active_Charge_Time` do not contribute to `energy_based_kw` and `energy_based_kva` but they do contribute to `count_based_kw` and `count_based_kva`.
 - A session with zero `Active_Charge_Time` delivered energy in no time at all, so its average power is unbounded or undefined.
-  - The Excel `Avg_power` cell shows `#DIV/0!` so the fault is visible in the sheet. Function `session_list` returns the session as a *spike*, held apart from the normal sessions fed to the peak logic.
+  - The Excel `Avg_kw` cell shows `#DIV/0!` so the fault is visible in the sheet. Function `session_list` returns the session as a *spike*, held apart from the normal sessions fed to the peak logic.
   - Spikes are worth reviewing individually for their effect on the building's demand charge.
   - The power estimating logic treats spikes as follows:
-    - If `Energy_Use == 0`, set `Avg_power` to 0. These sessions do not contribute to `energy_based_kw` and `energy_based_kva` but they do contribute to `count_based_kw` and `count_based_kva`.
-    - Otherwise, set `Avg_power` to the constant `BREAKER_RATING_KW`. These sessions contribute to all four estimate types.
+    - If `Energy_Use == 0`, set `Avg_kw` to 0. These sessions do not contribute to `energy_based_kw` and `energy_based_kva` but they do contribute to `count_based_kw` and `count_based_kva`.
+    - Otherwise, set `Avg_kw` to the constant `BREAKER_RATING_KW`. These sessions contribute to all four estimate types.

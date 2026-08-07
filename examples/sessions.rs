@@ -17,13 +17,13 @@ in any estimate. See README.md.";
 /// spike that cannot be read at face value.
 ///
 /// A spike delivered its energy in no time at all, so it has no average power to report. The
-/// workbook says as much — its `Avg_power` cell shows `#DIV/0!` — but this listing has to print a
+/// workbook says as much — its `Avg_kw` cell shows `#DIV/0!` — but this listing has to print a
 /// number in that column, and the number it prints is the substitute the estimating logic uses, not
 /// a measurement. Saying so here is cheaper than leaving a reader to wonder why a session with zero
 /// charge time has a perfectly ordinary-looking kW figure.
 const SPIKE_RECAP: &str = "  These sessions report zero Active_Charge_Time, so their energy
   arrived in no time at all and they have no measurable average power.
-  The workbook shows #DIV/0! in the Avg_power cell.
+  The workbook shows #DIV/0! in the Avg_kw cell.
 
   The kW figure below is a SUBSTITUTE, not a measurement: the breaker
   rating where energy was delivered, and zero where none was. Without it

@@ -503,7 +503,7 @@ impl Segment {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnomalyKind {
-    /// `Active_Charge_Time` is zero so its `Avg_power` cell shows `#DIV/0!`.
+    /// `Active_Charge_Time` is zero so its `Avg_kw` cell shows `#DIV/0!`.
     ZeroActiveChargeTime,
     /// `Conn_start + Conn_Duration` misses the reported `Conn_DateTime_End` by a full
     /// [`TIME_GRID_STEP`] or more, in one direction or the other, so the reported
@@ -580,7 +580,7 @@ pub enum AnomalyKind {
     /// One consequence of exactness: a session meant to sit exactly at the rating may or may not be
     /// flagged, according to how its `Energy_Use / Active_Charge_Time` rounds in binary floating
     /// point. That is the price of the guarantee above, and it errs towards reporting.
-    ExcessiveAvgPower,
+    ExcessiveAvgKw,
 }
 
 impl AnomalyKind {
@@ -594,7 +594,7 @@ impl AnomalyKind {
             Self::DstAmbiguousDuplicated => "DstAmbiguousDuplicated",
             Self::DstGapShifted => "DstGapShifted",
             Self::DstUnresolvable => "DstUnresolvable",
-            Self::ExcessiveAvgPower => "ExcessiveAvgPower",
+            Self::ExcessiveAvgKw => "ExcessiveAvgKw",
         }
     }
 
@@ -606,7 +606,7 @@ impl AnomalyKind {
             "DstAmbiguousDuplicated" => Self::DstAmbiguousDuplicated,
             "DstGapShifted" => Self::DstGapShifted,
             "DstUnresolvable" => Self::DstUnresolvable,
-            "ExcessiveAvgPower" => Self::ExcessiveAvgPower,
+            "ExcessiveAvgKw" => Self::ExcessiveAvgKw,
             _ => return None,
         })
     }
@@ -641,7 +641,7 @@ impl fmt::Display for AnomalyKind {
                 "DST fold: neither EDT nor EST reproduces the reported end, so the record is \
                  inconsistent; assumed EDT, timestamps may be an hour early"
             }
-            Self::ExcessiveAvgPower => {
+            Self::ExcessiveAvgKw => {
                 "average power above the Evolute breaker rating, which the hardware should not \
                  allow; the session still counts towards every estimate, but the breaker-spec \
                  figures assume no session draws more than that rating"

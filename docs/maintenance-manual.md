@@ -47,7 +47,7 @@ break by accident:
 - **Fixture energy figures.** A CSV fixture states `Energy_Use` and `Active_Charge_Time` as fixed
   text, so whether the average power they imply clears `BREAKER_RATING_KW` depends on
   `BREAKER_RATING_A`. Lower the breaker rating and every fixture session starts picking up an
-  `ExcessiveAvgPower` flag. This is why the timestamp tests in `src/excel.rs` filter their anomaly
+  `ExcessiveAvgKw` flag. This is why the timestamp tests in `src/excel.rs` filter their anomaly
   lists through `timing_anomalies` rather than asserting on them whole. If you add a test there
   that reads a whole anomaly list, filter it the same way.
 - **Two constants read against each other.** `full_occupancy_stays_within_nameplate` does this on
@@ -140,6 +140,12 @@ written by one version is read by another, and an unrecognised token is a hard e
 shrug. Add the variant to both, spelled identically, and never rename an existing one — a rename
 makes every workbook already written unreadable.
 
+`ExcessiveAvgPower` was renamed to `ExcessiveAvgKw` once, deliberately, at the same time as the
+workbook's `Avg_power` column became `Avg_kw`. A workbook written before that carries the old token
+and will now fail to read with an unrecognised-token error. That was judged acceptable because a
+workbook is regenerated from its CSV in seconds and the CSV is the record of account — but it is
+the cost the rule above exists to avoid, and it should not be paid twice.
+
 **The prose.** `fmt::Display` carries the human wording, and it is free-form: reword it whenever it
 reads badly. It is deliberately distinct from `as_str` for exactly that reason. The report's
 glossary is generated from `Display`, so there is one wording to maintain rather than a second copy
@@ -156,7 +162,7 @@ nothing. It is deliberately blind to the kind, so a variant added here surfaces 
 without anyone having to remember it. Keep it that way — the moment it grows a `match`, adding a
 kind acquires a step that is easy to forget and silent when forgotten.
 
-If the new kind is *about a figure* — as `ExcessiveAvgPower` is about average power — the figure
+If the new kind is *about a figure* — as `ExcessiveAvgKw` is about average power — the figure
 goes in the report cell, via `anomaly_cell` in `src/report.rs`, and not on the enum. That is what
 keeps the workbook column a list of bare tokens `from_token` can read back.
 

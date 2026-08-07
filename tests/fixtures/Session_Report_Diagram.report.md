@@ -59,17 +59,17 @@ Segment membership
 Anomalies
 ---------
 
-| Row | Session | Anomaly                  |
-|----:|:--------|:-------------------------|
-|   5 | D       | ExcessiveAvgPower(6.600) |
-|   7 | F       | ExcessiveAvgPower(6.700) |
+| Row | Session | Anomaly               |
+|----:|:--------|:----------------------|
+|   5 | D       | ExcessiveAvgKw(6.600) |
+|   7 | F       | ExcessiveAvgKw(6.700) |
 
 Row numbers are workbook rows, so each one can be looked up directly. Only
 sessions reaching the interval of interest are listed here; a session
 anomalous elsewhere in the workbook is not this interval's concern.
 
-- ExcessiveAvgPower - average power above the Evolute breaker rating, which
-  the hardware should not allow; the session still counts towards every
+- ExcessiveAvgKw - average power above the Evolute breaker rating, which the
+  hardware should not allow; the session still counts towards every
   estimate, but the breaker-spec figures assume no session draws more than
   that rating.
 

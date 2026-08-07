@@ -188,7 +188,7 @@ fn in_interval(session: &Session, ioi: &Interval) -> String {
 /// each kind once rather than once per session.
 fn anomaly_cell(kind: AnomalyKind, avg_kw: Option<f64>) -> String {
     match (kind, avg_kw) {
-        (AnomalyKind::ExcessiveAvgPower, Some(kw)) => format!("{}({kw:.3})", kind.as_str()),
+        (AnomalyKind::ExcessiveAvgKw, Some(kw)) => format!("{}({kw:.3})", kind.as_str()),
         _ => kind.as_str().to_owned(),
     }
 }

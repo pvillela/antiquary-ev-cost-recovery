@@ -83,10 +83,10 @@ times, so no row was dropped on its say-so.
 Anomalies
 ---------
 
-| Row | Session | Anomaly                  |
-|----:|:--------|:-------------------------|
-|   6 | SPIKE   | ZeroActiveChargeTime     |
-|   9 | EXCESS  | ExcessiveAvgPower(6.900) |
+| Row | Session | Anomaly               |
+|----:|:--------|:----------------------|
+|   6 | SPIKE   | ZeroActiveChargeTime  |
+|   9 | EXCESS  | ExcessiveAvgKw(6.900) |
 
 Row numbers are workbook rows, so each one can be looked up directly. Only
 sessions reaching the interval of interest are listed here. The Excluded
@@ -97,8 +97,8 @@ and carries an "In interval" column for that reason.
   its energy in no time at all and has no finite average power; the
   estimating logic substitutes one, and the session is worth reviewing
   individually.
-- ExcessiveAvgPower - average power above the Evolute breaker rating, which
-  the hardware should not allow; the session still counts towards every
+- ExcessiveAvgKw - average power above the Evolute breaker rating, which the
+  hardware should not allow; the session still counts towards every
   estimate, but the breaker-spec figures assume no session draws more than
   that rating.
 

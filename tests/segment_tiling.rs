@@ -234,7 +234,7 @@ fn no_session_is_excluded_and_every_flag_agrees_with_the_rating() {
             let flagged = report
                 .session_anomalies
                 .iter()
-                .any(|a| a.session_id == session.id && a.kind == AnomalyKind::ExcessiveAvgPower);
+                .any(|a| a.session_id == session.id && a.kind == AnomalyKind::ExcessiveAvgKw);
             assert_eq!(
                 flagged,
                 session.avg_kw() > BREAKER_RATING_KW,
@@ -250,6 +250,6 @@ fn no_session_is_excluded_and_every_flag_agrees_with_the_rating() {
         report
             .session_anomalies
             .iter()
-            .all(|a| a.kind == AnomalyKind::ExcessiveAvgPower)
+            .all(|a| a.kind == AnomalyKind::ExcessiveAvgKw)
     );
 }

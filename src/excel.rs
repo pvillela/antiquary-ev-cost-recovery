@@ -29,7 +29,7 @@ const DATETIME_FORMAT: &str = "yyyy-mm-dd hh:mm:ss ddd";
 /// Elapsed-time format: unlike `hh:mm:ss` it does not wrap a 25-hour duration to `01:00:00`.
 const DURATION_FORMAT: &str = "[h]:mm:ss";
 const ENERGY_USE_FORMAT: &str = "0.000";
-const AVG_POWER_FORMAT: &str = "0.000";
+const AVG_KW_FORMAT: &str = "0.000";
 const TOTAL_FEE_FORMAT: &str = "0.00";
 
 /// Outcome of converting one CSV file. The reading direction returns a [`SessionReport`] instead.
@@ -61,7 +61,7 @@ enum Source {
     /// Formula: `Adj_conn_end_UTC - Conn_start_UTC`.
     AdjConnDuration,
     /// Formula: `Energy_Use / Active_Charge_Time`, in kW.
-    AvgPower,
+    AvgKw,
     /// Comma-separated [`AnomalyKind`] tokens for this row; empty when the row is clean.
     Anomalies,
 }
@@ -94,7 +94,7 @@ const COLUMNS: &[(&str, Source)] = &[
     ("Active_Charge_Time", Source::Duration("Active_Charge_Time")),
     ("Charging_Level", Source::Text("Charging_Level")),
     ("Energy_Use", Source::Number("Energy_Use")),
-    ("Avg_power", Source::AvgPower),
+    ("Avg_kw", Source::AvgKw),
     ("Total_Fee", Source::Number("Total_Fee")),
     ("Vehicle_Make", Source::Text("Vehicle_Make")),
     ("Vehicle_Model", Source::Text("Vehicle_Model")),
@@ -124,13 +124,13 @@ const REQUIRED_HEADERS: &[&str] = &[
 /// What this function adds on top of those rules:
 ///
 /// - Column order is given by the private `COLUMNS` table: each UTC column sits beside the local
-///   value it derives from, and `Adj_conn_end`, `Adj_conn_duration` and `Avg_power` are inserted
+///   value it derives from, and `Adj_conn_end`, `Adj_conn_duration` and `Avg_kw` are inserted
 ///   as described in README.md.
 /// - Timestamp columns are Excel date/time numbers formatted `yyyy-mm-dd hh:mm:ss ddd`, left-
 ///   justified; duration columns are Excel durations formatted `[h]:mm:ss`, which does not wrap
 ///   past 24 hours, and are centered.
-/// - `Adj_conn_duration` and `Avg_power` are live formulas. `Adj_conn_duration` subtracts the two
-///   *UTC* columns, so it is true elapsed time even across a DST fold; `Avg_power` is
+/// - `Adj_conn_duration` and `Avg_kw` are live formulas. `Adj_conn_duration` subtracts the two
+///   *UTC* columns, so it is true elapsed time even across a DST fold; `Avg_kw` is
 ///   `=Energy_Use/(Active_Charge_Time*24)`, in kW, displayed to 3 decimal
 ///   places, matching `Energy_Use`. The formula is written on every row, so a session with
 ///   zero `Active_Charge_Time` shows `#DIV/0!` rather than an empty cell:
@@ -323,7 +323,7 @@ impl CsvSession {
         // duplication both copies inherit them.
         let mut common = Vec::new();
 
-        // Avg_power is a division by Active_Charge_Time. The sheet shows it as #DIV/0!; it is
+        // Avg_kw is a division by Active_Charge_Time. The sheet shows it as #DIV/0!; it is
         // reported here so it is not left to be noticed by eye. Zero energy is no exception: 0/0
         // is just as undefined, and the session becomes a spike either way.
         if self.active_charge_time.is_zero() {
@@ -334,9 +334,9 @@ impl CsvSession {
             // which is why this only reports and never excludes.
             //
             // Compared against the rating exactly, with no tolerance.
-            let avg_power = self.energy_use / (self.active_charge_time.as_secs_f64() / 3600.0);
-            if avg_power > BREAKER_RATING_KW {
-                common.push(AnomalyKind::ExcessiveAvgPower);
+            let avg_kw = self.energy_use / (self.active_charge_time.as_secs_f64() / 3600.0);
+            if avg_kw > BREAKER_RATING_KW {
+                common.push(AnomalyKind::ExcessiveAvgKw);
             }
         }
 
@@ -598,14 +598,14 @@ fn write_sheet(
                     ));
                     set_duration_style(sheet, col, excel_row);
                 }
-                Source::AvgPower => {
+                Source::AvgKw => {
                     // Written unconditionally: with zero Active_Charge_Time
                     // this evaluates to #DIV/0!, which is the honest answer — energy delivered in
                     // no time at all has no finite average power.
                     sheet.cell_mut((col, excel_row)).set_formula(format!(
                         "{energy_col}{excel_row}/({active_col}{excel_row}*24)"
                     ));
-                    set_format(sheet, col, excel_row, AVG_POWER_FORMAT);
+                    set_format(sheet, col, excel_row, AVG_KW_FORMAT);
                 }
                 Source::Anomalies => {
                     if !row.anomalies.is_empty() {
@@ -705,7 +705,7 @@ fn add_comments(sheet: &mut Worksheet) {
              be wrong by an hour.",
         ),
         (
-            Source::AvgPower,
+            Source::AvgKw,
             "Energy_Use / Active_Charge_Time, in kW. Active_Charge_Time is an Excel duration, i.e. \
              a fraction of a day, hence the *24 to convert it to hours. A zero Active_Charge_Time \
              yields #DIV/0!, which is the honest answer: energy delivered in no time at all has no \
@@ -758,7 +758,7 @@ fn set_widths(sheet: &mut Worksheet) {
 #[derive(Debug)]
 pub struct SessionReport {
     /// Sessions with a finite average power. This is what the peak power contribution logic
-    /// consumes unaltered. A session with zero `Energy_Use` belongs here — its `avg_power` is
+    /// consumes unaltered. A session with zero `Energy_Use` belongs here — its `avg_kw` is
     /// legitimately zero, and it still occupies a breaker.
     pub sessions: Vec<Session>,
     /// Sessions with zero `Active_Charge_Time`, so [`Session::charge_time`] is zero and energy
@@ -813,7 +813,7 @@ type SheetHeaders = HashMap<String, u32>;
 /// 2. Zero `Active_Charge_Time` — [`SessionReport::spikes`].
 /// 3. Everything else — [`SessionReport::sessions`].
 ///
-/// `avg_power` is recomputed here rather than read from the sheet's `Avg_power` column, which
+/// `avg_kw` is recomputed here rather than read from the sheet's `Avg_kw` column, which
 /// holds a formula whose cached value this crate never writes. For a spike that leaves it infinite
 /// or `NaN`, which is the honest reading; the estimating logic substitutes a finite value.
 ///
@@ -954,7 +954,7 @@ mod test {
     use crate::time_zone;
     use std::fs;
 
-    /// A row's anomalies with [`AnomalyKind::ExcessiveAvgPower`] removed.
+    /// A row's anomalies with [`AnomalyKind::ExcessiveAvgKw`] removed.
     ///
     /// Nearly every test here is about *timestamps* — DST resolution, the `Adj_conn_end` padding,
     /// the consistency band — and each fixture states an `Energy_Use` and an `Active_Charge_Time`
@@ -964,13 +964,13 @@ mod test {
     /// has nothing to do with what they check.
     ///
     /// Filtering the one power-dependent kind out is what keeps them testing what they are named
-    /// for. `ExcessiveAvgPower` is checked where it belongs — against the rating rather than
+    /// for. `ExcessiveAvgKw` is checked where it belongs — against the rating rather than
     /// against a number — in `tests/segment_tiling.rs`.
     fn timing_anomalies(anomalies: &[AnomalyKind]) -> Vec<AnomalyKind> {
         anomalies
             .iter()
             .copied()
-            .filter(|k| *k != AnomalyKind::ExcessiveAvgPower)
+            .filter(|k| *k != AnomalyKind::ExcessiveAvgKw)
             .collect()
     }
 
@@ -1004,7 +1004,7 @@ mod test {
             active_charge_time,
             // 6 kW, under the breaker rating, so a record built here carries only the anomaly the
             // test that built it is about. A flat energy figure would draw far above the rating on
-            // the shorter durations and pick up `ExcessiveAvgPower` throughout.
+            // the shorter durations and pick up `ExcessiveAvgKw` throughout.
             energy_use: 6.0 * active_charge_time.as_secs_f64() / 3600.0,
         }
     }
@@ -1398,7 +1398,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
             "P2-L2"
         );
         assert_eq!(
-            sheet.cell((col(Source::AvgPower), 2)).unwrap().formula(),
+            sheet.cell((col(Source::AvgKw), 2)).unwrap().formula(),
             "V2/(T2*24)"
         );
 
@@ -1424,11 +1424,11 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
         );
         assert_eq!(
             sheet
-                .style((col(Source::AvgPower), 2))
+                .style((col(Source::AvgKw), 2))
                 .number_format()
                 .unwrap()
                 .format_code(),
-            AVG_POWER_FORMAT
+            AVG_KW_FORMAT
         );
         assert_eq!(
             sheet
@@ -1486,10 +1486,10 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
         // The zero-energy session is present, not filtered out here.
         assert_eq!(sheet.value((col(Source::SessionId), 3)), "S13577");
 
-        // Avg_power is written on every row, the zero-energy one included, so a row that would
+        // Avg_kw is written on every row, the zero-energy one included, so a row that would
         // divide by zero shows #DIV/0! rather than nothing at all.
         assert_eq!(
-            sheet.cell((col(Source::AvgPower), 3)).unwrap().formula(),
+            sheet.cell((col(Source::AvgKw), 3)).unwrap().formula(),
             "V3/(T3*24)"
         );
 
@@ -1563,7 +1563,7 @@ S2,2026-11-02 08:00,2026-11-02 08:00,0:00:00,0:00:00,4.2
         let items: Vec<_> = report
             .anomalies
             .iter()
-            .filter(|a| a.kind != AnomalyKind::ExcessiveAvgPower)
+            .filter(|a| a.kind != AnomalyKind::ExcessiveAvgKw)
             .map(|a| (a.row, a.session_id.as_str(), a.kind))
             .collect();
         assert_eq!(

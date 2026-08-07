@@ -181,7 +181,7 @@ fn anomalies_are_scoped_to_the_interval() {
     );
 }
 
-/// `ExcessiveAvgPower` carries its figure in the table cell, while the kind itself stays a bare
+/// `ExcessiveAvgKw` carries its figure in the table cell, while the kind itself stays a bare
 /// token.
 ///
 /// The value is written into the cell rather than onto the enum, so the workbook's `Anomalies`
@@ -192,12 +192,12 @@ fn anomalies_are_scoped_to_the_interval() {
 fn an_excessive_average_power_is_reported_with_its_figure() {
     let md = fs::read_to_string(fixtures().join("Session_Report_Anomalies.report.md")).unwrap();
     assert!(
-        md.contains("| ExcessiveAvgPower(6.900) |"),
+        md.contains("| ExcessiveAvgKw(6.900) |"),
         "the figure is missing from the cell:\n{md}"
     );
     // The glossary explains the kind, so it names the kind and not one session's figure.
     assert!(
-        md.contains("- ExcessiveAvgPower - average power above"),
+        md.contains("- ExcessiveAvgKw - average power above"),
         "the glossary entry is missing or carries a figure:\n{md}"
     );
 }
