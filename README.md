@@ -65,11 +65,11 @@ These rules live in one place, `src/interval.rs`, and both front-ends come throu
 
 The conversion from CSV to Excel includes the addition of new fields:
 
-- `Adj_conn_end`, is computed as: `Conn_DateTime_End + TIME_GRID_STEP` (currently 60 seconds). It is the session's **exclusive** end: a session starting at exactly this time does not overlap this one.
-- `Adj_conn_duration`, is computed as: `Adj_conn_end - Conn_DateTime_Start`.
-- `Conn_start_UTC`, `Conn_end_UTC`, and `Adj_conn_end_UTC`, with UTC values corresponding to the corresponding local time fields.
-- `Avg_kw` in kW, is computed as: `Energy_Use / (Active_Charge_Time * 24)`.
-- `Anomalies`, containing a comma-separated list of `AnomalyKind` variant names, is added as the last column.
+- `adj_conn_end`, is computed as: `Conn_DateTime_End + TIME_GRID_STEP` (currently 60 seconds). It is the session's **exclusive** end: a session starting at exactly this time does not overlap this one.
+- `adj_conn_duration`, is computed as: `adj_conn_end - Conn_DateTime_Start`.
+- `conn_start_utc`, `conn_end_utc`, and `adj_conn_end_utc`, with UTC values corresponding to the corresponding local time fields.
+- `avg_kw` in kW, is computed as: `Energy_Use / (Active_Charge_Time * 24)`.
+- `anomalies`, containing a comma-separated list of `AnomalyKind` variant names, is added as the last column.
 
 None of the data in the Excel workbook (or the source CSV) should be modified by the user, as any changes would impact and possibly invalidate the estimates.
 
@@ -119,7 +119,7 @@ Sessions, segments, and intervals of interest are all **half-open**: each includ
 
 `TIME_GRID_STEP` — written **`R`** below, currently 60 seconds — is exactly the resolution at which the session report states session **start and end times**. It is not the resolution of everything in the report: `Conn_Duration` and `Active_Charge_Time` are stated more finely, and several of the Technical Notes depend on that difference.
 
-A time stated to the minute is the true time truncated down to the minute, so a session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`. The software therefore records an adjusted end, **`Adj_conn_end`**, one `R` past the reported end — the exclusive bound that contains the true end wherever in that minute it fell. That the report truncates rather than rounds is an assumption; see [Assumptions](#assumptions).
+A time stated to the minute is the true time truncated down to the minute, so a session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`. The software therefore records an adjusted end, **`adj_conn_end`**, one `R` past the reported end — the exclusive bound that contains the true end wherever in that minute it fell. That the report truncates rather than rounds is an assumption; see [Assumptions](#assumptions).
 
 What truncation leaves behind is a residual doubt the estimates have to answer for. Where one session is reported to end in the same minute another is reported to start, the two may have genuinely overlapped for part of that minute, or may merely have abutted; the reported times cannot say which. Similarly, the same margin of uncertainty exists in the overlap of a session with the interval of interest or a segment.
 
@@ -150,8 +150,8 @@ under-report by exactly the repeated hour, and the reported end could not distin
 candidate offsets from each other.
 
 Note the assumption holds of the *true* instants, not of the reported ones. Because the report
-truncates start and end to whole minutes, `Conn_start_UTC + Conn_Duration` does not land on
-`Conn_end_UTC` — it misses by strictly less than one `TIME_GRID_STEP`, in either
+truncates start and end to whole minutes, `conn_start_utc + Conn_Duration` does not land on
+`conn_end_utc` — it misses by strictly less than one `TIME_GRID_STEP`, in either
 direction, on a perfectly sound record.
 Every test below is stated as a tolerance for that reason, and the exact size of the discrepancy is
 derived in step 2.
@@ -188,7 +188,7 @@ derived in step 2.
    Such a timestamp indicates a fault upstream; it is surfaced rather than silently accepted.
 
 `Conn_DateTime_End` is resolved the same way, except that a fold is settled by taking whichever
-candidate is nearer to `Conn_start_UTC + Conn_Duration`, which is by then already known.
+candidate is nearer to `conn_start_utc + Conn_Duration`, which is by then already known.
 
 **Duplicated records** are given distinct ids — `<id>-EDT` and `<id>-EST` — because the peak power
 contribution logic keys `Session` on its id alone and holds sessions in a `BTreeSet`. With identical
@@ -202,7 +202,7 @@ Half-open is what makes segments properly cover all of the interval of interest 
 
 The padding is a full `R` rather than one tick less for the same reason. A session reported to end at `16:34` truly ended somewhere in `[16:34:00, 16:35:00)`, so `16:35:00` — exclusive — is the bound that contains it wherever it fell.
 
-**The time grid** is a consequence the session boundary resolution being `R`. Reported start and end times lie on the `R` grid; `Adj_conn_end` adds exactly one `R`, so it lies on it too. `R` must divide 15 minutes without leaving a remainder. Otherwise, 15-minute segments can't properly partition the interval of interest.
+**The time grid** is a consequence the session boundary resolution being `R`. Reported start and end times lie on the `R` grid; `adj_conn_end` adds exactly one `R`, so it lies on it too. `R` must divide 15 minutes without leaving a remainder. Otherwise, 15-minute segments can't properly partition the interval of interest.
 
 ### kW and kVA calculations
 
@@ -243,17 +243,17 @@ Evolute's own description of how the installation behaves when several vehicles 
 
 ### Assumptions
 
-- **Session end times are truncated, not rounded.** `Adj_conn_end = Conn_DateTime_End + R` is the exclusive bound of the window the true end lies in only because the reported end is the true end rounded *down* to `R`. Under rounding to nearest, or under a convention where the reported end is the first instant the vehicle was no longer drawing power, the correct padding would differ — in the latter case it would be zero.
+- **Session end times are truncated, not rounded.** `adj_conn_end = Conn_DateTime_End + R` is the exclusive bound of the window the true end lies in only because the reported end is the true end rounded *down* to `R`. Under rounding to nearest, or under a convention where the reported end is the first instant the vehicle was no longer drawing power, the correct padding would differ — in the latter case it would be zero.
 - **Breaker ratings are uniform across panels.** `count_based_kw` and `count_based_kva` are an aggregate session count multiplied by a single rating, so an installation mixing breakers of different ratings would skew both. Nothing else in the estimates depends on how many panels there are or on which panel a session ran: the session report carries no panel ID, and none is needed.
   - A session whose own average power exceeds that rating contradicts the assumption directly, and is flagged `ExcessiveAvgKw`. It is not excluded — the figure says something is wrong with `Energy_Use` or `Active_Charge_Time`, not which — but it is worth knowing about, because a segment whose aggregate average power exceeds its member count times the rating would put `energy_based_kw` *above* `count_based_kw` and invert the typical order of these two values. A segment can only invert if one of its sessions draws more than the rating, and every such member is flagged.
 
 ### Other
 
 - Every session in the report is written to the workbook, anomalous ones included: the sheet is a faithful rendering of the session report, and which sessions take part in an estimate is decided on the reading side.
-- Each session is checked for internal consistency, and the test is *derived* rather than chosen. Truncation puts the true start somewhere in `[Conn_start, Conn_start + R)` and the true end somewhere in `[Conn_end, Adj_conn_end)` — two half-open windows one `R` wide, the same convention used everywhere else. An honest `Conn_Duration` carries some instant of the first window to some instant of the second, so the record is sound exactly when the first window, shifted by the duration, still *meets* the second:
+- Each session is checked for internal consistency, and the test is *derived* rather than chosen. Truncation puts the true start somewhere in `[Conn_start, Conn_start + R)` and the true end somewhere in `[Conn_end, adj_conn_end)` — two half-open windows one `R` wide, the same convention used everywhere else. An honest `Conn_Duration` carries some instant of the first window to some instant of the second, so the record is sound exactly when the first window, shifted by the duration, still *meets* the second:
 
   ```
-  sound  <=>  Conn_start + Conn_Duration  <  Adj_conn_end
+  sound  <=>  Conn_start + Conn_Duration  <  adj_conn_end
          and  Conn_start + Conn_Duration  >  Conn_end - TIME_GRID_STEP
   ```
 
@@ -263,8 +263,8 @@ Evolute's own description of how the installation behaves when several vehicles 
 - Excluded sessions get a section of their own in the report, listing **every** one in the workbook rather than only those near the interval of interest, with an `In interval` column saying whether each *appears* to fall in that interval. Appears only: a record whose own fields contradict each other cannot be trusted to say where it belongs, so filtering on that judgement could hide exactly the session a reader most needs to see. Such a record may even report an end before its start, and the column answers for it rather than refusing to.
 - Sessions with zero `Energy_Use` and non-zero `Active_Charge_Time` do not contribute to `energy_based_kw` and `energy_based_kva` but they do contribute to `count_based_kw` and `count_based_kva`.
 - A session with zero `Active_Charge_Time` delivered energy in no time at all, so its average power is unbounded or undefined.
-  - The Excel `Avg_kw` cell shows `#DIV/0!` so the fault is visible in the sheet. Function `session_list` returns the session as a *spike*, held apart from the normal sessions fed to the peak logic.
+  - The Excel `avg_kw` cell shows `#DIV/0!` so the fault is visible in the sheet. Function `session_list` returns the session as a *spike*, held apart from the normal sessions fed to the peak logic.
   - Spikes are worth reviewing individually for their effect on the building's demand charge.
   - The power estimating logic treats spikes as follows:
-    - If `Energy_Use == 0`, set `Avg_kw` to 0. These sessions do not contribute to `energy_based_kw` and `energy_based_kva` but they do contribute to `count_based_kw` and `count_based_kva`.
-    - Otherwise, set `Avg_kw` to the constant `BREAKER_RATING_KW`. These sessions contribute to all four estimate types.
+    - If `Energy_Use == 0`, set `avg_kw` to 0. These sessions do not contribute to `energy_based_kw` and `energy_based_kva` but they do contribute to `count_based_kw` and `count_based_kva`.
+    - Otherwise, set `avg_kw` to the constant `BREAKER_RATING_KW`. These sessions contribute to all four estimate types.

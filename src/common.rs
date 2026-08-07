@@ -19,7 +19,7 @@ pub const TIME_ZONE_NAME: &str = "America/Toronto";
 /// Every allowance the software makes for that truncation is this one value, so all of them move
 /// together should Evolute ever report seconds:
 ///
-/// - Added to the reported session end to give `Adj_conn_end`, the session's exclusive end.
+/// - Added to the reported session end to give `adj_conn_end`, the session's exclusive end.
 /// - The half-width of the band a sound record's `Conn_start + Conn_Duration` must land in.
 ///
 /// This constant defines the step of the time grid on which this software relies.
@@ -110,16 +110,16 @@ pub struct Session {
     /// is 2. This is *not* the CSV row: a record duplicated to resolve a DST fold occupies two
     /// workbook rows, so the two diverge from that point on.
     pub row: usize,
-    /// `Conn_start_UTC`: connection start date-time from `session report`, truncated to the
+    /// `conn_start_utc`: connection start date-time from `session report`, truncated to the
     /// minute like every reported time, so the true start lies in
     /// `[conn_start, conn_start + TIME_GRID_STEP)`.
     pub conn_start: Timestamp,
-    /// `Conn_end_UTC`: connection end date-time as reported, truncated to the minute.
+    /// `conn_end_utc`: connection end date-time as reported, truncated to the minute.
     ///
     /// Held for reporting only. Every calculation wants [`Session::adj_conn_end`], which is the
     /// bound that actually contains the session.
     pub conn_end: Timestamp,
-    /// `Adj_conn_end_UTC`: [`Session::conn_end`] padded by one [`TIME_GRID_STEP`],
+    /// `adj_conn_end_utc`: [`Session::conn_end`] padded by one [`TIME_GRID_STEP`],
     /// which makes it the session's **exclusive** end — the true end lies in
     /// `[adj_conn_end - TIME_GRID_STEP, adj_conn_end)`.
     ///
@@ -503,7 +503,7 @@ impl Segment {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnomalyKind {
-    /// `Active_Charge_Time` is zero so its `Avg_kw` cell shows `#DIV/0!`.
+    /// `Active_Charge_Time` is zero so its `avg_kw` cell shows `#DIV/0!`.
     ZeroActiveChargeTime,
     /// `Conn_start + Conn_Duration` misses the reported `Conn_DateTime_End` by a full
     /// [`TIME_GRID_STEP`] or more, in one direction or the other, so the reported
@@ -511,20 +511,20 @@ pub enum AnomalyKind {
     ///
     /// The tolerance is what makes this a real test rather than a formality, and it is not chosen
     /// — it is forced. Truncation puts the true start somewhere in `[Conn_start, Adj_conn_start)`
-    /// and the true end somewhere in `[Conn_end, Adj_conn_end)`: two half-open windows one
+    /// and the true end somewhere in `[Conn_end, adj_conn_end)`: two half-open windows one
     /// [`TIME_GRID_STEP`] wide, the same convention the software uses everywhere
     /// else. An honest `Conn_Duration` spans some instant of the first to some instant of the
     /// second, so the record is sound exactly when the first window, shifted by `Conn_Duration`,
     /// still meets the second:
     ///
     /// ```text
-    /// sound  <=>  Conn_start + Conn_Duration  <  Adj_conn_end
+    /// sound  <=>  Conn_start + Conn_Duration  <  adj_conn_end
     ///        and  Conn_start + Conn_Duration  >  Conn_end - TIME_GRID_STEP
     /// ```
     ///
     /// The band is open at both ends, unlike every other interval here, because both windows are
     /// half-open at the same end — it is an instance of the convention, not an exception to it.
-    /// `Adj_conn_end` is the upper bound, now as the exclusive one.
+    /// `adj_conn_end` is the upper bound, now as the exclusive one.
     ///
     /// Both directions are faults, and both exclude the session from the estimates: if a record's
     /// own fields disagree by more than the reporting can explain, neither its duration nor the
@@ -584,7 +584,7 @@ pub enum AnomalyKind {
 }
 
 impl AnomalyKind {
-    /// The variant name, as written to the workbook's `Anomalies` column. Deliberately distinct
+    /// The variant name, as written to the workbook's `anomalies` column. Deliberately distinct
     /// from [`fmt::Display`], which is free-form prose for humans and may be reworded at will;
     /// this is a wire format and must stay stable.
     pub fn as_str(&self) -> &'static str {

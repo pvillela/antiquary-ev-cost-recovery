@@ -184,7 +184,7 @@ fn anomalies_are_scoped_to_the_interval() {
 /// `ExcessiveAvgKw` carries its figure in the table cell, while the kind itself stays a bare
 /// token.
 ///
-/// The value is written into the cell rather than onto the enum, so the workbook's `Anomalies`
+/// The value is written into the cell rather than onto the enum, so the workbook's `anomalies`
 /// column remains a list of variant names `AnomalyKind::from_token` can read back, and the glossary
 /// under the table still explains each kind once rather than once per session. `EXCESS` draws 6.9 kW
 /// against a 6.7 kW breaker.

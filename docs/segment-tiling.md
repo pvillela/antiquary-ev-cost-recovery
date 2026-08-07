@@ -33,7 +33,7 @@ membership section keys its lists on it.
 
 ## The seven sessions
 
-Every session occupies the half-open span `[Conn_start, Adj_conn_end)`, where `Adj_conn_end` is the
+Every session occupies the half-open span `[Conn_start, adj_conn_end)`, where `adj_conn_end` is the
 *reported* end plus one `TIME_GRID_STEP` — currently one minute. That padding is not slack: a time
 stated to the minute is the true time truncated down, so a session reported to end at 16:34 truly
 ended somewhere in `[16:34:00, 16:35:00)`, and 16:35:00 exclusive is the tightest bound that

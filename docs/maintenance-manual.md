@@ -124,7 +124,7 @@ other's ticks, and the overlap brackets will quietly stop meaning what they say.
 If you change `TIME_GRID_STEP`, check this by hand. The candidates that work are the divisors of
 900 seconds; the ones anyone would plausibly want are 1, 5, 10, 15, 30 and 60 seconds.
 
-Changing `R` also moves `Adj_conn_end`, which is the reported end plus exactly one `R`, and the
+Changing `R` also moves `adj_conn_end`, which is the reported end plus exactly one `R`, and the
 half-width of the consistency band a sound record's `Conn_start + Conn_Duration` must land in.
 Both follow automatically — that is why the constant exists — but both will move every figure in
 the golden files.
@@ -134,17 +134,11 @@ the golden files.
 `AnomalyKind` in `src/common.rs` classifies rows that need review. Adding a variant touches three
 things, and deliberately not a fourth.
 
-**The wire format.** `as_str` writes the variant name into the workbook's `Anomalies` column, and
+**The wire format.** `as_str` writes the variant name into the workbook's `anomalies` column, and
 `from_token` reads it back. These are a **stable wire format**, not display text: a workbook
 written by one version is read by another, and an unrecognised token is a hard error rather than a
 shrug. Add the variant to both, spelled identically, and never rename an existing one — a rename
 makes every workbook already written unreadable.
-
-`ExcessiveAvgPower` was renamed to `ExcessiveAvgKw` once, deliberately, at the same time as the
-workbook's `Avg_power` column became `Avg_kw`. A workbook written before that carries the old token
-and will now fail to read with an unrecognised-token error. That was judged acceptable because a
-workbook is regenerated from its CSV in seconds and the CSV is the record of account — but it is
-the cost the rule above exists to avoid, and it should not be paid twice.
 
 **The prose.** `fmt::Display` carries the human wording, and it is free-form: reword it whenever it
 reads badly. It is deliberately distinct from `as_str` for exactly that reason. The report's

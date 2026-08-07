@@ -58,7 +58,7 @@ enum Source {
     ConnEndUtc,
     AdjConnEndLocal,
     AdjConnEndUtc,
-    /// Formula: `Adj_conn_end_UTC - Conn_start_UTC`.
+    /// Formula: `adj_conn_end_utc - conn_start_utc`.
     AdjConnDuration,
     /// Formula: `Energy_Use / Active_Charge_Time`, in kW.
     AvgKw,
@@ -83,23 +83,23 @@ const COLUMNS: &[(&str, Source)] = &[
     ("Charge_Session_ID", Source::SessionId),
     ("User_ID", Source::Text("User_ID")),
     ("Conn_DateTime_Start", Source::ConnStartLocal),
-    ("Conn_start_UTC", Source::ConnStartUtc),
+    ("conn_start_utc", Source::ConnStartUtc),
     ("Conn_DateTime_End", Source::ConnEndLocal),
-    ("Conn_end_UTC", Source::ConnEndUtc),
-    ("Adj_conn_end", Source::AdjConnEndLocal),
-    ("Adj_conn_end_UTC", Source::AdjConnEndUtc),
+    ("conn_end_utc", Source::ConnEndUtc),
+    ("adj_conn_end", Source::AdjConnEndLocal),
+    ("adj_conn_end_utc", Source::AdjConnEndUtc),
     ("Conn_Duration", Source::Duration("Conn_Duration")),
-    ("Adj_conn_duration", Source::AdjConnDuration),
+    ("adj_conn_duration", Source::AdjConnDuration),
     ("Charge_Duration", Source::Duration("Charge_Duration")),
     ("Active_Charge_Time", Source::Duration("Active_Charge_Time")),
     ("Charging_Level", Source::Text("Charging_Level")),
     ("Energy_Use", Source::Number("Energy_Use")),
-    ("Avg_kw", Source::AvgKw),
+    ("avg_kw", Source::AvgKw),
     ("Total_Fee", Source::Number("Total_Fee")),
     ("Vehicle_Make", Source::Text("Vehicle_Make")),
     ("Vehicle_Model", Source::Text("Vehicle_Model")),
     ("Vehicle_Year", Source::Number("Vehicle_Year")),
-    ("Anomalies", Source::Anomalies),
+    ("anomalies", Source::Anomalies),
 ];
 
 /// CSV columns that must be present for the conversion to mean anything.
@@ -116,27 +116,27 @@ const REQUIRED_HEADERS: &[&str] = &[
 /// directory, and transforms it into a `.xlsx` file saved to the same directory as the input file,
 /// with the extension replaced.
 ///
-/// The domain rules — the UTC conversion and its DST policy, the definitions of `Adj_conn_end` and
-/// `Adj_conn_duration`, and the treatment of zero-`Energy_Use` sessions — are specified in
+/// The domain rules — the UTC conversion and its DST policy, the definitions of `adj_conn_end` and
+/// `adj_conn_duration`, and the treatment of zero-`Energy_Use` sessions — are specified in
 /// `README.md` under "Time zone", "Excel workbook" and "Other". They are shared with the peak power
 /// contribution logic and are not restated here.
 ///
 /// What this function adds on top of those rules:
 ///
 /// - Column order is given by the private `COLUMNS` table: each UTC column sits beside the local
-///   value it derives from, and `Adj_conn_end`, `Adj_conn_duration` and `Avg_kw` are inserted
+///   value it derives from, and `adj_conn_end`, `adj_conn_duration` and `avg_kw` are inserted
 ///   as described in README.md.
 /// - Timestamp columns are Excel date/time numbers formatted `yyyy-mm-dd hh:mm:ss ddd`, left-
 ///   justified; duration columns are Excel durations formatted `[h]:mm:ss`, which does not wrap
 ///   past 24 hours, and are centered.
-/// - `Adj_conn_duration` and `Avg_kw` are live formulas. `Adj_conn_duration` subtracts the two
-///   *UTC* columns, so it is true elapsed time even across a DST fold; `Avg_kw` is
+/// - `adj_conn_duration` and `avg_kw` are live formulas. `adj_conn_duration` subtracts the two
+///   *UTC* columns, so it is true elapsed time even across a DST fold; `avg_kw` is
 ///   `=Energy_Use/(Active_Charge_Time*24)`, in kW, displayed to 3 decimal
 ///   places, matching `Energy_Use`. The formula is written on every row, so a session with
 ///   zero `Active_Charge_Time` shows `#DIV/0!` rather than an empty cell:
 ///   it delivered energy in no time at all, and the sheet says so. `Total_Fee` is displayed to
 ///   2 decimal places.
-/// - The last column, `Anomalies`, carries the [`AnomalyKind`]s found for the row as a
+/// - The last column, `anomalies`, carries the [`AnomalyKind`]s found for the row as a
 ///   comma-separated list of variant names. [`session_list`] reads it back, so it is the channel
 ///   by which a judgement call made here reaches the peak power contribution logic.
 /// - The remaining columns are copied over with an explicit per-column type, so values that merely
@@ -220,7 +220,7 @@ fn field<'a>(headers: &Headers, record: &'a csv::StringRecord, name: &str) -> &'
 }
 
 /// Local time as `YYYY-MM-DD HH:MM`; the report carries no seconds, which is what makes
-/// `Adj_conn_end` necessary in the first place.
+/// `adj_conn_end` necessary in the first place.
 fn parse_local(s: &str, row: usize, column: &str) -> Result<civil::DateTime, Box<dyn Error>> {
     civil::DateTime::strptime("%Y-%m-%d %H:%M", s).map_err(|e| {
         format!("row {row}, column `{column}`: cannot parse timestamp {s:?}: {e}").into()
@@ -273,7 +273,7 @@ struct Row {
     end_utc: Timestamp,
     adj_end_utc: Timestamp,
     adj_end_local: civil::DateTime,
-    /// Everything about this row that needs review. Rendered into the `Anomalies` column and,
+    /// Everything about this row that needs review. Rendered into the `anomalies` column and,
     /// stamped with the row's workbook number, into [`ConversionReport::anomalies`].
     anomalies: Vec<AnomalyKind>,
 }
@@ -313,7 +313,7 @@ impl CsvSession {
         })
     }
 
-    /// Resolves this session's local timestamps to UTC and derives `Adj_conn_end`.
+    /// Resolves this session's local timestamps to UTC and derives `adj_conn_end`.
     ///
     /// Returns one row normally, or two when the start falls in the DST fold and the reported end
     /// cannot tell the two offsets apart — see README.md, "Time zone", for why duplication is the
@@ -323,7 +323,7 @@ impl CsvSession {
         // duplication both copies inherit them.
         let mut common = Vec::new();
 
-        // Avg_kw is a division by Active_Charge_Time. The sheet shows it as #DIV/0!; it is
+        // avg_kw is a division by Active_Charge_Time. The sheet shows it as #DIV/0!; it is
         // reported here so it is not left to be noticed by eye. Zero energy is no exception: 0/0
         // is just as undefined, and the session becomes a spike either way.
         if self.active_charge_time.is_zero() {
@@ -694,13 +694,13 @@ fn add_comments(sheet: &mut Worksheet) {
             "Adjusted connection end: Conn_DateTime_End + 60s, and EXCLUSIVE. The report's \
              timestamps carry no seconds, so the true end is only known to fall somewhere in the \
              reported minute; the session is recorded as the half-open span [Conn_DateTime_Start, \
-             Adj_conn_end), which contains it wherever in that minute it fell. Because the end is \
+             adj_conn_end), which contains it wherever in that minute it fell. Because the end is \
              excluded, a session starting at this exact time does NOT overlap this one. See \
              README.md, \"Excel workbook\".",
         ),
         (
             Source::AdjConnDuration,
-            "Adj_conn_end_UTC - Conn_start_UTC. Computed from the UTC columns so it is true \
+            "adj_conn_end_utc - conn_start_utc. Computed from the UTC columns so it is true \
              elapsed time even for a session spanning the DST fold, where local arithmetic would \
              be wrong by an hour.",
         ),
@@ -778,17 +778,17 @@ pub struct SessionReport {
 ///
 /// This is deliberately wider than the set [`session_list`] strictly consumes. A workbook missing
 /// any of these is not a rendering of a session report, and guessing at its contents would produce
-/// peak numbers that cannot be trusted. `Anomalies` in particular is load-bearing: without it every
+/// peak numbers that cannot be trusted. `anomalies` in particular is load-bearing: without it every
 /// session would silently look clean, and inconsistent ones would fold back into the estimates.
 const REQUIRED_SHEET_HEADERS: &[&str] = &[
     "Charge_Session_ID",
-    "Conn_start_UTC",
-    "Conn_end_UTC",
-    "Adj_conn_end_UTC",
+    "conn_start_utc",
+    "conn_end_utc",
+    "adj_conn_end_utc",
     "Conn_Duration",
     "Active_Charge_Time",
     "Energy_Use",
-    "Anomalies",
+    "anomalies",
 ];
 
 /// Sheet header name to its 1-based column number. Deliberately distinct from [`Headers`], whose
@@ -813,14 +813,14 @@ type SheetHeaders = HashMap<String, u32>;
 /// 2. Zero `Active_Charge_Time` — [`SessionReport::spikes`].
 /// 3. Everything else — [`SessionReport::sessions`].
 ///
-/// `avg_kw` is recomputed here rather than read from the sheet's `Avg_kw` column, which
+/// `avg_kw` is recomputed here rather than read from the sheet's `avg_kw` column, which
 /// holds a formula whose cached value this crate never writes. For a spike that leaves it infinite
 /// or `NaN`, which is the honest reading; the estimating logic substitutes a finite value.
 ///
 /// # Errors
 ///
 /// Returns `Err` if the workbook cannot be read, a required column is missing, any cell in a row
-/// that has a `Charge_Session_ID` does not hold the number it should, or the `Anomalies` column
+/// that has a `Charge_Session_ID` does not hold the number it should, or the `anomalies` column
 /// holds a token that is not an [`AnomalyKind`] variant name. A workbook that cannot be read in
 /// full is one whose peak numbers cannot be trusted, so no row is skipped quietly.
 /// Rows with no `Charge_Session_ID` at all are treated as trailing blanks and ignored.
@@ -847,9 +847,9 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
         let session = Session {
             id,
             row: row as usize,
-            conn_start: timestamp_of(number(sheet, &headers, "Conn_start_UTC", row)?)?,
-            conn_end: timestamp_of(number(sheet, &headers, "Conn_end_UTC", row)?)?,
-            adj_conn_end: timestamp_of(number(sheet, &headers, "Adj_conn_end_UTC", row)?)?,
+            conn_start: timestamp_of(number(sheet, &headers, "conn_start_utc", row)?)?,
+            conn_end: timestamp_of(number(sheet, &headers, "conn_end_utc", row)?)?,
+            adj_conn_end: timestamp_of(number(sheet, &headers, "adj_conn_end_utc", row)?)?,
             conn_duration: duration_of(number(sheet, &headers, "Conn_Duration", row)?),
             charge_time,
             energy_use,
@@ -875,7 +875,7 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
     })
 }
 
-/// Parses the `Anomalies` cell. An unrecognised token is an error rather than a shrug: it means the
+/// Parses the `anomalies` cell. An unrecognised token is an error rather than a shrug: it means the
 /// workbook was written by something this crate does not know, and the sessions it excludes cannot
 /// be determined.
 fn anomaly_kinds(
@@ -885,14 +885,14 @@ fn anomaly_kinds(
     path: &Path,
 ) -> Result<Vec<AnomalyKind>, Box<dyn Error>> {
     sheet
-        .value((headers["Anomalies"], row))
+        .value((headers["anomalies"], row))
         .split(',')
         .map(str::trim)
         .filter(|token| !token.is_empty())
         .map(|token| {
             AnomalyKind::from_token(token).ok_or_else(|| -> Box<dyn Error> {
                 format!(
-                    "{}: row {row}, column `Anomalies`: unknown anomaly {token:?}",
+                    "{}: row {row}, column `anomalies`: unknown anomaly {token:?}",
                     path.display()
                 )
                 .into()
@@ -956,7 +956,7 @@ mod test {
 
     /// A row's anomalies with [`AnomalyKind::ExcessiveAvgKw`] removed.
     ///
-    /// Nearly every test here is about *timestamps* — DST resolution, the `Adj_conn_end` padding,
+    /// Nearly every test here is about *timestamps* — DST resolution, the `adj_conn_end` padding,
     /// the consistency band — and each fixture states an `Energy_Use` and an `Active_Charge_Time`
     /// as fixed text. Whether the average power those imply clears `BREAKER_RATING_KW` therefore
     /// depends on the value of `BREAKER_RATING_A`, and no test may depend on that: lower the
@@ -974,7 +974,7 @@ mod test {
             .collect()
     }
 
-    /// The same filter applied to an `Anomalies` cell, read back through the wire format.
+    /// The same filter applied to an `anomalies` cell, read back through the wire format.
     ///
     /// Going through [`AnomalyKind::from_token`] rather than comparing the cell text also checks
     /// that what was written is what can be read back, which is the property the column exists for.
@@ -1106,7 +1106,7 @@ mod test {
         assert_eq!(column_letters(COLUMNS.len()), "AB");
     }
 
-    /// `Adj_conn_end` is the reported end padded past the end of its minute — the exclusive end of
+    /// `adj_conn_end` is the reported end padded past the end of its minute — the exclusive end of
     /// the window the true end lies in, so `21:29` pads to `21:30:00` and not `21:29:59`. Both rows
     /// are real sample rows, and they straddle the case the old `min(...)` rule treated specially:
     /// the second has `start + duration` (23:40:29) *before* the reported end.
@@ -1187,7 +1187,7 @@ mod test {
         assert!(timing_anomalies(&rows[0].anomalies).is_empty());
     }
 
-    /// The mirror of the test above, and the case a one-sided `start + duration <= Adj_conn_end`
+    /// The mirror of the test above, and the case a one-sided `start + duration <= adj_conn_end`
     /// test would get wrong: here EST is correct, and the EDT candidate lands a full hour *early*.
     /// Only a two-sided comparison rejects it; accepting it would duplicate a session that is not
     /// ambiguous at all, double-counting its power.
@@ -1381,7 +1381,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
 
         let col = |s: Source| column_index(s) as u32;
 
-        // Adj_conn_end = 21:30:00 local on the first row — the exclusive end of the minute the
+        // adj_conn_end = 21:30:00 local on the first row — the exclusive end of the minute the
         // reported 21:29 end falls in.
         let adj: f64 = sheet
             .value((col(Source::AdjConnEndLocal), 2))
@@ -1486,7 +1486,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
         // The zero-energy session is present, not filtered out here.
         assert_eq!(sheet.value((col(Source::SessionId), 3)), "S13577");
 
-        // Avg_kw is written on every row, the zero-energy one included, so a row that would
+        // avg_kw is written on every row, the zero-energy one included, so a row that would
         // divide by zero shows #DIV/0! rather than nothing at all.
         assert_eq!(
             sheet.cell((col(Source::AvgKw), 3)).unwrap().formula(),
@@ -1607,7 +1607,7 @@ S2,2026-06-02 10:00,2026-06-02 09:00,0:10:00,0:09:00,1.5
         fs::remove_dir_all(xlsx.parent().unwrap()).ok();
     }
 
-    /// An `Anomalies` cell this crate did not write is an error, not something to shrug at: it
+    /// An `anomalies` cell this crate did not write is an error, not something to shrug at: it
     /// decides which sessions take part in the estimates.
     #[test]
     fn unknown_anomaly_token_is_rejected() {
@@ -1738,7 +1738,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
         umya_spreadsheet::writer::xlsx::write(&book, &xlsx).unwrap();
 
         let err = session_list(&xlsx).unwrap_err().to_string();
-        assert!(err.contains("Conn_start_UTC"), "{err}");
+        assert!(err.contains("conn_start_utc"), "{err}");
         fs::remove_dir_all(xlsx.parent().unwrap()).ok();
 
         // Text where a number belongs.
