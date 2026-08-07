@@ -81,6 +81,7 @@ Given a time interval of interest **`I`** as described above, the estimation of 
 
 - From the Evolute monthly session report, identify all charging sessions that intersect the interval of interest `I`.
 - Partition `I` into 15-minute segments. If `I` is 1-hour long, there will be four segments. If `I` is 15-minutes long, there will only be one segment.
+  - The reported peak is therefore **always a 15-minute average**, whatever length of interval was asked for: an hour is reported as the highest of its four segments, never as an average over the whole hour. This is the basis the demand charge is billed on, and it is why the estimates name the segment they came from.
 - For each segment:
   - Identify the charging sessions that intersect the segment.
   - For each session:
@@ -94,22 +95,23 @@ Given a time interval of interest **`I`** as described above, the estimation of 
 
     - **`energy_based_kw`**: `agg_kw`.
 
-    - **`energy_based_kva`**: `agg_kw` divided by a power factor that reflects the combination of typical EV chargers and the Evolute infrastructure (~0.98).
+    - **`energy_based_kva`**: `agg_kw` divided by a power factor that reflects the combination of typical EV chargers and the Evolute infrastructure (~0.98). *(Approximate. The software does not divide by a power factor at all — kVA is a quadrature sum, and ~0.98 is a good figure only near full occupancy. See [kW and kVA calculations](#kw-and-kva-calculations).)*
 
-    - **`count_based_kw`**: `agg_count` multiplied by the average per-EV kW rating of the Evolute infrastructure (~6.7 kW).
+    - **`count_based_kw`**: `agg_count` multiplied by the average per-EV kW rating of the Evolute infrastructure (~6.7 kW). *(Approximate. The per-EV figure is an average, not a constant; it falls as the site fills. See [kW and kVA calculations](#kw-and-kva-calculations).)*
 
-    - **`count_based_kva`**: `count_based_kw` divided by a power factor that reflects the combination of typical EV chargers and the Evolute infrastructure (~0.98).
+    - **`count_based_kva`**: `count_based_kw` divided by a power factor that reflects the combination of typical EV chargers and the Evolute infrastructure (~0.98). *(Approximate, for the same reason as `energy_based_kva`.)*
 
 
 - Identify the one or two *maximal* segments, i.e., segments that have the highest:
 
   - **`energy_based_kw`**: `agg_kw`.
 
-  - **`count_based_kw`**: `agg_count` multiplied by the average per-EV kW rating of the Evolute infrastructure (~6.7 kW).
+  - **`count_based_kw`**: `agg_count` multiplied by the average per-EV kW rating of the Evolute infrastructure (~6.7 kW). *(Approximate; see [kW and kVA calculations](#kw-and-kva-calculations).)*
 - The identified maximal segments are typically one and the same, but may be distinct in some situations.
 - Report on the maximal segment(s).
 
 - The software detects data anomalies in the reported session data. Anomalies associated with every session that **intersects `I`** are reported alongside the estimates, as well as anomalies that caused sessions to be excluded from the analysis. Other sessions elsewhere in the workbook are not included in the report.
+  - The two listings are scoped differently, and only one of them says so in a column. The Anomalies table holds sessions reaching `I` and nothing else, so it needs no such column. The Excluded sessions table covers the whole workbook, so it carries an `In interval` column saying whether each record *appears* to fall in `I` — see [Other](#other).
 
 ### Sessions and segments
 
@@ -202,6 +204,43 @@ The padding is a full `R` rather than one tick less for the same reason. A sessi
 
 **The time grid** is a consequence the session boundary resolution being `R`. Reported start and end times lie on the `R` grid; `Adj_conn_end` adds exactly one `R`, so it lies on it too. `R` must divide 15 minutes without leaving a remainder. Otherwise, 15-minute segments can't properly partition the interval of interest.
 
+### kW and kVA calculations
+
+The two formulas above — a per-EV kW rating and a division by a power factor — are a fair
+description of the *shape* of the estimates, and a defensible approximation of their values. They
+are not what the software computes. Both figures come out of a small electrical model of the site,
+`src/site_load.rs`, and it is worth knowing where the model and the shorthand part company.
+
+**The per-EV kW figure is an average, not a constant.** A vehicle is current-limited rather than
+power-limited: the pilot signal caps it at 32 A, so it draws about 6.59 kW whatever else is
+happening. What the site draws on top of that is not proportional to the vehicle count. The
+transformer's core loss and magnetizing current are a fixed standing block, present whenever it is
+energised, and its copper loss rises with the *square* of loading.
+
+Divide the site total by the number of vehicles and those two effects pull opposite ways: the fixed
+block is diluted as vehicles are added, while the copper loss grows faster than the count does. The
+per-EV share therefore falls, flattens and edges back up — about 6.95 kW at one vehicle, 6.73 at
+three, a shallow minimum of 6.72 around five or six, and 6.75 at all ten. The `~6.7 kW` in the
+algorithm description is good to within about 1% across the whole range, and exact to two decimals
+near five vehicles, which is where this site's peaks have tended to sit. It is worth knowing that
+the *lowest* per-EV figure is the one in the middle, not the one at full occupancy.
+
+**kVA is a quadrature sum, not `kW ÷ PF`.** Real power, displacement reactive power and distortion
+reactive power are mutually orthogonal, so they combine as the square root of the sum of their
+squares rather than by division. Dividing kW by a power factor would imply that current is free to
+grow as the power factor degrades, which is exactly what the pilot signal prevents. The `~0.98` is
+a good approximation near full occupancy and a poor one at low counts, for the same reason the
+per-EV kW figure moves: the transformer's fixed reactive block is diluted as vehicles are added.
+At one vehicle the site power factor is about 0.94; by five it is 0.98, and it plateaus a little
+above that. With no vehicle charging at all it is far lower still, because the standing block is
+then the whole of the load.
+
+**Where the model is written down.** `docs/ev-charger-power-factor-and-kva-allocation.md` derives
+every constant and every formula, and tabulates the result for each vehicle count from 0 to 10;
+`cargo run --example site_load_report` prints that same table from the code, and
+`tests/fixtures/site_load.report.txt` pins it. `docs/Evolute-Simultaneous_Charging.pdf` is
+Evolute's own description of how the installation behaves when several vehicles charge at once.
+
 ### Assumptions
 
 - **Session end times are truncated, not rounded.** `Adj_conn_end = Conn_DateTime_End + R` is the exclusive bound of the window the true end lies in only because the reported end is the true end rounded *down* to `R`. Under rounding to nearest, or under a convention where the reported end is the first instant the vehicle was no longer drawing power, the correct padding would differ — in the latter case it would be zero.
@@ -219,9 +258,9 @@ The padding is a full `R` rather than one tick less for the same reason. A sessi
   ```
 
   Both bounds are strict, because both windows are half-open at the same end. That makes this the one band in the design that is open rather than half-open — an instance of the convention rather than an exception to it, since it is the *intersection* condition of two half-open windows and not an interval anyone chose. The band is not slack: it is precisely what truncation to whole minutes accounts for, and the sample data reaches to within 3 seconds of its lower edge.
-- A session outside that band is flagged `InconsistentDuration` and excluded from the estimates. Both directions are faults: if a record's own fields disagree by more than the reporting can explain, neither its duration nor the span the grouping logic would place it on can be relied on. The overshoot direction subsumes the case of a session ending before it starts, since with `Conn_DateTime_End` a minute or more before `Conn_DateTime_Start` no non-negative duration can satisfy the test.
+- A session outside that band is flagged `InconsistentDuration` and excluded from the estimates. Both directions are faults: if a record's own fields disagree by more than the reporting can explain, neither its duration nor the span the estimating logic would place it on can be relied on. The overshoot direction subsumes the case of a session ending before it starts, since with `Conn_DateTime_End` a minute or more before `Conn_DateTime_Start` no non-negative duration can satisfy the test.
 - These are the *only* sessions excluded from the estimates. Nothing else removes a session.
-- Excluded sessions get a section of their own in the report, listing **every** one in the workbook rather than only those near the interval of interest, with a column saying whether each appears to fall in that interval. Appears only: a record whose own fields contradict each other cannot be trusted to say which window it belongs in, so filtering on that judgement could hide exactly the session a reader most needs to see.
+- Excluded sessions get a section of their own in the report, listing **every** one in the workbook rather than only those near the interval of interest, with an `In interval` column saying whether each *appears* to fall in that interval. Appears only: a record whose own fields contradict each other cannot be trusted to say where it belongs, so filtering on that judgement could hide exactly the session a reader most needs to see. Such a record may even report an end before its start, and the column answers for it rather than refusing to.
 - Sessions with zero `Energy_Use` and non-zero `Active_Charge_Time` do not contribute to `energy_based_kw` and `energy_based_kva` but they do contribute to `count_based_kw` and `count_based_kva`.
 - A session with zero `Active_Charge_Time` delivered energy in no time at all, so its average power is unbounded or undefined.
   - The Excel `Avg_power` cell shows `#DIV/0!` so the fault is visible in the sheet. Function `session_list` returns the session as a *spike*, held apart from the normal sessions fed to the peak logic.
