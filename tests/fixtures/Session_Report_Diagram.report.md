@@ -8,78 +8,68 @@ Interval   2026-06-15 16:00 - 17:00 EDT  (1 hour)
 Estimates
 ---------
 
-More than one reading of the data is defensible here, because some group
-holds two sessions that need not have overlapped each other - one is
-reported as ending in the same minute the other is reported as starting, and
-the report states those times only to the minute. Both readings are given
-below. The first counts every session and assumes nothing, so it is the one
-to quote if only one figure is wanted.
+| Estimate     | Unit |    Min |    Max | Segment |
+|:-------------|:-----|-------:|-------:|:--------|
+| Energy-based | kW   | 18.383 | 19.657 | 16:15   |
+| Energy-based | kVA  | 18.852 | 20.139 | 16:15   |
+| Count-based  | kW   | 19.787 | 21.121 | 16:15   |
+| Count-based  | kVA  | 20.271 | 21.619 | 16:15   |
 
-"Nominal" - every group's membership taken at face value:
+Every figure is a bracket: the reported session times are stated only to the
+minute, so each estimate runs from what those times least support to what
+they most support. "Energy-based" is derived from the sessions' own
+consumption, "Count-based" from how many of them were charging and the
+per-EV rating of the infrastructure. "Segment" names the 15-minute segment
+the figure was drawn from - the one where that derivation peaks, which the
+two need not agree on.
 
-| Estimate           |     kW |    kVA | Group |
-|:-------------------|-------:|-------:|------:|
-| Consumption-based  | 31.400 | 33.053 |     5 |
-| Breaker-spec-based | 33.500 | 37.500 |     5 |
-
-"Minimum overlap" - assuming the sessions in each dubious group overlapped
-  as little as their reported times allow:
-
-| Estimate           |     kW |    kVA | Group |
-|:-------------------|-------:|-------:|------:|
-| Consumption-based  | 24.700 | 26.000 |     4 |
-| Breaker-spec-based | 26.800 | 30.000 |     4 |
-
-The likely kW values are in the range from 24.700 kW ("Minimum overlap",
-consumption-based) to 33.500 kW ("Nominal", breaker-spec-based). The likely
-kVA values are in the range from 26.000 kVA ("Minimum overlap",
-consumption-based) to 37.500 kVA ("Nominal", breaker-spec-based).
+The peak is always a 15-minute average, whatever the length of the interval
+asked for, because that is the basis the demand charge is billed on. An hour
+is reported as the highest of its four segments, not as an average over the
+whole hour.
 
 
-Session groups
---------------
+Segments
+--------
 
-|  # | From     | To       |   Len | Count |     kW | Min Count | Min kW |
-|---:|:---------|:---------|------:|------:|-------:|----------:|-------:|
-| 0  | 16:00:00 | 16:08:00 |  8:00 |     2 | 12.400 |         2 | 12.400 |
-| 1  | 16:08:00 | 16:16:00 |  8:00 |     3 | 18.600 |         3 | 18.600 |
-| 2  | 16:16:00 | 16:20:00 |  4:00 |     2 | 12.200 |         2 | 12.200 |
-| 3  | 16:20:00 | 16:24:00 |  4:00 |     3 | 18.100 |         3 | 18.100 |
-| 4  | 16:24:00 | 16:34:00 | 10:00 |     4 | 24.700 |         4 | 24.700 |
-| 5* | 16:34:00 | 16:35:00 |  1:00 |     5 | 31.400 |         4 | 24.700 |
-| 6  | 16:35:00 | 16:43:00 |  8:00 |     3 | 18.900 |         3 | 18.900 |
-| 7  | 16:43:00 | 16:48:00 |  5:00 |     1 |  6.000 |         1 |  6.000 |
-| 8  | 16:48:00 | 16:56:00 |  8:00 |     2 | 12.100 |         2 | 12.100 |
-| 9  | 16:56:00 | 17:00:00 |  4:00 |     1 |  6.000 |         1 |  6.000 |
+| Segment |       Count |            kW |
+|:--------|------------:|--------------:|
+| 16:00   | 2.400-2.467 | 14.880-15.293 |
+| 16:15   | 2.933-3.133 | 17.940-19.200 |
+| 16:30   | 2.800-3.133 | 17.420-19.560 |
+| 16:45   | 1.400-1.533 |   8.440-9.253 |
 
-Times are local (ET). Groups are half-open: each runs from its From up to
-but not including its To, so no instant falls in two groups and no session
-is counted twice.
-
-An asterisk marks a dubious group: one holding two sessions that need not
-have overlapped each other, because one is reported as ending in the same
-minute the other is reported as starting. "Count" and "kW" take its
-membership at face value; "Min Count" and "Min kW" assume as little overlap
-as the reported times allow. They differ on exactly the marked rows.
+Times are local (ET), and each segment is 15 minutes long, named by the
+minute it starts on. Segments are half-open: each runs from its own start up
+to but not including the next one's, so no instant falls in two of them and
+they tile the interval exactly. "Count" is a session count weighted by how
+much of the segment each session covered, so it is fractional; "kW" weights
+each session's average power the same way.
 
 
-Group membership
-----------------
+Segment membership
+------------------
 
-- Group 0 - A, B
-- Group 1 - A, B, C
-- Group 2 - A, C
-- Group 3 - A, C, E
-- Group 4 - A, C, D, E
-- Group 5 - A, C, D, E, F
-- Group 6 - A, C, F
-- Group 7 - A
-- Group 8 - A, G
-- Group 9 - A
+- 16:00 - A, B, C
+- 16:15 - A, B, C, D, E
+- 16:30 - A, C, D, E, F
+- 16:45 - A, G
 
 
 Anomalies
 ---------
 
-None. Every session considered for this interval was well formed.
+| Row | Session | Anomaly                  |
+|----:|:--------|:-------------------------|
+|   5 | D       | ExcessiveAvgPower(6.600) |
+|   7 | F       | ExcessiveAvgPower(6.700) |
+
+Row numbers are workbook rows, so each one can be looked up directly. Only
+sessions reaching the interval of interest are listed here; a session
+anomalous elsewhere in the workbook is not this interval's concern.
+
+- ExcessiveAvgPower - average power above the Evolute breaker rating, which
+  the hardware should not allow; the session still counts towards every
+  estimate, but the breaker-spec figures assume no session draws more than
+  that rating.
 

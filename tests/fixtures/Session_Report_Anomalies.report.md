@@ -8,85 +8,90 @@ Interval   2026-06-15 16:00 - 17:00 EDT  (1 hour)
 Estimates
 ---------
 
-| Estimate           |     kW |    kVA | Group |
-|:-------------------|-------:|-------:|------:|
-| Consumption-based  | 25.600 | 26.947 |     4 |
-| Breaker-spec-based | 26.800 | 30.000 |     4 |
+| Estimate     | Unit |    Min |    Max | Segment |
+|:-------------|:-----|-------:|-------:|:--------|
+| Energy-based | kW   | 16.162 | 17.474 | 16:15   |
+| Energy-based | kVA  | 16.609 | 17.933 | 16:15   |
+| Count-based  | kW   | 17.124 | 18.455 | 16:15   |
+| Count-based  | kVA  | 17.580 | 18.925 | 16:15   |
 
-The likely kW values are in the range from 25.600 kW (consumption-based) to
-26.800 kW (breaker-spec-based). The likely kVA values are in the range from
-26.947 kVA (consumption-based) to 30.000 kVA (breaker-spec-based).
+Every figure is a bracket: the reported session times are stated only to the
+minute, so each estimate runs from what those times least support to what
+they most support. "Energy-based" is derived from the sessions' own
+consumption, "Count-based" from how many of them were charging and the
+per-EV rating of the infrastructure. "Segment" names the 15-minute segment
+the figure was drawn from - the one where that derivation peaks, which the
+two need not agree on.
+
+The peak is always a 15-minute average, whatever the length of the interval
+asked for, because that is the basis the demand charge is billed on. An hour
+is reported as the highest of its four segments, not as an average over the
+whole hour.
 
 2 sessions in the workbook were excluded from every figure above, having
 reported times that contradict each other. They are listed under Excluded
 sessions.
 
 
+Segments
+--------
+
+| Segment |       Count |            kW |
+|:--------|------------:|--------------:|
+| 16:00   | 0.267-0.400 |   1.600-2.400 |
+| 16:15   | 2.533-2.733 | 15.740-17.039 |
+| 16:30   | 1.000-1.200 |   6.000-7.260 |
+| 16:45   | 0.000-0.000 |   0.000-0.000 |
+
+Times are local (ET), and each segment is 15 minutes long, named by the
+minute it starts on. Segments are half-open: each runs from its own start up
+to but not including the next one's, so no instant falls in two of them and
+they tile the interval exactly. "Count" is a session count weighted by how
+much of the segment each session covered, so it is fractional; "kW" weights
+each session's average power the same way.
+
+
+Segment membership
+------------------
+
+- 16:00 - MARGIN, N1
+- 16:15 - EXCESS, N1, N2, SPIKE
+- 16:30 - EXCESS, N1, N2
+- 16:45 - none
+
+
 Excluded sessions
 -----------------
 
-| Row | Session  | From             | To               | Window   | Anomaly              |
-|----:|:---------|:-----------------|:-----------------|:---------|:---------------------|
-|   4 | BAD      | 2026-06-15 16:05 | 2026-06-15 16:31 | interval | InconsistentDuration |
-|   8 | REVERSED | 2026-06-15 16:30 | 2026-06-15 16:21 | interval | InconsistentDuration |
+| Row | Session  | From             | To    | In interval | Anomaly              |
+|----:|:---------|:-----------------|:------|:------------|:---------------------|
+|   4 | BAD      | 2026-06-15 16:05 | 16:31 | yes         | InconsistentDuration |
+|   8 | REVERSED | 2026-06-15 16:30 | 16:21 | yes         | InconsistentDuration |
 
 These sessions take no part in any estimate. Times are local (ET), and the
-list covers the whole workbook rather than the windows estimated. "Window"
-is which of those the session appears to fall in - the interval of interest,
-the skew margin before it, the one after it, or none - appears only, because
-a record whose own fields contradict each other cannot be trusted to say
-which window it belongs in. It reads the same doubtful times, so no row was
-dropped on its say-so.
+list covers the whole workbook rather than the interval estimated, so "From"
+carries its date and "To" carries one only when the session crosses
+midnight. "In interval" is whether the session appears to fall in the
+interval - appears only, because a record whose own fields contradict each
+other cannot be trusted to say where it belongs. It reads the same doubtful
+times, so no row was dropped on its say-so.
 
 - InconsistentDuration - Conn_start + Conn_Duration misses Conn_DateTime_End
   by a minute or more; start, end and duration are inconsistent.
 
 
-Session groups
---------------
-
-| # | From     | To       |  Len | Count |     kW |
-|--:|:---------|:---------|-----:|------:|-------:|
-| 0 | 16:00:00 | 16:01:00 | 1:00 |     1 |  6.000 |
-| 1 | 16:10:00 | 16:15:00 | 5:00 |     1 |  6.000 |
-| 2 | 16:15:00 | 16:20:00 | 5:00 |     2 | 12.000 |
-| 3 | 16:20:00 | 16:22:00 | 2:00 |     3 | 18.900 |
-| 4 | 16:22:00 | 16:23:00 | 1:00 |     4 | 25.600 |
-| 5 | 16:23:00 | 16:31:00 | 8:00 |     3 | 18.900 |
-| 6 | 16:31:00 | 16:36:00 | 5:00 |     2 | 12.000 |
-| 7 | 16:36:00 | 16:41:00 | 5:00 |     1 |  6.000 |
-
-Times are local (ET). Groups are half-open: each runs from its From up to
-but not including its To, so no instant falls in two groups and no session
-is counted twice.
-
-
-Group membership
-----------------
-
-- Group 0 - MARGIN
-- Group 1 - N1
-- Group 2 - N1, N2
-- Group 3 - EXCESS, N1, N2
-- Group 4 - EXCESS, N1, N2, SPIKE
-- Group 5 - EXCESS, N1, N2
-- Group 6 - N1, N2
-- Group 7 - N1
-
-
 Anomalies
 ---------
 
-| Row | Session | Window   | Anomaly                  |
-|----:|:--------|:---------|:-------------------------|
-|   6 | SPIKE   | interval | ZeroActiveChargeTime     |
-|   9 | EXCESS  | interval | ExcessiveAvgPower(6.900) |
+| Row | Session | Anomaly                  |
+|----:|:--------|:-------------------------|
+|   6 | SPIKE   | ZeroActiveChargeTime     |
+|   9 | EXCESS  | ExcessiveAvgPower(6.900) |
 
-Row numbers are workbook rows, so each one can be looked up directly.
-"Window" is which of the estimated windows the session reaches - the
-interval of interest, the skew margin before it, the one after it, or more
-than one. A session reaching only a margin still matters: a figure reported
-for that margin may rest on it.
+Row numbers are workbook rows, so each one can be looked up directly. Only
+sessions reaching the interval of interest are listed here. The Excluded
+sessions table above is scoped differently - it covers the whole workbook,
+and carries an "In interval" column for that reason.
 
 - ZeroActiveChargeTime - zero Active_Charge_Time, so the session delivered
   its energy in no time at all and has no finite average power; the

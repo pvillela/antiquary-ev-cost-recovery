@@ -1,4 +1,4 @@
-//! Golden-file tests for the rendered [`PowerEstimatesReport`].
+//! Golden-file tests for the rendered [`ev_peak_contrib::IntervalEstimates`].
 //!
 //! Each case pairs an input CSV in `tests/fixtures/` with the report it must produce, checked
 //! byte for byte. Layout is the thing under test, and layout is only judged by looking at it — so
@@ -6,22 +6,26 @@
 //! change in wrapping, padding or column order shows up as a diff in the golden file, which is
 //! exactly where it should be visible during review.
 //!
-//! The cases between them cover every shape the renderer has: a report holding a dubious group, so
-//! that both estimate sets are printed and the group table carries the marker and its two extra
-//! columns; one carrying session anomalies and an excluded-sessions section; and one where a skew
-//! margin outruns the interval of interest and so earns a section of its own. All are reachable
-//! through the real path — a dubious group needs nothing more than two sessions reported to meet on
-//! the same minute.
+//! The cases between them cover every shape the renderer has: a report whose four segments differ
+//! from each other, so the Estimates section has a maximal quarter to name and the Segments table
+//! has something to show; and one carrying session anomalies and an excluded-sessions section.
+//! Both are reached through the real path, from a CSV.
+//!
+//! The site-load table is pinned here too, by the same variable, so one command regenerates every
+//! golden file the crate has.
+//!
+//! These files are the one deliberate exception to the rule that no test may depend on the value of
+//! a freely-declared constant. They pin *rendering* — column widths, decimal places, wrapping — and
+//! no relational reformulation preserves any of that. Changing an electrical constant is therefore
+//! expected to fail exactly these tests and no others; see `docs/maintenance-manual.md`.
 //!
 //! To regenerate after an intended change, having read the diff:
 //!
 //! ```sh
 //! UPDATE_REPORT_GOLDEN=1 cargo test --test report_rendering
 //! ```
-//!
-//! cargo test --test report_rendering
 
-use ev_peak_contrib::{interval_estimates, session_csv_to_xlsx};
+use ev_peak_contrib::{Interval, interval_estimates, session_csv_to_xlsx, site_load_report};
 use jiff::Timestamp;
 use std::{fs, path::PathBuf};
 
@@ -29,7 +33,7 @@ use std::{fs, path::PathBuf};
 ///
 /// Both sit on 2026-06-15, a date with no DST transition, and run 16:00–17:00 local — a legal
 /// interval of interest per README.
-const CASES: [(&str, &str, &str); 3] = [
+const CASES: [(&str, &str, &str); 2] = [
     (
         "Session_Report_Diagram",
         "2026-06-15T20:00:00Z",
@@ -37,11 +41,6 @@ const CASES: [(&str, &str, &str); 3] = [
     ),
     (
         "Session_Report_Anomalies",
-        "2026-06-15T20:00:00Z",
-        "2026-06-15T21:00:00Z",
-    ),
-    (
-        "Session_Report_SkewMargin",
         "2026-06-15T20:00:00Z",
         "2026-06-15T21:00:00Z",
     ),
@@ -62,7 +61,8 @@ fn render(stem: &str, lo: &str, hi: &str) -> String {
     let xlsx = session_csv_to_xlsx(&csv)
         .unwrap_or_else(|e| panic!("{stem} converts: {e}"))
         .output_path;
-    let interval: (Timestamp, Timestamp) = (lo.parse().unwrap(), hi.parse().unwrap());
+    let (lo, hi): (Timestamp, Timestamp) = (lo.parse().unwrap(), hi.parse().unwrap());
+    let interval = Interval::from_start_end(lo, hi);
     let report =
         interval_estimates(interval, &xlsx).unwrap_or_else(|e| panic!("{stem} estimates: {e}"));
 
@@ -202,52 +202,6 @@ fn an_excessive_average_power_is_reported_with_its_figure() {
     );
 }
 
-/// A skew margin is reported when it beats the interval of interest, and dropped when it does not —
-/// each margin judged on its own.
-///
-/// The fixture is built for both directions at once. `BEFORE1` and `BEFORE2` run only in the minute
-/// before the interval, drawing 6 kW apiece against the 2 kW of the one session inside it, so the
-/// left margin outruns `I` on every figure. `AFTER` runs only in the minute after, drawing less than
-/// `INSIDE` and alone where `INSIDE` is alone, so the right margin beats `I` on nothing and is left
-/// out. Both margins are always computed; only one survives the trigger.
-///
-/// Every session draws under the breaker rating, as Evolute's hardware constrains them to. A
-/// fixture that ignored that would put the consumption-based figure above the breaker-spec-based
-/// one and invert the bracket the report states.
-#[test]
-fn a_skew_margin_is_reported_only_when_it_beats_the_interval() {
-    let md = fs::read_to_string(fixtures().join("Session_Report_SkewMargin.report.md")).unwrap();
-    assert!(md.contains("Skew margins"), "the section is missing:\n{md}");
-    assert!(
-        md.contains("BEFORE1") && md.contains("BEFORE2"),
-        "the left margin, which outruns the interval, went unreported:\n{md}"
-    );
-    assert!(
-        !md.contains("AFTER"),
-        "the right margin beats the interval on nothing and should have been dropped:\n{md}"
-    );
-    // The margin's own span, not the interval's, and one `TIME_GRID_STEP` wide.
-    assert!(
-        md.contains("\"Before\" - 2026-06-15 15:59 - 16:00 EDT (1 minute)"),
-        "the margin's interval line is wrong:\n{md}"
-    );
-}
-
-/// Neither margin of the anomalies fixture beats its interval, so no section appears there. The
-/// negative case of the test above, on a report that was never built for it.
-#[test]
-fn a_report_without_a_qualifying_margin_says_nothing_about_margins() {
-    let md = fs::read_to_string(fixtures().join("Session_Report_Anomalies.report.md")).unwrap();
-    assert!(
-        !md.contains("Skew margins"),
-        "a margin that beats nothing was reported:\n{md}"
-    );
-    assert!(
-        !md.contains("Covered"),
-        "the covered-span line belongs only to a report that shows a margin:\n{md}"
-    );
-}
-
 /// Every table in every golden file has rows of equal width. That padding is what makes the output
 /// line up in a monospace font, and nothing else checks it.
 #[test]
@@ -273,4 +227,33 @@ fn golden_report_tables_are_padded_evenly() {
             }
         }
     }
+}
+
+/// The site-load table, pinned the same way and by the same variable.
+///
+/// `.txt` rather than `.md`: it is fixed-width plain text with no markdown in it at all, and naming
+/// it otherwise would invite someone to render it. It is the table
+/// `docs/ev-charger-power-factor-and-kva-allocation.md` §4 is read against, so a change to any
+/// electrical constant should be seen here before it is believed anywhere else.
+#[test]
+fn the_site_load_table_matches_its_golden_file() {
+    let rendered = site_load_report();
+    let golden = fixtures().join("site_load.report.txt");
+
+    if std::env::var_os("UPDATE_REPORT_GOLDEN").is_some() {
+        fs::write(&golden, &rendered).unwrap();
+        return;
+    }
+
+    let expected = fs::read_to_string(&golden).unwrap_or_else(|e| {
+        panic!(
+            "{}: {e}\nRun with UPDATE_REPORT_GOLDEN=1 to create it.",
+            golden.display()
+        )
+    });
+    assert_eq!(
+        expected, rendered,
+        "the site-load table differs from its golden file. Read the diff, and if the change is \
+         intended regenerate with UPDATE_REPORT_GOLDEN=1."
+    );
 }
