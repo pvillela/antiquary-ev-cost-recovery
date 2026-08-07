@@ -4,7 +4,10 @@ use crate::state::{EstimateState, WorkingDir, report_sections};
 use crate::{theme, widgets};
 use eframe::egui;
 use egui_extras::DatePickerButton;
-use ev_peak_contrib::{EstimateSet, IntervalLength, LEGAL_START_MINUTES, PowerEstimates};
+use ev_peak_contrib::{
+    Bracket, IntervalEstimates, IntervalLength, LEGAL_START_MINUTES, Segment, TIME_ZONE_NAME,
+};
+use jiff::{Zoned, tz::TimeZone};
 
 pub fn ui(ui: &mut egui::Ui, state: &mut EstimateState, working: &mut WorkingDir) {
     widgets::heading(ui, "Estimate peak contribution");
@@ -111,7 +114,7 @@ fn interval_controls(ui: &mut egui::Ui, state: &mut EstimateState) {
                 // An hour-long interval is legal only from HH:00, so off the hour the button is
                 // simply not on offer. See README.md, "Interval of interest boundaries".
                 let options = [
-                    (IntervalLength::Quarter, "15 minutes", true),
+                    (IntervalLength::FifteenMinutes, "15 minutes", true),
                     (
                         IntervalLength::Hour,
                         "1 hour",
@@ -203,12 +206,7 @@ fn results(ui: &mut egui::Ui, state: &mut EstimateState, working: &mut WorkingDi
         }
         ui.add_space(10.0);
 
-        match &outcome.report.estimates {
-            None => {
-                ui.label("No charging sessions fall in this interval.");
-            }
-            Some(estimates) => headline(ui, estimates, !outcome.report.skew_margins.is_empty()),
-        }
+        headline(ui, &outcome.report);
     }
 
     ui.add_space(14.0);
@@ -223,70 +221,70 @@ fn results(ui: &mut egui::Ui, state: &mut EstimateState, working: &mut WorkingDi
     }
 }
 
-/// The four figures, as a bracket rather than a point.
+/// The four figures, each a bracket rather than a point.
 ///
-/// `min_overlap <= nominal` on all four figures unconditionally, so the bracket needs no search:
-/// its floor is the consumption figure of the lower reading and its ceiling the breaker-spec figure
-/// of the nominal one. This is the same rule `report.rs` states in prose, and the two must agree.
-fn headline(ui: &mut egui::Ui, estimates: &PowerEstimates, has_margins: bool) {
-    let low: &EstimateSet = estimates.min_reading();
-    let high: &EstimateSet = &estimates.nominal;
+/// Two derivations times two units, which is the shape of the Estimates table in the report below,
+/// so the headline and the table cannot tell different stories. Each row also names the segment
+/// its figures were drawn from: the two derivations peak on the same segment in most reports
+/// but need not, and a headline that hid that would be quoting two different windows as one.
+fn headline(ui: &mut egui::Ui, report: &IntervalEstimates) {
+    let (energy_seg, energy) = &report.energy_based_seg_estimate;
+    let (count_seg, count) = &report.count_based_seg_estimate;
 
     egui::Grid::new("headline")
         .spacing([28.0, 6.0])
-        .num_columns(3)
+        .num_columns(4)
         .show(ui, |ui| {
             ui.label("");
             ui.label(egui::RichText::new("kW").strong());
             ui.label(egui::RichText::new("kVA").strong());
+            ui.label(egui::RichText::new("Segment").strong());
             ui.end_row();
 
-            // The two rows are the two ends of the bracket, and are coloured as such: one figure
-            // is the consumption-based floor, the other the breaker-spec ceiling.
-            let floor = theme::accent(ui);
-            ui.label("Likely at least");
-            figure(ui, low.energy_based_kw.value, floor);
-            figure(ui, low.energy_based_kva.value, floor);
+            // Coloured by derivation, not by high and low: with every figure now a bracket, the
+            // two rows are two readings of the same window rather than the ends of one range.
+            let energy_colour = theme::accent(ui);
+            ui.label("Energy-based");
+            figure(ui, energy.energy_based_kw, energy_colour);
+            figure(ui, energy.energy_based_kva, energy_colour);
+            ui.label(segment_label(energy_seg));
             ui.end_row();
 
-            let ceiling = theme::ceiling(ui);
-            ui.label("Likely at most");
-            figure(ui, high.count_based_kw.value, ceiling);
-            figure(ui, high.count_based_kva.value, ceiling);
+            let count_colour = theme::ceiling(ui);
+            ui.label("Count-based");
+            figure(ui, count.count_based_kw, count_colour);
+            figure(ui, count.count_based_kva, count_colour);
+            ui.label(segment_label(count_seg));
             ui.end_row();
         });
 
     ui.add_space(8.0);
-    if estimates.min_overlap.is_some() {
-        widgets::note(
-            ui,
-            "More than one reading of the data is defensible here: some group holds two sessions \
-             that need not have overlapped each other. The floor above is the minimum-overlap \
-             reading; quote the nominal figures under Estimates if only one set is wanted.",
-        );
-    } else {
-        widgets::note(
-            ui,
-            "From the consumption-based figure to the breaker-spec-based one. See Estimates below \
-             for both, and the group each was drawn from.",
-        );
-    }
-    if has_margins {
-        ui.add_space(4.0);
-        widgets::note(
-            ui,
-            "A skew margin beside this interval comes out higher — see Skew margins below.",
-        );
-    }
+    widgets::note(
+        ui,
+        "Each figure runs from what the reported session times least support to what they most \
+         support; the times are stated only to the minute. The peak is a 15-minute average \
+         whatever interval length was asked for. See Estimates below, and Segments for the \
+         segment each figure came from.",
+    );
 }
 
-fn figure(ui: &mut egui::Ui, value: f64, color: egui::Color32) {
+/// One bracketed figure. Both ends always, never a midpoint — the same rule the report follows,
+/// and for the same reason: a single number would state a precision the source does not have.
+fn figure(ui: &mut egui::Ui, value: Bracket<f64>, color: egui::Color32) {
     ui.label(
-        egui::RichText::new(format!("{value:.3}"))
+        egui::RichText::new(format!("{:.3}-{:.3}", value.min, value.max))
             .monospace()
-            .size(22.0)
+            .size(18.0)
             .color(color),
     );
+}
+
+/// The segment a figure was drawn from, as local clock time — the same name the report's
+/// `Segment` column uses, so the two can be read against each other.
+fn segment_label(segment: &Segment) -> String {
+    Zoned::new(segment.start(), TimeZone::get(TIME_ZONE_NAME).expect("a valid time-zone name"))
+        .strftime("%H:%M")
+        .to_string()
 }
 
 fn export_row(ui: &mut egui::Ui, state: &mut EstimateState, working: &mut WorkingDir) {

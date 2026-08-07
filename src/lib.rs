@@ -11,5 +11,6 @@ mod interval;
 pub use interval::*;
 
 mod report;
+pub use report::site_load_report;
 
 pub mod site_load;

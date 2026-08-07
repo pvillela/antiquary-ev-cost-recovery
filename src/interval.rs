@@ -1,6 +1,6 @@
 //! What makes an interval of interest a *legal* one, in one place for every front-end.
 //!
-//! The library core stays permissive on purpose: [`groups_for_interval`](crate::groups_for_interval)
+//! The library core stays permissive on purpose: [`interval_estimates`](crate::interval_estimates)
 //! is happy with any interval, and exploratory callers and tests rely on that. What must not happen
 //! is a *bill* being argued from an off-spec window, so every front-end that produces a quotable
 //! figure comes through [`checked_interval`]. See README.md, "Interval of interest boundaries".
@@ -9,7 +9,7 @@
 //! and reports what is wrong with it, the other offers only choices that are right — so what is
 //! shared here is the rules themselves, not their presentation.
 
-use crate::TIME_ZONE_NAME;
+use crate::{Interval, TIME_ZONE_NAME};
 use jiff::{
     SignedDuration, Timestamp, civil,
     tz::{Offset, TimeZone},
@@ -26,7 +26,7 @@ pub const OFFSETS: [(&str, i8); 2] = [("EST", -5), ("EDT", -4)];
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntervalLength {
     /// 15 minutes, legal from any of [`LEGAL_START_MINUTES`].
-    Quarter,
+    FifteenMinutes,
     /// 1 hour, legal only from `HH:00`.
     Hour,
 }
@@ -34,7 +34,7 @@ pub enum IntervalLength {
 impl IntervalLength {
     pub fn minutes(self) -> i64 {
         match self {
-            Self::Quarter => 15,
+            Self::FifteenMinutes => 15,
             Self::Hour => 60,
         }
     }
@@ -42,7 +42,7 @@ impl IntervalLength {
     /// How the length is spelled on the command line.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Quarter => "15m",
+            Self::FifteenMinutes => "15m",
             Self::Hour => "1h",
         }
     }
@@ -52,7 +52,7 @@ impl IntervalLength {
         if minute == 0 {
             Self::Hour
         } else {
-            Self::Quarter
+            Self::FifteenMinutes
         }
     }
 
@@ -189,11 +189,13 @@ pub fn resolve_local(dt: civil::DateTime, designator: Option<&str>) -> Result<Ti
 /// `length` defaults to the only one the start minute permits. A designator is checked against the
 /// date rather than believed, so naming the wrong one is an error and not an estimate for the wrong
 /// hour.
+/// The [`Interval`] is built here rather than by each caller, so the boundary rules and the type
+/// that carries their result stay in the one place this module exists to keep them.
 pub fn checked_interval(
     start: civil::DateTime,
     length: Option<IntervalLength>,
     designator: Option<&str>,
-) -> Result<(Timestamp, Timestamp), String> {
+) -> Result<Interval, String> {
     if start.second() != 0 || start.subsec_nanosecond() != 0 {
         return Err(format!(
             "interval start {start} carries seconds; it must be a whole minute"
@@ -201,8 +203,8 @@ pub fn checked_interval(
     }
     if !LEGAL_START_MINUTES.contains(&start.minute()) {
         return Err(format!(
-            "interval start {start} is not on a quarter hour; it must be HH:00, HH:15, HH:30 or \
-             HH:45. See README.md, \"Interval of interest boundaries\"."
+            "interval start {start} is not on a 15-minute boundary; it must be HH:00, HH:15, \
+             HH:30 or HH:45. See README.md, \"Interval of interest boundaries\"."
         ));
     }
 
@@ -217,7 +219,7 @@ pub fn checked_interval(
 
     let lo = resolve_local(start, designator)?;
     let hi = lo + SignedDuration::from_mins(length.minutes());
-    Ok((lo, hi))
+    Ok(Interval::from_start_end(lo, hi))
 }
 
 #[cfg(test)]
@@ -232,16 +234,20 @@ mod test {
         s.replace('T', " ").parse().unwrap()
     }
 
+    fn itvl(lo: &str, hi: &str) -> Interval {
+        Interval::from_start_end(utc(lo), utc(hi))
+    }
+
     #[test]
     fn legal_intervals_resolve_to_utc() {
         // 16:00 EDT is 20:00Z in June.
         assert_eq!(
             checked_interval(dt("2026-06-01 16:00"), Some(IntervalLength::Hour), None).unwrap(),
-            (utc("2026-06-01T20:00:00Z"), utc("2026-06-01T21:00:00Z"))
+            itvl("2026-06-01T20:00:00Z", "2026-06-01T21:00:00Z")
         );
         assert_eq!(
-            checked_interval(dt("2026-06-01 16:45"), Some(IntervalLength::Quarter), None).unwrap(),
-            (utc("2026-06-01T20:45:00Z"), utc("2026-06-01T21:00:00Z"))
+            checked_interval(dt("2026-06-01 16:45"), Some(IntervalLength::FifteenMinutes), None).unwrap(),
+            itvl("2026-06-01T20:45:00Z", "2026-06-01T21:00:00Z")
         );
     }
 
@@ -254,10 +260,10 @@ mod test {
         );
         assert_eq!(
             checked_interval(dt("2026-06-01 16:15"), None, None).unwrap(),
-            checked_interval(dt("2026-06-01 16:15"), Some(IntervalLength::Quarter), None).unwrap()
+            checked_interval(dt("2026-06-01 16:15"), Some(IntervalLength::FifteenMinutes), None).unwrap()
         );
         assert_eq!(IntervalLength::default_for(0), IntervalLength::Hour);
-        assert_eq!(IntervalLength::default_for(45), IntervalLength::Quarter);
+        assert_eq!(IntervalLength::default_for(45), IntervalLength::FifteenMinutes);
     }
 
     #[test]
@@ -277,7 +283,7 @@ mod test {
     fn the_length_rule_is_stated_once() {
         for minute in LEGAL_START_MINUTES {
             let start = civil::date(2026, 6, 1).at(16, minute, 0, 0);
-            for length in [IntervalLength::Quarter, IntervalLength::Hour] {
+            for length in [IntervalLength::FifteenMinutes, IntervalLength::Hour] {
                 assert_eq!(
                     length.allowed_from(minute),
                     checked_interval(start, Some(length), None).is_ok(),
@@ -313,25 +319,25 @@ mod test {
         assert!(msg.contains("EST") && msg.contains("EDT"), "{msg}");
 
         // 01:00 EDT is 05:00Z; 01:00 EST is 06:00Z.
-        let (edt_lo, edt_hi) = checked_interval(
+        let edt = checked_interval(
             dt("2026-11-01 01:00"),
             Some(IntervalLength::Hour),
             Some("EDT"),
         )
         .unwrap();
-        let (est_lo, est_hi) = checked_interval(
+        let est = checked_interval(
             dt("2026-11-01 01:00"),
             Some(IntervalLength::Hour),
             Some("EST"),
         )
         .unwrap();
-        assert_eq!(edt_lo, utc("2026-11-01T05:00:00Z"));
-        assert_eq!(est_lo, utc("2026-11-01T06:00:00Z"));
-        assert_eq!(est_lo.duration_since(edt_lo).as_secs(), 3600);
+        assert_eq!(edt.start, utc("2026-11-01T05:00:00Z"));
+        assert_eq!(est.start, utc("2026-11-01T06:00:00Z"));
+        assert_eq!(est.start.duration_since(edt.start).as_secs(), 3600);
 
         // The EDT hour ends where the EST hour begins: the interval spans the fold.
-        assert_eq!(edt_hi, est_lo);
-        assert_eq!(est_hi, utc("2026-11-01T07:00:00Z"));
+        assert_eq!(edt.end(), est.start);
+        assert_eq!(est.end(), utc("2026-11-01T07:00:00Z"));
     }
 
     /// A designator is checked against the date rather than believed, so naming the wrong one is an

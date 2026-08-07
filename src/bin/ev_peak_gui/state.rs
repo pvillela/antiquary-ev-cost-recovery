@@ -6,11 +6,11 @@
 //! and tested here.
 
 use ev_peak_contrib::{
-    ConversionReport, HourEntry, IntervalEstimates, IntervalLength, OFFSETS, SessionReport,
-    TIME_ZONE_NAME, checked_interval, hours_of, interval_estimates, session_csv_to_xlsx,
-    session_list,
+    ConversionReport, HourEntry, Interval, IntervalEstimates, IntervalLength, OFFSETS,
+    SessionReport, TIME_ZONE_NAME, checked_interval, hours_of, interval_estimates,
+    session_csv_to_xlsx, session_list,
 };
-use jiff::{Timestamp, civil, tz::TimeZone};
+use jiff::{civil, tz::TimeZone};
 use std::path::{Path, PathBuf};
 
 /// Which of the two jobs the user is doing. `None` is the landing screen: the app opens with
@@ -280,7 +280,7 @@ impl EstimateState {
         self.date.at(self.hour, self.minute, 0, 0)
     }
 
-    pub fn interval(&self) -> Result<(Timestamp, Timestamp), String> {
+    pub fn interval(&self) -> Result<Interval, String> {
         checked_interval(self.start_local(), Some(self.length), self.designator)
     }
 
@@ -357,9 +357,9 @@ fn covered_range(report: &SessionReport) -> Option<(civil::Date, civil::Date)> {
 
 /// The interval as the report writes it at its head: local times, and the offset named the way a
 /// Toronto Hydro bill names it.
-pub fn interval_heading(interval: (Timestamp, Timestamp), length: IntervalLength) -> String {
+pub fn interval_heading(interval: Interval, length: IntervalLength) -> String {
     let tz = TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid zone name");
-    let (lo, hi) = interval;
+    let (lo, hi) = (interval.start, interval.end());
     let start = lo.to_zoned(tz.clone());
     let end = hi.to_zoned(tz.clone());
     let name = OFFSETS
@@ -368,7 +368,7 @@ pub fn interval_heading(interval: (Timestamp, Timestamp), length: IntervalLength
         .map_or("", |(name, _)| name);
     let length = match length {
         IntervalLength::Hour => "1 hour",
-        IntervalLength::Quarter => "15 minutes",
+        IntervalLength::FifteenMinutes => "15 minutes",
     };
     format!(
         "{} - {} {name}  ({length})",
@@ -438,11 +438,7 @@ mod test {
     #[test]
     fn the_app_produces_the_same_report_as_the_command_line() {
         let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-        for stem in [
-            "Session_Report_Diagram",
-            "Session_Report_Anomalies",
-            "Session_Report_SkewMargin",
-        ] {
+        for stem in ["Session_Report_Diagram", "Session_Report_Anomalies"] {
             // Convert in a scratch directory, so no generated workbook lands in the fixtures.
             let dir =
                 std::env::temp_dir().join(format!("ev_peak_gui_{stem}_{}", std::process::id()));
@@ -564,13 +560,13 @@ mod test {
         assert!(state.interval().is_ok());
 
         state.set_minute(15);
-        assert_eq!(state.length, IntervalLength::Quarter);
+        assert_eq!(state.length, IntervalLength::FifteenMinutes);
         assert!(state.interval().is_ok(), "no illegal interval is reachable");
 
         state.set_minute(0);
         assert_eq!(
             state.length,
-            IntervalLength::Quarter,
+            IntervalLength::FifteenMinutes,
             "and it does not spring back"
         );
     }
@@ -593,7 +589,7 @@ mod test {
                 }
                 for minute in [0, 15, 30, 45] {
                     state.set_minute(minute);
-                    for length in [IntervalLength::Quarter, IntervalLength::Hour] {
+                    for length in [IntervalLength::FifteenMinutes, IntervalLength::Hour] {
                         if !length.allowed_from(minute) {
                             continue;
                         }
@@ -650,7 +646,7 @@ mod test {
         for change in [
             (|s: &mut EstimateState| s.set_hour(5)) as fn(&mut EstimateState),
             |s| s.set_minute(15),
-            |s| s.set_length(IntervalLength::Quarter),
+            |s| s.set_length(IntervalLength::FifteenMinutes),
             |s| s.set_date(civil::date(2026, 6, 16)),
         ] {
             state.error = Some("stale".to_owned());
@@ -689,55 +685,35 @@ mod test {
             titles,
             [
                 "Estimates",
+                "Segments",
+                "Segment membership",
                 "Excluded sessions",
-                "Session groups",
-                "Group membership",
                 "Anomalies",
             ]
         );
 
         // A table's separator row is not a section title, so tables stay inside their section.
         let sections = report_sections(&text);
-        let groups = sections
-            .iter()
-            .find(|s| s.title == "Session groups")
-            .unwrap();
-        assert!(groups.body.contains("| 0 | 16:00:00 |"), "{}", groups.body);
-        assert!(groups.body.contains("Times are local (ET)"));
+        let segments = sections.iter().find(|s| s.title == "Segments").unwrap();
+        assert!(segments.body.contains("| 16:00 "), "{}", segments.body);
+        assert!(segments.body.contains("Times are local (ET)"));
     }
 
-    /// The other two golden files divide the same way, including the skew-margin section.
+    /// The other golden file divides the same way, minus the sections its data does not reach: no
+    /// session in it is excluded, so it carries no Excluded sessions section.
     #[test]
     fn every_golden_report_splits_into_titled_sections() {
-        for (fixture, expected) in [
-            (
-                "Session_Report_Diagram",
-                vec![
-                    "Estimates",
-                    "Session groups",
-                    "Group membership",
-                    "Anomalies",
-                ],
-            ),
-            (
-                "Session_Report_SkewMargin",
-                vec![
-                    "Estimates",
-                    "Skew margins",
-                    "Session groups",
-                    "Group membership",
-                    "Anomalies",
-                ],
-            ),
-        ] {
-            let text =
-                std::fs::read_to_string(format!("tests/fixtures/{fixture}.report.md")).unwrap();
-            let titles: Vec<String> = report_sections(&text)
-                .into_iter()
-                .map(|s| s.title)
-                .collect();
-            assert_eq!(titles, expected, "{fixture}");
-        }
+        let fixture = "Session_Report_Diagram";
+        let text = std::fs::read_to_string(format!("tests/fixtures/{fixture}.report.md")).unwrap();
+        let titles: Vec<String> = report_sections(&text)
+            .into_iter()
+            .map(|s| s.title)
+            .collect();
+        assert_eq!(
+            titles,
+            ["Estimates", "Segments", "Segment membership", "Anomalies"],
+            "{fixture}"
+        );
     }
 
     /// A conversion leaves its workbook waiting, and the Estimate tab collects it on arrival —

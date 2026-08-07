@@ -1,5 +1,0 @@
-UR_ID,Location_Address,Location_City,Location_Postal_Code,Station_ID,Station_Network_Provider,Station_Make,Station_Model,Charge_Session_ID,User_ID,Conn_DateTime_Start,Conn_DateTime_End,Conn_Duration,Charge_Duration,Active_Charge_Time,Charging_Level,Energy_Use,Total_Fee,Vehicle_Make,Vehicle_Model,Vehicle_Year
-CKT-7,,Toronto,,Station-1,Evolute Inc.,FLO,G5,BEFORE1,,2026-06-15 15:45,2026-06-15 15:59,0:14:00,0:14:00,0:14:00,Level 2,1.400,0.00,VinFast,Vf8,2024
-CKT-7,,Toronto,,Station-2,Evolute Inc.,FLO,G5,BEFORE2,,2026-06-15 15:50,2026-06-15 15:59,0:09:00,0:09:00,0:09:00,Level 2,0.900,0.00,VinFast,Vf8,2024
-CKT-7,,Toronto,,Station-3,Evolute Inc.,FLO,G5,INSIDE,,2026-06-15 16:10,2026-06-15 16:40,0:30:00,0:30:00,0:30:00,Level 2,1.000,0.00,VinFast,Vf8,2024
-CKT-7,,Toronto,,Station-4,Evolute Inc.,FLO,G5,AFTER,,2026-06-15 17:00,2026-06-15 17:05,0:05:00,0:05:00,0:05:00,Level 2,0.100,0.00,VinFast,Vf8,2024

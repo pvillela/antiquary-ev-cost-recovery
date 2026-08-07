@@ -1,5 +1,5 @@
-use ev_peak_contrib::{IntervalLength, OFFSETS, checked_interval, interval_estimates};
-use jiff::{Timestamp, civil};
+use ev_peak_contrib::{Interval, IntervalLength, OFFSETS, checked_interval, interval_estimates};
+use jiff::civil;
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
@@ -120,11 +120,11 @@ fn workbook_fault(path: &Path) -> Option<PathFault> {
 
 /// Parses the local start and optional length into a UTC interval.
 ///
-/// Only the *reading* of the arguments happens here. What makes an interval legal — the quarter
-/// hour rule, the length rule, and what a wall time means on the two nights the clocks change —
+/// Only the *reading* of the arguments happens here. What makes an interval legal — the start
+/// minute rule, the length rule, and what a wall time means on the two nights the clocks change —
 /// lives in [`checked_interval`], so that this and the GUI cannot drift apart on a question a bill
 /// will be argued from.
-fn parse_interval(start: &str, length: Option<&str>) -> Result<(Timestamp, Timestamp), String> {
+fn parse_interval(start: &str, length: Option<&str>) -> Result<Interval, String> {
     let (stamp, designator) = split_designator(start.trim());
     let start_local: civil::DateTime = stamp
         .replace('T', " ")
@@ -134,7 +134,7 @@ fn parse_interval(start: &str, length: Option<&str>) -> Result<(Timestamp, Times
     let length = match length {
         None => None,
         Some("1h") => Some(IntervalLength::Hour),
-        Some("15m") => Some(IntervalLength::Quarter),
+        Some("15m") => Some(IntervalLength::FifteenMinutes),
         Some(other) => return Err(format!("unknown length \"{other}\"; expected 15m or 1h")),
     };
 
@@ -162,8 +162,12 @@ fn split_designator(s: &str) -> (&str, Option<&str>) {
 mod test {
     use super::*;
 
-    fn utc(s: &str) -> Timestamp {
+    fn utc(s: &str) -> jiff::Timestamp {
         s.parse().unwrap()
+    }
+
+    fn itvl(lo: &str, hi: &str) -> Interval {
+        Interval::from_start_end(utc(lo), utc(hi))
     }
 
     /// The first argument is checked before the interval is, so omitting the workbook is reported as
@@ -204,11 +208,11 @@ mod test {
         // 16:00 EDT is 20:00Z in June.
         assert_eq!(
             parse_interval("2026-06-01 16:00", Some("1h")).unwrap(),
-            (utc("2026-06-01T20:00:00Z"), utc("2026-06-01T21:00:00Z"))
+            itvl("2026-06-01T20:00:00Z", "2026-06-01T21:00:00Z")
         );
         assert_eq!(
             parse_interval("2026-06-01 16:45", Some("15m")).unwrap(),
-            (utc("2026-06-01T20:45:00Z"), utc("2026-06-01T21:00:00Z"))
+            itvl("2026-06-01T20:45:00Z", "2026-06-01T21:00:00Z")
         );
         // An omitted length is the library's default, not this layer's guess.
         assert_eq!(
@@ -219,7 +223,7 @@ mod test {
         assert_eq!(
             parse_interval("2026-11-01 01:00 EST", Some("1h"))
                 .unwrap()
-                .0,
+                .start,
             utc("2026-11-01T06:00:00Z")
         );
     }
