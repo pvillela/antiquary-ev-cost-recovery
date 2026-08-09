@@ -40,7 +40,7 @@ use crate::{local_date, local_hour, local_midnight};
 /// with four periods, no seasonality, and weekends split rather than uniformly off-peak — a
 /// customer elects one plan or the other, never both. Should ULO ever be needed it wants its own
 /// enum and its own partition function beside these, not a fourth variant here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Tou {
     OnPeak,
     MidPeak,

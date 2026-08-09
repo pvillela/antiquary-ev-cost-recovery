@@ -97,7 +97,7 @@ impl Reading {
 /// epoch on a fixed grid, so neither the spring-forward gap nor the fall-back fold can produce an
 /// ambiguous or missing record — they are a rendering concern in the local-time column and nothing
 /// more.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Anomaly {
     /// The hour carried a kW or kVA value but no kWh.
     MissingKwh,

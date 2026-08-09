@@ -1,0 +1,28 @@
+# Figures transcribed from a Toronto Hydro invoice, statement date 2026-06-29.
+#
+# Account number, premises number, meter number, service address and the property-management name
+# are deliberately not here: this file is committed, and none of that is needed to check a
+# calculation. The invoice itself is not in the repository.
+#
+# Rate class: Business - General Service 50 to 999 kW, on Time-of-Use commodity pricing. Both are
+# true at once because the account is a condominium corporation, which Ontario designates as
+# eligible for the Regulated Price Plan regardless of demand or annual consumption.
+#
+# The kWh figures on the invoice are loss-factor adjusted; the demand figures are not. The
+# spreadsheet reports raw meter values, so it is the unadjusted columns that should agree.
+
+period_ending       2026-06-23
+days                31
+loss_factor         1.0295
+
+# Unadjusted -- compare directly against the workbook.
+kwh_used            77292.718
+demand_kw           153.119
+peak_kw_7_7         152.639
+demand_kva          183.359
+
+# Loss-factor adjusted -- divide by loss_factor before comparing.
+adjusted_kwh_used   79572.853
+tou_on_peak_kwh     15165.894
+tou_mid_peak_kwh    14291.230
+tou_off_peak_kwh    50115.729
