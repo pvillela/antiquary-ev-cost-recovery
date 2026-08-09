@@ -1,0 +1,20 @@
+[package]
+name = "green-button"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Interval and the Ontario time-zone constant. The GUI stack comes with it: ev-peak-contrib has no
+# [features] section yet, so eframe/egui/rfd are not optional. Splitting them out is a change to
+# that crate, deferred until the two projects are consolidated.
+ev-peak-contrib = { path = "../ev-peak-contrib" }
+jiff = "0.2.35"
+# Whole-document tree rather than a streaming reader: the ESPI join needs random access, since an
+# IntervalBlock resolves to its ReadingType only through a MeterReading entry that may appear
+# anywhere in the feed.
+roxmltree = "0.21.1"
+rust_xlsxwriter = "0.97.1"
+
+[dev-dependencies]
+# Write-side only above; the golden-dump tests need to read a generated workbook back.
+umya-spreadsheet = "3.0.1"
