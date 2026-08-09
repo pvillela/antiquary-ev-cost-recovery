@@ -1,6 +1,6 @@
 == Peak_values ==
 default row height: 13.8
-explicit row heights: 1:15 3:23.85
+explicit row heights: 1:15 2:13.8 3:23.85 4-7:13.8
 rows pinned (customHeight): 0
 A1  PEAK VALUES  [General] Left
 A3  Billing period ending  [General] Left
@@ -114,7 +114,7 @@ AB7  OnPeak  [General] Center
 == Interval_values ==
 data rows: 792
 default row height: 13.8
-explicit row heights: 1:16.15 4-795:12.8
+explicit row heights: 1:16.15 2-3:13.8 4-795:12.8
 rows pinned (customHeight): 0
 A1  INTERVAL VALUES  [General] Left
 A3  interval  [General] Center

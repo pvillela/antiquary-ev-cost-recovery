@@ -345,14 +345,35 @@ fn write_sheet(
             style_font(sheet, c, header_row + 1, 7.0, true);
         }
     }
+    // Every row gets an explicit height, including the ones that equal the default and the blank
+    // row 2. The reference does the same -- all 25 rows of Peak_values and all 13,899 of
+    // Interval_values carry one -- and relying on `defaultRowHeight` instead is not equivalent in
+    // practice: a row with no stored height is fitted to its content, and the content here is not
+    // what the sheet default assumes, so the rows render at a different height despite the file
+    // declaring the same default.
+    set_row_height(sheet, 2, DEFAULT_ROW_HEIGHT);
+    set_row_height(
+        sheet,
+        header_row,
+        if machine_row {
+            PEAK_HEADER_HEIGHT
+        } else {
+            DEFAULT_ROW_HEIGHT
+        },
+    );
     if machine_row {
-        set_row_height(sheet, header_row, PEAK_HEADER_HEIGHT);
+        set_row_height(sheet, header_row + 1, DEFAULT_ROW_HEIGHT);
     }
 
     let first_data_row = if machine_row {
         header_row + 2
     } else {
         header_row + 1
+    };
+    let data_height = if machine_row {
+        DEFAULT_ROW_HEIGHT
+    } else {
+        INTERVAL_DATA_HEIGHT
     };
     for (r, row) in rows.iter().enumerate() {
         debug_assert_eq!(
@@ -361,9 +382,7 @@ fn write_sheet(
             "a row must match the column table"
         );
         let excel_row = first_data_row + r as u32;
-        if !machine_row {
-            set_row_height(sheet, excel_row, INTERVAL_DATA_HEIGHT);
-        }
+        set_row_height(sheet, excel_row, data_height);
         for (i, out) in row.iter().enumerate() {
             let c = i as u32 + 1;
             let kind = columns[i].kind;
