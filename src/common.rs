@@ -20,7 +20,7 @@ pub(crate) static TIME_ZONE: LazyLock<TimeZone> = LazyLock::new(|| {
 });
 
 /// The local calendar date an instant falls on.
-pub(crate) fn local_date(ts: Timestamp) -> Date {
+pub fn local_date(ts: Timestamp) -> Date {
     ts.to_zoned(TIME_ZONE.clone()).date()
 }
 

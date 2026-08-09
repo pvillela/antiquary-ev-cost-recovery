@@ -29,7 +29,7 @@
 //! `docs/maintenance-manual.md` for what would drive them apart.
 
 use ev_peak_contrib::Interval;
-use jiff::{Timestamp, civil::Date};
+use jiff::civil::Date;
 
 use crate::holidays;
 use crate::{local_date, local_hour, local_midnight};
@@ -208,6 +208,7 @@ fn tomorrow(d: Date) -> Date {
 #[cfg(test)]
 mod test {
     use super::*;
+    use jiff::Timestamp;
     use jiff::civil::date;
 
     fn local(y: i16, m: i8, d: i8, h: i8) -> Timestamp {

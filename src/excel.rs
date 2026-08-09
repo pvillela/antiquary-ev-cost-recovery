@@ -18,7 +18,7 @@ use std::path::Path;
 use rust_xlsxwriter::{Color, Format, FormatAlign, Workbook, Worksheet};
 
 use crate::{
-    Anomaly, Feed, Peak, PeriodValues, Reading, Readings, excel_serial, excel_serial_date,
+    Anomaly, Feed, Peak, PeriodValues, Reading, excel_serial, excel_serial_date,
     excel_serial_local, period_values,
 };
 
@@ -34,6 +34,21 @@ const UTC_DT_FORMAT: &str = r"yyyy/mm/dd\ hh:mm";
 const LIGHT_RED: Color = Color::RGB(0xFF_C7CE);
 
 const FONT: &str = "Arial";
+
+/// Padding `rust_xlsxwriter` adds to a column width before storing it: five pixels over the default
+/// font's seven-pixel digit width.
+///
+/// The widths in [`PEAK_COLUMNS`] and [`INTERVAL_COLUMNS`] are the values the template stores, read
+/// straight out of its `<cols>` element. Passing them through unadjusted would make every column
+/// about three quarters of a character wider than the workbook being reproduced, so the padding is
+/// taken back off.
+///
+/// This does not land exactly on every column, because the conversion rounds to whole pixels on the
+/// way. Most reproduce the template's stored width to the hundredth; the narrow 1.39 spacers come
+/// out at 1.14, a difference of about two pixels on a decorative gap. Closing that last step would
+/// mean reverse-engineering the rounding, which is a library internal and not worth pinning code
+/// to.
+const WIDTH_PADDING: f64 = 5.0 / 7.0;
 
 /// How a column is formatted. Every column's number format and alignment follows from this.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -348,7 +363,7 @@ fn write_sheet(
     let header_row: u32 = 2;
     for (i, column) in columns.iter().enumerate() {
         let c = i as u16;
-        sheet.set_column_width(c, column.width)?;
+        sheet.set_column_width(c, column.width - WIDTH_PADDING)?;
         if column.kind == Kind::Spacer {
             continue;
         }
@@ -385,9 +400,13 @@ fn write_sheet(
                         sheet.write_blank(excel_row, c, format)?;
                     }
                 }
-                Cell::Num(v) => sheet.write_number_with_format(excel_row, c, *v, format)?,
-                Cell::Text(s) => sheet.write_string_with_format(excel_row, c, s, format)?,
-            };
+                Cell::Num(v) => {
+                    sheet.write_number_with_format(excel_row, c, *v, format)?;
+                }
+                Cell::Text(s) => {
+                    sheet.write_string_with_format(excel_row, c, s, format)?;
+                }
+            }
         }
     }
 
