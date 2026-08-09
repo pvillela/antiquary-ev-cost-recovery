@@ -206,12 +206,12 @@ at `docs/reference/` as provenance only.
 
 ## Housekeeping
 
-- Move to `python/`: `build_peak_values.py`, `explore_model.py`, `pyproject.toml`, `uv.lock`,
-  `.python-version`, `manual-python.md`. Add `python/README.md` explaining the ongoing roles of
-  `greenbutton-objects` and `explore_model.py` (the only consumer of that library, and the source
-  of `docs/Toronto_Hydro_Object_Model.md`).
-- Delete `main.py` (a `uv init` stub) and the two stray root files named
-  `The Ontario holiday research is still ru*`.
+- Move to `docs/archived/python/` (alongside the existing `manual-python.md`):
+  `build_peak_values.py`, `explore_model.py`, `pyproject.toml`, `uv.lock`, `.python-version`.
+  Add `docs/archived/python/README.md` explaining the ongoing roles of `greenbutton-objects` and
+  `explore_model.py` (the only consumer of that library, and the source of
+  `docs/Toronto_Hydro_Object_Model.md`).
+- Delete `main.py` (a `uv init` stub).
 - Move `docs/Prompt_Green_Button_conv_to_rust.md` to `docs/archived/` once executed.
 - Note: `openpyxl` is a declared Python dependency that nothing imports.
 

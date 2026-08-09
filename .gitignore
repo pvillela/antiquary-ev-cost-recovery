@@ -222,3 +222,6 @@ target/derby*
 .~*
 ~*.*
 Kanban*
+
+# Workbooks generated beside their input feed by gb_peak_values
+data/*.xlsx
