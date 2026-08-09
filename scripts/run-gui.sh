@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# .devcontainer/run-gui.sh
+# scripts/run-gui.sh
 #
 # Launches the GUI on the headless display, wrapped in a DBus session.
 #
@@ -10,8 +10,8 @@
 # that from being rediscovered as an application bug.
 #
 # Usage:
-#   bash .devcontainer/run-gui.sh                    # cargo run --bin ev_peak_gui
-#   bash .devcontainer/run-gui.sh --release          # any cargo run arguments
+#   bash scripts/run-gui.sh                          # cargo run --bin ev_peak_gui
+#   bash scripts/run-gui.sh --release                # any cargo run arguments
 set -e
 
 if [ $# -eq 0 ]; then

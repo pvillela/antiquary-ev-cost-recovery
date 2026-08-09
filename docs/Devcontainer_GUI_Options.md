@@ -11,7 +11,8 @@ opened and cancelled via synthetic clicks, and the `rfd` file chooser was opened
 **Applied on 2026-08-07:** Option A (headless Xvfb), with the Part 1 packages moved into
 `.devcontainer/Dockerfile` so they survive a rebuild as a cached layer rather than being
 reinstalled by `setup.sh` each time, and `openbox` added to settle the focus gotcha in Part 3.
-Options B and C were not taken. See `.devcontainer/start-xvfb.sh` and `.devcontainer/run-gui.sh`.
+Options B and C were not taken. See `.devcontainer/start-xvfb.sh` for the display, and
+`scripts/run-gui.sh` — not part of the container lifecycle — for launching the app under DBus.
 
 ---
 
