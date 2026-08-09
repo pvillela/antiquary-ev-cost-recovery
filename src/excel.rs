@@ -983,9 +983,7 @@ mod test {
             .split(',')
             .map(str::trim)
             .filter(|t| !t.is_empty())
-            .map(|t| {
-                AnomalyKind::from_token(t).unwrap_or_else(|| panic!("unreadable token {t:?}"))
-            })
+            .map(|t| AnomalyKind::from_token(t).unwrap_or_else(|| panic!("unreadable token {t:?}")))
             .collect();
         timing_anomalies(&kinds)
     }
@@ -1699,7 +1697,8 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
         let ordinary = &report.sessions[0];
         assert_eq!(ordinary.id, "S69865");
         assert!(
-            (ordinary.avg_kw() - ordinary.energy_use / (ordinary.charge_time.as_secs_f64() / 3600.0))
+            (ordinary.avg_kw()
+                - ordinary.energy_use / (ordinary.charge_time.as_secs_f64() / 3600.0))
                 .abs()
                 < 1e-9
         );

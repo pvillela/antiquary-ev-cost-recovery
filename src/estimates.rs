@@ -1,6 +1,6 @@
 use crate::{
-    Anomaly, Bracket, Interval, RSession, SEGMENT_DURATION, Segment, Session, SessionReport,
-    session_list,
+    Anomaly, Bracket, Interval, RSegment, RSession, SEGMENT_DURATION, Segment, Session,
+    SessionReport, session_list,
 };
 use std::{
     error::Error,
@@ -16,11 +16,16 @@ pub struct IntervalEstimates {
     /// Interval of interest.
     pub interval: Interval,
     /// All segments and their estimates.
-    pub seg_estimates: Vec<(Segment, EstimateSet)>,
+    pub seg_estimates: Vec<(RSegment, EstimateSet)>,
     /// Segment and estimate set that maximize the energy-based estimates.
-    pub energy_based_seg_estimate: (Segment, EstimateSet),
-    /// Segment and estimate set that maximize the count-based estimates.
-    pub count_based_seg_estimate: (Segment, EstimateSet),
+    ///
+    /// The segment is shared with the matching entry in [`Self::seg_estimates`] rather than copied
+    /// from it, so [`std::rc::Rc::ptr_eq`] against
+    /// [`Self::count_based_seg_estimate`] answers whether the two derivations peaked on the same
+    /// segment — a question comparing clock times can only approximate.
+    pub energy_based_seg_estimate: (RSegment, EstimateSet),
+    /// Segment and estimate set that maximize the count-based estimates. Shared, as above.
+    pub count_based_seg_estimate: (RSegment, EstimateSet),
     /// Every anomaly carried by every session that intersects the interval of interest.
     /// Sessions excluded outright are *not* here; they are in
     /// [`Self::excluded_sessions`].
@@ -78,13 +83,9 @@ pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimate
     // energy over charge time is infinite or NaN, either of which would swamp or poison any
     // segment it entered, and [`Session::avg_kw`] substitutes a finite figure for exactly that
     // reason — so nothing has to be done to a spike here. See README.md, "Other".
-    let rsessions: Vec<RSession> = sessions
-        .into_iter()
-        .chain(spikes)
-        .map(Rc::new)
-        .collect();
+    let rsessions: Vec<RSession> = sessions.into_iter().chain(spikes).map(Rc::new).collect();
     let segments = segments_for_ioi(ioi, &rsessions);
-    let seg_estimates: Vec<(Segment, EstimateSet)> = segments
+    let seg_estimates: Vec<(RSegment, EstimateSet)> = segments
         .iter()
         .map(|seg| (seg.clone(), segment_estimate(seg)))
         .collect();
@@ -122,7 +123,7 @@ pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimate
 /// [`crate::checked_interval`] can reach this. The core stays permissive about *when* an interval
 /// starts, which is what exploratory callers and tests rely on; it was never permissive about how
 /// long one may be.
-fn segments_for_ioi(ioi: Interval, sessions: &[RSession]) -> Vec<Segment> {
+fn segments_for_ioi(ioi: Interval, sessions: &[RSession]) -> Vec<RSegment> {
     let (ioi_secs, seg_secs) = (ioi.duration.as_secs(), SEGMENT_DURATION.as_secs());
     assert!(
         ioi_secs > 0 && ioi_secs % seg_secs == 0,
@@ -144,7 +145,7 @@ fn segments_for_ioi(ioi: Interval, sessions: &[RSession]) -> Vec<Segment> {
         }
     }
 
-    segments
+    segments.into_iter().map(Rc::new).collect()
 }
 
 pub(crate) fn segment_estimate(segment: &Segment) -> EstimateSet {
@@ -169,9 +170,9 @@ pub(crate) fn segment_estimate(segment: &Segment) -> EstimateSet {
 /// deterministic, which matters because a tie is not rare — every segment of an interval no session
 /// reached is tied at the standing block.
 pub(crate) fn maximal_segment_estimate(
-    segments: &[Segment],
+    segments: &[RSegment],
     criterion: impl Fn(&Segment) -> f64,
-) -> (Segment, EstimateSet) {
+) -> (RSegment, EstimateSet) {
     let mut seg_iter = segments.iter();
     let first = seg_iter
         .next()
@@ -430,7 +431,10 @@ mod test {
             segment.energy_based_load().min,
             segment.energy_based_load().max,
         ] {
-            assert!((load.real_kw - standing.real_kw).abs() < TOLERANCE, "{load:?}");
+            assert!(
+                (load.real_kw - standing.real_kw).abs() < TOLERANCE,
+                "{load:?}"
+            );
             assert!(
                 (load.apparent_kva() - standing.apparent_kva()).abs() < TOLERANCE,
                 "{load:?}"
@@ -469,6 +473,31 @@ mod test {
         let segments = segments_for_ioi(hour(), &sessions);
         let (seg, _) = maximal_segment_estimate(&segments, |s| s.agg_count().mid());
         assert_eq!(seg.start(), hour().start + SEGMENT_DURATION * 2);
+    }
+
+    /// The maximum is the segment itself, shared, not a copy of it.
+    ///
+    /// This is what [`RSegment`] is for. Two derivations peaking on one segment must be *the same*
+    /// segment, so a caller can settle the question with [`Rc::ptr_eq`] rather than by comparing
+    /// clock times and trusting that equal times mean one segment.
+    #[test]
+    fn a_maximal_segment_is_shared_with_the_listing_not_copied() {
+        // One session filling the third quarter, so both derivations peak there.
+        let sessions = vec![session(
+            "P",
+            "2026-06-15T20:30:00Z",
+            "2026-06-15T20:45:00Z",
+            ev_load().real_kw,
+        )];
+        let segments = segments_for_ioi(hour(), &sessions);
+        let (by_kw, _) = maximal_segment_estimate(&segments, |s| s.agg_kw().mid());
+        let (by_count, _) = maximal_segment_estimate(&segments, |s| s.agg_count().mid());
+
+        // Each maximum is one of the segments handed in, not a clone of one.
+        assert!(segments.iter().any(|s| Rc::ptr_eq(s, &by_kw)));
+        assert!(segments.iter().any(|s| Rc::ptr_eq(s, &by_count)));
+        // And here the two derivations agree, which `ptr_eq` states exactly.
+        assert!(Rc::ptr_eq(&by_kw, &by_count));
     }
 
     // -----------------------------------------------------------------------
@@ -577,4 +606,3 @@ mod test {
         assert!(segments.iter().all(|s| s.sessions.is_empty()));
     }
 }
-

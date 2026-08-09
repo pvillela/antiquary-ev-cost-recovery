@@ -284,7 +284,12 @@ impl IntervalEstimates {
         };
         let rows = vec![
             row("Energy-based", "kW", energy_est.energy_based_kw, energy_seg),
-            row("Energy-based", "kVA", energy_est.energy_based_kva, energy_seg),
+            row(
+                "Energy-based",
+                "kVA",
+                energy_est.energy_based_kva,
+                energy_seg,
+            ),
             row("Count-based", "kW", count_est.count_based_kw, count_seg),
             row("Count-based", "kVA", count_est.count_based_kva, count_seg),
         ];

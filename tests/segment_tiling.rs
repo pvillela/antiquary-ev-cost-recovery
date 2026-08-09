@@ -34,6 +34,7 @@ use jiff::{Timestamp, Zoned, tz::TimeZone};
 use std::{
     fs,
     path::PathBuf,
+    rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -201,6 +202,18 @@ fn the_maximal_segment_is_one_of_the_busy_middle_quarters() {
         assert!(
             name == "16:15" || name == "16:30",
             "maximal segment {name} is not one of the busy quarters"
+        );
+    }
+
+    // Each maximum is one of the segments in the listing, shared rather than copied — so a caller
+    // can join the Estimates figures to the Segments row by identity, not by matching clock times.
+    for maximal in [energy_seg, count_seg] {
+        assert!(
+            report
+                .seg_estimates
+                .iter()
+                .any(|(seg, _)| Rc::ptr_eq(seg, maximal)),
+            "a maximal segment is a copy rather than one of the listed segments"
         );
     }
 }

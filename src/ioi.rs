@@ -64,7 +64,7 @@ impl IoiLength {
 
 /// What instants a local wall time names in [`TIME_ZONE_NAME`].
 ///
-/// Every case falls out of one question asked per offset in [`OFFSETS`]: read the wall time *as if*
+/// Every case falls out of one question asked per offset in [`TZ_OFFSETS`]: read the wall time *as if*
 /// at that fixed offset, and check the zone really is at that offset on the instant you land on.
 /// The number of offsets that survive says which situation this is, so the gap and the fold need no
 /// special-casing and a designator can be checked against the date rather than merely believed.

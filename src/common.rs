@@ -439,6 +439,18 @@ impl Add for Load {
 // Segment
 // ---------------------------------------------------------------------------
 
+/// A shared [`Segment`].
+///
+/// [`crate::IntervalEstimates`] names the same segment three times over — once in the full listing,
+/// and again as the maximum of each derivation — so sharing rather than copying is what keeps those
+/// references *the same segment* rather than three equal ones. A reader can then ask whether the
+/// two derivations peaked together with [`std::rc::Rc::ptr_eq`], instead of comparing clock times
+/// and hoping.
+///
+/// The saved copying is a secondary benefit and a real one: a `Segment` carries a
+/// `BTreeSet` of its sessions, and cloning that duplicates the tree.
+pub type RSegment = Rc<Segment>;
+
 #[derive(Debug, Clone, PartialEq)]
 /// A sub-interval of the interval-of-interest over which power estimates are computed.
 pub struct Segment {
