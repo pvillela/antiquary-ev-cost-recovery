@@ -156,6 +156,25 @@ pub fn excel_serial(ts: Timestamp) -> f64 {
     (ts.as_second() - EXCEL_EPOCH_UNIX_SECS) as f64 / SECS_PER_DAY
 }
 
+/// The serial for a civil date-time read exactly as written, with no offset applied.
+fn naive_serial(dt: DateTime) -> f64 {
+    excel_serial(
+        dt.to_zoned(TimeZone::UTC)
+            .expect("a civil date-time is never ambiguous in UTC")
+            .timestamp(),
+    )
+}
+
+/// The serial showing an instant's **local** wall clock, for the local-time columns.
+pub(crate) fn excel_serial_local(ts: Timestamp) -> f64 {
+    naive_serial(local_datetime(ts))
+}
+
+/// The serial for a bare date, for the billing-period column.
+pub(crate) fn excel_serial_date(d: Date) -> f64 {
+    naive_serial(d.at(0, 0, 0, 0))
+}
+
 // cargo test --package green-button --lib -- common::test --nocapture
 #[cfg(test)]
 mod test {

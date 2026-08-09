@@ -7,6 +7,9 @@ pub use common::*;
 mod espi;
 pub use espi::*;
 
+mod excel;
+pub use excel::*;
+
 pub mod holidays;
 
 mod peaks;
