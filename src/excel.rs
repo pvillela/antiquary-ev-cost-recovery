@@ -4,12 +4,15 @@
 //! its data rows, its column widths and its number formats together, so adding or moving a column
 //! is one edit rather than four that have to agree.
 //!
-//! Formatting reproduces `docs/reference/Green_Button_Peak_Values-template.xlsx`, the
-//! hand-formatted workbook the Python filled in place, down to the stored row heights and column
-//! widths. `umya-spreadsheet` is used rather than `rust_xlsxwriter` for exactly that reason: it
-//! stores both as `f64` written straight through, whereas `rust_xlsxwriter` models them as whole
-//! pixels — `(height * 4.0 / 3.0).round() as u32` — so the template's 13.8pt rows and 1.39-wide
-//! spacers are not representable there at all. It is also the crate `ev-peak-contrib` uses.
+//! Formatting follows `docs/reference/Green_Button_Peak_Values-template.xlsx`, the hand-formatted
+//! workbook the Python filled in place, but does not copy it slavishly: the reference stamps a row
+//! height on all 13,924 of its rows because that is what LibreOffice writes, and only three of them
+//! were ever a decision. See `docs/maintenance-manual.md` §7.
+//!
+//! `umya-spreadsheet` is used rather than `rust_xlsxwriter` because it stores row heights and
+//! column widths as `f64` written straight through, whereas `rust_xlsxwriter` models them as whole
+//! pixels — `(height * 4.0 / 3.0).round() as u32` — so the reference's 1.39-wide spacers are not
+//! representable there at all. It is also the crate `ev-peak-contrib` uses.
 //!
 //! Alignment follows the column: the template left-aligns everything in column A — title, header,
 //! machine name and data alike — and centres every other column. That is why [`Kind`] carries the
@@ -49,13 +52,29 @@ const LIGHT_RED: &str = "FFFFC7CE";
 
 const FONT: &str = "Arial";
 
-/// Row heights, in points, as the template stores them.
+/// Row heights, in points.
+///
+/// Only three rows in the workbook carry a stored height: the two titles and the wrapped header
+/// row. Everything else — the blank row, the machine-name row, and every data row on both sheets —
+/// takes [`DEFAULT_ROW_HEIGHT`].
+///
+/// The reference workbook instead stamps a height on all 13,924 of its rows, which is what
+/// LibreOffice writes rather than a decision anyone made. Reproducing that was a mistake: it buries
+/// the three heights that are actually chosen among thousands that are not, and it made the two
+/// files disagree in ways that only showed up on screen.
 const DEFAULT_ROW_HEIGHT: f64 = 13.8;
-const PEAK_TITLE_HEIGHT: f64 = 15.0;
-/// The `Peak_values` human-header row wraps, so it is taller.
-const PEAK_HEADER_HEIGHT: f64 = 23.85;
-const INTERVAL_TITLE_HEIGHT: f64 = 16.15;
-const INTERVAL_DATA_HEIGHT: f64 = 12.8;
+
+/// Both sheet titles, Arial 12 bold. The reference set `Interval_values` a point larger than
+/// `Peak_values` for no reason that survives inspection.
+const TITLE_HEIGHT: f64 = 15.0;
+const TITLE_FONT_SIZE: f64 = 12.0;
+
+/// `Peak_values` row 3 only: two wrapped lines of Arial 10 bold.
+///
+/// This is the one genuinely content-dependent height in the workbook. It fits two lines at the
+/// current column widths; widen a column enough that a header collapses to one line, or narrow one
+/// so it needs three, and this wants revisiting.
+const PEAK_HEADER_HEIGHT: f64 = 24.0;
 
 const DEFAULT_COL_WIDTH: f64 = 8.6796875;
 
@@ -313,16 +332,8 @@ fn write_sheet(
     // The title is left-aligned on both sheets regardless of what its column does: Peak_values
     // left-aligns its whole first column, Interval_values centres it, and both titles are left.
     set_title(sheet, title);
-    style_font(sheet, 1, 1, if machine_row { 12.0 } else { 13.0 }, true);
-    set_row_height(
-        sheet,
-        1,
-        if machine_row {
-            PEAK_TITLE_HEIGHT
-        } else {
-            INTERVAL_TITLE_HEIGHT
-        },
-    );
+    style_font(sheet, 1, 1, TITLE_FONT_SIZE, true);
+    set_row_height(sheet, 1, TITLE_HEIGHT);
 
     let header_row: u32 = 3;
     for (i, column) in columns.iter().enumerate() {
@@ -345,35 +356,16 @@ fn write_sheet(
             style_font(sheet, c, header_row + 1, 7.0, true);
         }
     }
-    // Every row gets an explicit height, including the ones that equal the default and the blank
-    // row 2. The reference does the same -- all 25 rows of Peak_values and all 13,899 of
-    // Interval_values carry one -- and relying on `defaultRowHeight` instead is not equivalent in
-    // practice: a row with no stored height is fitted to its content, and the content here is not
-    // what the sheet default assumes, so the rows render at a different height despite the file
-    // declaring the same default.
-    set_row_height(sheet, 2, DEFAULT_ROW_HEIGHT);
-    set_row_height(
-        sheet,
-        header_row,
-        if machine_row {
-            PEAK_HEADER_HEIGHT
-        } else {
-            DEFAULT_ROW_HEIGHT
-        },
-    );
+    // The wrapped human-header row is the only row below the title that needs its own height. The
+    // blank row, the machine-name row and every data row take the sheet default.
     if machine_row {
-        set_row_height(sheet, header_row + 1, DEFAULT_ROW_HEIGHT);
+        set_row_height(sheet, header_row, PEAK_HEADER_HEIGHT);
     }
 
     let first_data_row = if machine_row {
         header_row + 2
     } else {
         header_row + 1
-    };
-    let data_height = if machine_row {
-        DEFAULT_ROW_HEIGHT
-    } else {
-        INTERVAL_DATA_HEIGHT
     };
     for (r, row) in rows.iter().enumerate() {
         debug_assert_eq!(
@@ -382,7 +374,6 @@ fn write_sheet(
             "a row must match the column table"
         );
         let excel_row = first_data_row + r as u32;
-        set_row_height(sheet, excel_row, data_height);
         for (i, out) in row.iter().enumerate() {
             let c = i as u32 + 1;
             let kind = columns[i].kind;
@@ -416,19 +407,18 @@ fn set_text(sheet: &mut Worksheet, col: u32, row: u32, text: &str, kind: Kind, f
     style_cell(sheet, col, row, kind, fill);
 }
 
-/// Sets a row's height without marking it as a user-fixed height.
+/// Fixes a row's height.
 ///
 /// `Row::set_height` also sets `customHeight`, which tells the application the height was chosen
-/// deliberately and must not be auto-fitted. The reference workbook carries `customHeight="false"`
-/// on every row, so its rows are auto-fitted from their content. Leaving the flag set would give
-/// the same stored numbers but a different rendered result -- pinned rows here, content-fitted rows
-/// there -- which is precisely the kind of difference that shows up only when somebody opens both
-/// files and measures. umya omits the attribute entirely when it is false, which OOXML reads the
-/// same way.
+/// deliberately and must not be auto-fitted. That is wanted here: the only rows given a height are
+/// the three that are genuinely chosen, and a pinned height is what stops them drifting.
+///
+/// The rule the workbook follows, and the one to keep: a row either has a pinned height because
+/// somebody decided it, or it has no stored height at all and takes the sheet default. The
+/// half-state — a stored height that the application is free to re-fit — is what made two files
+/// with identical stored numbers render differently.
 fn set_row_height(sheet: &mut Worksheet, row: u32, height: f64) {
-    let dimension = sheet.row_dimension_mut(row);
-    dimension.set_height(height);
-    dimension.set_custom_height(false);
+    sheet.row_dimension_mut(row).set_height(height);
 }
 
 /// The sheet title in A1: always left, never a number format.

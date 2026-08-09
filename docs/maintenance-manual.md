@@ -114,32 +114,47 @@ window. It is not a calendar rule and cannot be computed; do not try.
 1.39-wide spacers are not representable in it at all. Left unset, its default row height of 15pt
 rendered every row at 0.53cm against the reference's 0.49.
 
-`umya-spreadsheet` stores both as `f64` written straight through, so the reproduction is exact:
-`defaultRowHeight` 13.8, heights 15 / 23.85 / 16.15 / 12.8, and every column width including the
-1.39 spacers. It is also the crate `ev-peak-contrib` uses.
+`umya-spreadsheet` stores both as `f64` written straight through. Every column width, including the
+1.39 spacers, reproduces exactly. It is also the crate `ev-peak-contrib` uses.
 
 The general lesson, if the writer is ever swapped again: a crate that models a dimension in pixels
 cannot reproduce a workbook authored in points, and the discrepancy will be small enough to look
 like rounding noise rather than a wrong choice.
 
-**Row heights must not be pinned.** `umya`'s `Row::set_height` also sets `customHeight`, which tells
-the application the height was chosen deliberately and must not be auto-fitted. The reference
-carries `customHeight="false"` on every row, so its rows are content-fitted. Setting the flag gives
-the same stored numbers and a different rendered height — a difference that shows up only when
-somebody opens both files and measures, which is how it was found. `set_row_height` in `excel.rs`
-clears the flag for exactly this reason; do not call `Row::set_height` directly.
+`openpyxl` warns "Workbook contains no default style" when reading the output: umya does not emit
+the default `cellStyleXfs` entry LibreOffice does. Excel and LibreOffice both open the file
+normally; only that one reader comments on it.
 
-Two differences from the reference remain, both harmless:
+## 7. Row heights: three, and only three
 
-- The reference writes an explicit `ht` on every row, including rows equal to the default, and
-  writes `customHeight="false"` explicitly. Rows equal to the default are left to
-  `defaultRowHeight` here, and the flag is omitted rather than written false. OOXML reads an absent
-  `customHeight` as false, so both render identically.
-- `openpyxl` warns "Workbook contains no default style" when reading the output: umya does not emit
-  the default `cellStyleXfs` entry LibreOffice does. Excel and LibreOffice both open the file
-  normally; only that one reader comments on it.
+The whole workbook stores three row heights:
 
-## 7. Alignment follows the column, not the row
+| Sheet | Row | Height | Why |
+|---|---|---|---|
+| both | *sheet default* | 13.8 | the body font, Arial 10 |
+| `Peak_values` | 1 | 15 | title, Arial 12 bold |
+| `Peak_values` | 3 | 24 | two wrapped lines of Arial 10 bold |
+| `Interval_values` | 1 | 15 | title, Arial 12 bold |
+
+Everything else — the blank row, the machine-name row, and all 13,896 data rows — has no stored
+height and takes `defaultRowHeight`.
+
+**The rule to keep:** a row either has a *pinned* height because somebody chose it, or it has no
+stored height at all. Never the half-state — a stored height the application is free to re-fit.
+That middle case is what made two files with identical stored numbers render at different heights,
+and it cost three rounds of chasing to find, because every XML comparison said they matched.
+
+The reference workbook stamps a height on all 13,924 of its rows. That is what LibreOffice writes,
+not a decision anyone made, and reproducing it was a mistake: it buries the three heights that are
+chosen among thousands that are not. Two figures in the reference are also accidents worth not
+copying — its `Interval_values` data rows are 12.8 where `Peak_values` uses 13.8 for the same font
+and content, and its two sheet titles are different sizes. Both are unified here.
+
+Row 3 of `Peak_values` is the one genuinely content-dependent height: 24pt fits two wrapped lines at
+the current column widths. Change a column width enough that a header collapses to one line or needs
+three, and it wants revisiting.
+
+## 8. Alignment follows the column, not the row
 
 The reference left-aligns column A throughout `Peak_values` — title, human header, machine name and
 data alike — and centres every other column. On `Interval_values` column A is centred, but its
@@ -149,7 +164,7 @@ with the A1 title left on both sheets as a special case.
 This was got wrong once, with the `billing_period_ending` header centred where the reference
 left-aligns it. The golden dumps now record horizontal alignment for exactly that reason.
 
-## 8. Regenerating the fixtures
+## 9. Regenerating the fixtures
 
 ```
 cargo build --release --example trim_fixture
@@ -173,7 +188,7 @@ cc93001f05f65c94a2991628eeb1aac65a37d576cf3c0bb171a6bfb3d8c66751  dst_fall.XML
 4de65d77fff82e9b5bcfc2accdace7d295b494ba09cb48263c1e34eca858c08b  dst_spring.XML
 ```
 
-## 9. The invoice fixture
+## 10. The invoice fixture
 
 `tests/fixtures/invoice_2026_06.txt` carries figures transcribed from a real bill. It is the only
 test whose expected values come from outside the software.
