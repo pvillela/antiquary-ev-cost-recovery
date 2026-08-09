@@ -314,11 +314,15 @@ fn write_sheet(
     // left-aligns its whole first column, Interval_values centres it, and both titles are left.
     set_title(sheet, title);
     style_font(sheet, 1, 1, if machine_row { 12.0 } else { 13.0 }, true);
-    sheet.row_dimension_mut(1).set_height(if machine_row {
-        PEAK_TITLE_HEIGHT
-    } else {
-        INTERVAL_TITLE_HEIGHT
-    });
+    set_row_height(
+        sheet,
+        1,
+        if machine_row {
+            PEAK_TITLE_HEIGHT
+        } else {
+            INTERVAL_TITLE_HEIGHT
+        },
+    );
 
     let header_row: u32 = 3;
     for (i, column) in columns.iter().enumerate() {
@@ -342,9 +346,7 @@ fn write_sheet(
         }
     }
     if machine_row {
-        sheet
-            .row_dimension_mut(header_row)
-            .set_height(PEAK_HEADER_HEIGHT);
+        set_row_height(sheet, header_row, PEAK_HEADER_HEIGHT);
     }
 
     let first_data_row = if machine_row {
@@ -360,9 +362,7 @@ fn write_sheet(
         );
         let excel_row = first_data_row + r as u32;
         if !machine_row {
-            sheet
-                .row_dimension_mut(excel_row)
-                .set_height(INTERVAL_DATA_HEIGHT);
+            set_row_height(sheet, excel_row, INTERVAL_DATA_HEIGHT);
         }
         for (i, out) in row.iter().enumerate() {
             let c = i as u32 + 1;
@@ -395,6 +395,21 @@ fn write_sheet(
 fn set_text(sheet: &mut Worksheet, col: u32, row: u32, text: &str, kind: Kind, fill: bool) {
     sheet.cell_mut((col, row)).set_value_string(text);
     style_cell(sheet, col, row, kind, fill);
+}
+
+/// Sets a row's height without marking it as a user-fixed height.
+///
+/// `Row::set_height` also sets `customHeight`, which tells the application the height was chosen
+/// deliberately and must not be auto-fitted. The reference workbook carries `customHeight="false"`
+/// on every row, so its rows are auto-fitted from their content. Leaving the flag set would give
+/// the same stored numbers but a different rendered result -- pinned rows here, content-fitted rows
+/// there -- which is precisely the kind of difference that shows up only when somebody opens both
+/// files and measures. umya omits the attribute entirely when it is false, which OOXML reads the
+/// same way.
+fn set_row_height(sheet: &mut Worksheet, row: u32, height: f64) {
+    let dimension = sheet.row_dimension_mut(row);
+    dimension.set_height(height);
+    dimension.set_custom_height(false);
 }
 
 /// The sheet title in A1: always left, never a number format.

@@ -173,6 +173,13 @@ fn dump_geometry(out: &mut String, sheet: &Worksheet) {
         .filter_map(|r| sheet.row_dimension(r).map(|d| (r, d.height())))
         .filter(|(_, h)| *h > 0.0)
         .collect();
+    // customHeight decides whether the application may auto-fit a row. The reference leaves every
+    // row auto-fitted, and a pinned row renders differently from the same stored number.
+    let pinned: Vec<u32> = (1..=sheet.highest_row())
+        .filter_map(|r| sheet.row_dimension(r).map(|d| (r, d.custom_height())))
+        .filter(|(_, custom)| *custom)
+        .map(|(r, _)| r)
+        .collect();
     let mut runs: Vec<String> = Vec::new();
     let mut i = 0;
     while i < heights.len() {
@@ -193,6 +200,7 @@ fn dump_geometry(out: &mut String, sheet: &Worksheet) {
         i += 1;
     }
     writeln!(out, "explicit row heights: {}", runs.join(" ")).unwrap();
+    writeln!(out, "rows pinned (customHeight): {}", pinned.len()).unwrap();
 }
 
 /// 1 -> A, 27 -> AA.

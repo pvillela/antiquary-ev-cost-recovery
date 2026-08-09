@@ -122,10 +122,19 @@ The general lesson, if the writer is ever swapped again: a crate that models a d
 cannot reproduce a workbook authored in points, and the discrepancy will be small enough to look
 like rounding noise rather than a wrong choice.
 
+**Row heights must not be pinned.** `umya`'s `Row::set_height` also sets `customHeight`, which tells
+the application the height was chosen deliberately and must not be auto-fitted. The reference
+carries `customHeight="false"` on every row, so its rows are content-fitted. Setting the flag gives
+the same stored numbers and a different rendered height — a difference that shows up only when
+somebody opens both files and measures, which is how it was found. `set_row_height` in `excel.rs`
+clears the flag for exactly this reason; do not call `Row::set_height` directly.
+
 Two differences from the reference remain, both harmless:
 
-- The reference writes an explicit `ht` on every row, including rows equal to the default. Those
-  are left to `defaultRowHeight` here, which renders identically.
+- The reference writes an explicit `ht` on every row, including rows equal to the default, and
+  writes `customHeight="false"` explicitly. Rows equal to the default are left to
+  `defaultRowHeight` here, and the flag is omitted rather than written false. OOXML reads an absent
+  `customHeight` as false, so both render identically.
 - `openpyxl` warns "Workbook contains no default style" when reading the output: umya does not emit
   the default `cellStyleXfs` entry LibreOffice does. Excel and LibreOffice both open the file
   normally; only that one reader comments on it.
