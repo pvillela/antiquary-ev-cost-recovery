@@ -1,7 +1,26 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "Bash(set -e)",
+      "Bash(git mv *)",
+      "Bash(git rm *)",
+      "Bash(cargo --version)",
+      "Bash(rustc --version)",
+      "Bash(timeout 60 cargo search rust_xlsxwriter --limit 3)",
+      "Bash(cargo fetch *)",
+      "Bash(cargo fmt *)",
+      "Bash(git add *)",
+      "Bash(git -c user.name=pvillela -c user.email=pvillela@gmail.com commit -q -F -)",
+      "Bash(git -c user.name=pvillela -c user.email=pvillela@gmail.com commit -q -m 'Add slow-tier check of the parser against the real export *)",
+      "Bash(git -c user.name=pvillela -c user.email=pvillela@gmail.com commit -q -m \"wip: billing periods and peaks\")",
+      "Bash(git -c user.name=pvillela -c user.email=pvillela@gmail.com commit -q --amend -F -)",
+      "Bash(git -c user.name=pvillela -c user.email=pvillela@gmail.com commit -q -m \"wip: CLI\")",
+      "Bash(cargo build *)",
+      "Bash(git -c user.name=pvillela -c user.email=pvillela@gmail.com commit -q -m \"wip: fixture trimmer\")",
+      "Bash(git -c user.name=pvillela -c user.email=pvillela@gmail.com commit -q -m \"wip: fixtures and goldens\")",
+      "Bash(UPDATE_GOLDEN=1 cargo test --test fixtures_golden)",
+      "Bash(git -c user.name=pvillela -c user.email=pvillela@gmail.com commit -q -m \"wip: invoice test\")"
     ]
   }
 }
