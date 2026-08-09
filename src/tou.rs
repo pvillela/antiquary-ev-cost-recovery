@@ -28,16 +28,11 @@
 //! complement of the weekday off-peak block, which is why [`is_off_peak`] can serve both. See
 //! `docs/maintenance-manual.md` for what would drive them apart.
 
-use std::sync::LazyLock;
-
-use ev_peak_contrib::{Interval, TIME_ZONE_NAME};
-use jiff::{Timestamp, civil::Date, tz::TimeZone};
+use ev_peak_contrib::Interval;
+use jiff::{Timestamp, civil::Date};
 
 use crate::holidays;
-
-static TIME_ZONE: LazyLock<TimeZone> = LazyLock::new(|| {
-    TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid time-zone name")
-});
+use crate::{local_date, local_hour, local_midnight};
 
 /// An Ontario Time-of-Use price period.
 ///
@@ -153,13 +148,13 @@ pub fn tou_partition(interval: Interval) -> Vec<(Tou, Interval)> {
     let mut pieces: Vec<(Tou, Interval)> = Vec::new();
     let mut day = local_date(interval.start);
 
-    while start_of_day(day) < end {
+    while local_midnight(day) < end {
         let schedule = day_schedule(day);
         for (i, &(hour, tou)) in schedule.iter().enumerate() {
-            let block_start = instant_at(day, hour);
+            let block_start = local_hour(day, hour);
             let block_end = match schedule.get(i + 1) {
-                Some(&(next_hour, _)) => instant_at(day, next_hour),
-                None => start_of_day(tomorrow(day)),
+                Some(&(next_hour, _)) => local_hour(day, next_hour),
+                None => local_midnight(tomorrow(day)),
             };
             let piece = interval.intersection(&Interval::from_start_end(block_start, block_end));
             if piece.is_empty() {
@@ -204,28 +199,9 @@ pub fn is_off_peak(interval: Interval) -> bool {
         .all(|(tou, _)| *tou == Tou::OffPeak)
 }
 
-fn local_date(ts: Timestamp) -> Date {
-    ts.to_zoned(TIME_ZONE.clone()).date()
-}
-
 fn tomorrow(d: Date) -> Date {
     d.tomorrow()
         .expect("a meter reading never sits on the last representable date")
-}
-
-fn start_of_day(d: Date) -> Timestamp {
-    instant_at(d, 0)
-}
-
-/// The instant a given local hour begins on a given local date.
-///
-/// The hours in use are 0, 7, 11, 17 and 19, none of which is 02:00, so this never meets a
-/// daylight-saving gap or fold and the disambiguation jiff applies is never exercised.
-fn instant_at(d: Date, hour: u8) -> Timestamp {
-    d.at(hour as i8, 0, 0, 0)
-        .to_zoned(TIME_ZONE.clone())
-        .expect("TOU boundaries never fall in a daylight-saving transition")
-        .timestamp()
 }
 
 // cargo test --package green-button --lib -- tou::test --nocapture
@@ -235,11 +211,7 @@ mod test {
     use jiff::civil::date;
 
     fn local(y: i16, m: i8, d: i8, h: i8) -> Timestamp {
-        date(y, m, d)
-            .at(h, 0, 0, 0)
-            .to_zoned(TIME_ZONE.clone())
-            .unwrap()
-            .timestamp()
+        local_hour(date(y, m, d), h as u8)
     }
 
     /// The hour beginning at local `h`. Built from a duration rather than from `h + 1`, so that it
@@ -393,7 +365,7 @@ mod test {
         // 06:30-07:30 on a summer weekday crosses the 07:00 off-peak/mid-peak boundary.
         let start = date(2026, 6, 15)
             .at(6, 30, 0, 0)
-            .to_zoned(TIME_ZONE.clone())
+            .to_zoned(crate::TIME_ZONE.clone())
             .unwrap()
             .timestamp();
         let straddling = Interval::new(start, std::time::Duration::from_secs(3600));

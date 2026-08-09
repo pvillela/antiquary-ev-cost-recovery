@@ -8,8 +8,44 @@
 //! 744 floating-point divisions before summing them loses that agreement.
 
 use std::fmt;
+use std::sync::LazyLock;
 
-use jiff::Timestamp;
+use ev_peak_contrib::TIME_ZONE_NAME;
+use jiff::{Timestamp, civil::Date, civil::DateTime, tz::TimeZone};
+
+/// Resolved once. Every local-time question in the crate goes through here, so there is one answer
+/// to "which zone" rather than one per module.
+pub(crate) static TIME_ZONE: LazyLock<TimeZone> = LazyLock::new(|| {
+    TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid time-zone name")
+});
+
+/// The local calendar date an instant falls on.
+pub(crate) fn local_date(ts: Timestamp) -> Date {
+    ts.to_zoned(TIME_ZONE.clone()).date()
+}
+
+/// The local wall-clock reading of an instant, for the workbook's local-time columns.
+pub(crate) fn local_datetime(ts: Timestamp) -> DateTime {
+    ts.to_zoned(TIME_ZONE.clone()).datetime()
+}
+
+/// The instant a given local hour begins on a given local date.
+///
+/// # Panics
+///
+/// Panics if the local time falls in a daylight-saving gap or fold. Callers pass 0, 7, 11, 17 or
+/// 19; Ontario's transitions are at 02:00, so none of them can.
+pub(crate) fn local_hour(d: Date, hour: u8) -> Timestamp {
+    d.at(hour as i8, 0, 0, 0)
+        .to_zoned(TIME_ZONE.clone())
+        .expect("callers pass hours that never fall in a daylight-saving transition")
+        .timestamp()
+}
+
+/// The instant a local date begins.
+pub(crate) fn local_midnight(d: Date) -> Timestamp {
+    local_hour(d, 0)
+}
 
 /// Excel's day zero for the 1900 date system, as a Unix timestamp: 1899-12-30T00:00:00Z.
 /// Verified by [`test::excel_epoch_matches_jiff`].
@@ -37,6 +73,16 @@ impl Reading {
     /// surrounding data implies should exist.
     pub fn is_empty(&self) -> bool {
         self.kwh.is_none() && self.kw.is_none() && self.kva.is_none()
+    }
+
+    /// Whether the interval starts on a whole hour.
+    ///
+    /// Only aligned intervals are eligible to be a reported peak, which is what lets the TOU
+    /// column always hold one value: Ontario's price-period boundaries are all on the hour, so an
+    /// aligned hour cannot straddle two. Ontario's UTC offsets are whole hours in both seasons, so
+    /// a whole hour in UTC is a whole hour locally.
+    pub fn is_aligned(&self) -> bool {
+        self.start.as_second().rem_euclid(3600) == 0
     }
 }
 
