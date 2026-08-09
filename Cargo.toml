@@ -9,12 +9,12 @@ edition = "2024"
 # that crate, deferred until the two projects are consolidated.
 ev-peak-contrib = { path = "../ev-peak-contrib" }
 jiff = "0.2.35"
+# Stores row heights and column widths as f64 written straight through, which is what lets this
+# reproduce the reference workbook exactly. rust_xlsxwriter models both as whole pixels and cannot
+# represent the template's 13.8pt rows or 1.39-wide spacers. Also the crate ev-peak-contrib uses.
+umya-spreadsheet = "3.0.1"
 # Whole-document tree rather than a streaming reader: the ESPI join needs random access, since an
 # IntervalBlock resolves to its ReadingType only through a MeterReading entry that may appear
 # anywhere in the feed.
 roxmltree = "0.21.1"
-rust_xlsxwriter = "0.97.1"
 
-[dev-dependencies]
-# Write-side only above; the golden-dump tests need to read a generated workbook back.
-umya-spreadsheet = "3.0.1"

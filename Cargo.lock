@@ -1654,7 +1654,6 @@ dependencies = [
  "ev-peak-contrib",
  "jiff",
  "roxmltree",
- "rust_xlsxwriter",
  "umya-spreadsheet",
 ]
 
@@ -3240,15 +3239,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "rust_xlsxwriter"
-version = "0.97.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "210c9bee5c2d1df2c3a4fa1fccf3647a37bea205a35d5775491731b271bff19b"
-dependencies = [
- "zip",
 ]
 
 [[package]]

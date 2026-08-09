@@ -106,15 +106,41 @@ monthly peak. The `civic_holiday` fixture exists to make that failure loud.
 The ESA's substitute-day entitlement is negotiated per employee within a three- or twelve-month
 window. It is not a calendar rule and cannot be computed; do not try.
 
-## 6. Column widths do not reproduce exactly
+## 6. Why umya-spreadsheet, and what still differs
 
-`rust_xlsxwriter` adds five pixels of padding to a column width before storing it, and the widths in
-the `COLUMNS` tables are the values the reference workbook stores. `WIDTH_PADDING` takes the padding
-back off, which lands most columns exactly. The narrow 1.39 spacers come out at 1.14 — about two
-pixels on a decorative gap — because the conversion rounds to whole pixels. Closing that would mean
-depending on a library internal. It is not worth it.
+`rust_xlsxwriter` was the first choice and was wrong. It models row heights and column widths as
+**whole pixels** — `set_row_height` is `(height * 4.0 / 3.0).round() as u32`, stored back as
+`0.75 x pixels` — so the reference workbook's 13.8pt rows, 12.8pt data rows, 23.85pt header and
+1.39-wide spacers are not representable in it at all. Left unset, its default row height of 15pt
+rendered every row at 0.53cm against the reference's 0.49.
 
-## 7. Regenerating the fixtures
+`umya-spreadsheet` stores both as `f64` written straight through, so the reproduction is exact:
+`defaultRowHeight` 13.8, heights 15 / 23.85 / 16.15 / 12.8, and every column width including the
+1.39 spacers. It is also the crate `ev-peak-contrib` uses.
+
+The general lesson, if the writer is ever swapped again: a crate that models a dimension in pixels
+cannot reproduce a workbook authored in points, and the discrepancy will be small enough to look
+like rounding noise rather than a wrong choice.
+
+Two differences from the reference remain, both harmless:
+
+- The reference writes an explicit `ht` on every row, including rows equal to the default. Those
+  are left to `defaultRowHeight` here, which renders identically.
+- `openpyxl` warns "Workbook contains no default style" when reading the output: umya does not emit
+  the default `cellStyleXfs` entry LibreOffice does. Excel and LibreOffice both open the file
+  normally; only that one reader comments on it.
+
+## 7. Alignment follows the column, not the row
+
+The reference left-aligns column A throughout `Peak_values` — title, human header, machine name and
+data alike — and centres every other column. On `Interval_values` column A is centred, but its
+title is still left. So the rule encoded in `Kind::horizontal` is "alignment follows the column",
+with the A1 title left on both sheets as a special case.
+
+This was got wrong once, with the `billing_period_ending` header centred where the reference
+left-aligns it. The golden dumps now record horizontal alignment for exactly that reason.
+
+## 8. Regenerating the fixtures
 
 ```
 cargo build --release --example trim_fixture
@@ -138,7 +164,7 @@ cc93001f05f65c94a2991628eeb1aac65a37d576cf3c0bb171a6bfb3d8c66751  dst_fall.XML
 4de65d77fff82e9b5bcfc2accdace7d295b494ba09cb48263c1e34eca858c08b  dst_spring.XML
 ```
 
-## 8. The invoice fixture
+## 9. The invoice fixture
 
 `tests/fixtures/invoice_2026_06.txt` carries figures transcribed from a real bill. It is the only
 test whose expected values come from outside the software.

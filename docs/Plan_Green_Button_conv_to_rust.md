@@ -56,12 +56,15 @@ its spacer columns is exactly what it is for.
 
 ## Dependencies
 
-- `rust_xlsxwriter` — write-only, real `Format` objects, fast on 13,896 rows.
+- `umya-spreadsheet` — stores row heights and column widths as `f64` written straight through,
+  which is what makes exact reproduction of the reference workbook possible. `rust_xlsxwriter` was
+  tried first and rejected: it models both as whole pixels and cannot represent the reference's
+  13.8pt rows or 1.39-wide spacers.
 - `roxmltree` — whole-document tree; the two-pass href join wants random access.
 - `jiff` 0.2 — matching `ev-peak-contrib`.
 - `ev-peak-contrib` — **path dependency**, GUI stack included for now (no `[features]` there yet;
   refine later).
-- dev: `umya-spreadsheet` — reads generated xlsx back for golden dumps.
+  It also reads xlsx back, which the golden-dump tests need.
 
 Errors follow the house split: `Box<dyn Error>` on I/O paths, `Result<T, String>` for validation.
 No logging crate; `eprintln!` from `src/bin/` only.

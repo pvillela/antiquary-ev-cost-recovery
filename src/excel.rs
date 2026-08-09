@@ -4,24 +4,38 @@
 //! its data rows, its column widths and its number formats together, so adding or moving a column
 //! is one edit rather than four that have to agree.
 //!
-//! Formatting reproduces `bak/Green_Button_Peak_Values-template.xlsx`, the hand-formatted workbook
-//! the Python filled in place. Three deliberate departures from it: the `kW at interval` header
-//! over `max_kva_kw` is corrected (the template said `kVA at interval`, which is the wrong unit),
-//! the `kw` and `kva` columns on `Interval_values` get the same explicit width as `kwh` instead of
-//! inheriting the default, and machine names are `lower_snake_case` throughout so that reading a
-//! sheet back by column name cannot be defeated by a capitalisation difference.
+//! Formatting reproduces `docs/reference/Green_Button_Peak_Values-template.xlsx`, the
+//! hand-formatted workbook the Python filled in place, down to the stored row heights and column
+//! widths. `umya-spreadsheet` is used rather than `rust_xlsxwriter` for exactly that reason: it
+//! stores both as `f64` written straight through, whereas `rust_xlsxwriter` models them as whole
+//! pixels — `(height * 4.0 / 3.0).round() as u32` — so the template's 13.8pt rows and 1.39-wide
+//! spacers are not representable there at all. It is also the crate `ev-peak-contrib` uses.
+//!
+//! Alignment follows the column: the template left-aligns everything in column A — title, header,
+//! machine name and data alike — and centres every other column. That is why [`Kind`] carries the
+//! alignment rather than the row deciding it.
+//!
+//! Three deliberate departures from the template: the `kW at interval` header over `max_kva_kw` is
+//! corrected (the template said `kVA at interval`, which is the wrong unit), the `kw` and `kva`
+//! columns on `Interval_values` get the same explicit width as `kwh` instead of inheriting the
+//! default, and machine names are `lower_snake_case` throughout so that reading a sheet back by
+//! column name cannot be defeated by a capitalisation difference.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::path::Path;
 
-use rust_xlsxwriter::{Color, Format, FormatAlign, Workbook, Worksheet};
+use umya_spreadsheet::{
+    HorizontalAlignmentValues, Pane, PaneStateValues, PaneValues, VerticalAlignmentValues,
+    Worksheet, writer,
+};
 
 use crate::{
     Anomaly, Feed, Peak, PeriodValues, Reading, excel_serial, excel_serial_date,
     excel_serial_local, period_values,
 };
 
+const GENERAL_FORMAT: &str = "General";
 const DATE_FORMAT: &str = "yyyy/mm/dd";
 const COUNT_FORMAT: &str = "#,##0";
 const NUM_FORMAT: &str = "#,##0.000";
@@ -31,27 +45,22 @@ const UTC_DT_FORMAT: &str = r"yyyy/mm/dd\ hh:mm";
 
 /// Excel's stock "Light Red Fill" background. Applied to an interval count that is not what a
 /// complete period should hold, and to any non-empty anomalies cell.
-const LIGHT_RED: Color = Color::RGB(0xFF_C7CE);
+const LIGHT_RED: &str = "FFFFC7CE";
 
 const FONT: &str = "Arial";
 
-/// Padding `rust_xlsxwriter` adds to a column width before storing it: five pixels over the default
-/// font's seven-pixel digit width.
-///
-/// The widths in [`PEAK_COLUMNS`] and [`INTERVAL_COLUMNS`] are the values the template stores, read
-/// straight out of its `<cols>` element. Passing them through unadjusted would make every column
-/// about three quarters of a character wider than the workbook being reproduced, so the padding is
-/// taken back off.
-///
-/// This does not land exactly on every column, because the conversion rounds to whole pixels on the
-/// way. Most reproduce the template's stored width to the hundredth; the narrow 1.39 spacers come
-/// out at 1.14, a difference of about two pixels on a decorative gap. Closing that last step would
-/// mean reverse-engineering the rounding, which is a library internal and not worth pinning code
-/// to.
-const WIDTH_PADDING: f64 = 5.0 / 7.0;
+/// Row heights, in points, as the template stores them.
+const DEFAULT_ROW_HEIGHT: f64 = 13.8;
+const PEAK_TITLE_HEIGHT: f64 = 15.0;
+/// The `Peak_values` human-header row wraps, so it is taller.
+const PEAK_HEADER_HEIGHT: f64 = 23.85;
+const INTERVAL_TITLE_HEIGHT: f64 = 16.15;
+const INTERVAL_DATA_HEIGHT: f64 = 12.8;
 
-/// How a column is formatted. Every column's number format and alignment follows from this.
-#[derive(Clone, Copy, PartialEq, Eq)]
+const DEFAULT_COL_WIDTH: f64 = 8.6796875;
+
+/// How a column is formatted. Both its number format and its alignment follow from this.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
     Date,
     Count,
@@ -61,6 +70,28 @@ enum Kind {
     Text,
     /// A narrow empty column separating the value groups, as in the template.
     Spacer,
+}
+
+impl Kind {
+    fn number_format(self) -> &'static str {
+        match self {
+            Self::Date => DATE_FORMAT,
+            Self::Count => COUNT_FORMAT,
+            Self::Num => NUM_FORMAT,
+            Self::LocalDt => LOCAL_DT_FORMAT,
+            Self::UtcDt => UTC_DT_FORMAT,
+            Self::Text | Self::Spacer => GENERAL_FORMAT,
+        }
+    }
+
+    /// The template left-aligns the billing-period column and centres everything else, in every
+    /// row of the sheet rather than only in the data rows.
+    fn horizontal(self) -> HorizontalAlignmentValues {
+        match self {
+            Self::Date => HorizontalAlignmentValues::Left,
+            _ => HorizontalAlignmentValues::Center,
+        }
+    }
 }
 
 struct Col {
@@ -239,21 +270,11 @@ pub fn write_workbook(path: &Path, feed: &Feed) -> Result<WriteReport, Box<dyn E
         }
     }
 
-    let styles = Styles::new();
-    let mut workbook = Workbook::new();
+    let mut book = umya_spreadsheet::new_file_empty_worksheet();
 
     let peak_rows: Vec<Vec<Out>> = periods.iter().rev().map(|p| peak_row(p, feed)).collect();
-    let sheet = workbook.add_worksheet();
-    sheet.set_name("Peak_values")?;
-    write_sheet(
-        sheet,
-        "PEAK VALUES",
-        &styles.title_peak,
-        PEAK_COLUMNS,
-        true,
-        &peak_rows,
-        &styles,
-    )?;
+    let sheet = book.new_sheet("Peak_values")?;
+    write_sheet(sheet, "PEAK VALUES", PEAK_COLUMNS, true, &peak_rows);
 
     let interval_rows: Vec<Vec<Out>> = readings
         .rows
@@ -261,88 +282,17 @@ pub fn write_workbook(path: &Path, feed: &Feed) -> Result<WriteReport, Box<dyn E
         .rev()
         .map(|r| interval_row(r, readings.anomalies.get(&r.start), feed))
         .collect();
-    let sheet = workbook.add_worksheet();
-    sheet.set_name("Interval_values")?;
+    let sheet = book.new_sheet("Interval_values")?;
     write_sheet(
         sheet,
         "INTERVAL VALUES",
-        &styles.title_interval,
         INTERVAL_COLUMNS,
         false,
         &interval_rows,
-        &styles,
-    )?;
+    );
 
-    workbook.save(path)?;
+    writer::xlsx::write(&book, path)?;
     Ok(report)
-}
-
-/// Every format the workbook uses, built once.
-struct Styles {
-    title_peak: Format,
-    title_interval: Format,
-    header: Format,
-    machine: Format,
-    date: Format,
-    count: Format,
-    count_filled: Format,
-    num: Format,
-    local_dt: Format,
-    utc_dt: Format,
-    text: Format,
-    text_filled: Format,
-}
-
-impl Styles {
-    fn new() -> Self {
-        let base = || Format::new().set_font_name(FONT).set_font_size(10);
-        let centred = || base().set_align(FormatAlign::Center);
-        Self {
-            title_peak: Format::new()
-                .set_font_name(FONT)
-                .set_font_size(12)
-                .set_bold(),
-            title_interval: Format::new()
-                .set_font_name(FONT)
-                .set_font_size(13)
-                .set_bold(),
-            header: base()
-                .set_bold()
-                .set_align(FormatAlign::Center)
-                .set_align(FormatAlign::Top)
-                .set_text_wrap(),
-            machine: Format::new()
-                .set_font_name(FONT)
-                .set_font_size(7)
-                .set_bold(),
-            date: base()
-                .set_num_format(DATE_FORMAT)
-                .set_align(FormatAlign::Left),
-            count: centred().set_num_format(COUNT_FORMAT),
-            count_filled: centred()
-                .set_num_format(COUNT_FORMAT)
-                .set_background_color(LIGHT_RED),
-            num: centred().set_num_format(NUM_FORMAT),
-            local_dt: centred().set_num_format(LOCAL_DT_FORMAT),
-            utc_dt: centred().set_num_format(UTC_DT_FORMAT),
-            text: centred(),
-            text_filled: centred().set_background_color(LIGHT_RED),
-        }
-    }
-
-    fn for_cell(&self, kind: Kind, fill: bool) -> Option<&Format> {
-        Some(match (kind, fill) {
-            (Kind::Spacer, _) => return None,
-            (Kind::Date, _) => &self.date,
-            (Kind::Count, false) => &self.count,
-            (Kind::Count, true) => &self.count_filled,
-            (Kind::Num, _) => &self.num,
-            (Kind::LocalDt, _) => &self.local_dt,
-            (Kind::UtcDt, _) => &self.utc_dt,
-            (Kind::Text, false) => &self.text,
-            (Kind::Text, true) => &self.text_filled,
-        })
-    }
 }
 
 /// Writes a title row, header row(s) and the data, driven by the column table.
@@ -352,30 +302,50 @@ impl Styles {
 fn write_sheet(
     sheet: &mut Worksheet,
     title: &str,
-    title_format: &Format,
     columns: &[Col],
     machine_row: bool,
     rows: &[Vec<Out>],
-    styles: &Styles,
-) -> Result<(), Box<dyn Error>> {
-    sheet.write_string_with_format(0, 0, title, title_format)?;
+) {
+    let properties = sheet.sheet_format_properties_mut();
+    properties.set_default_row_height(DEFAULT_ROW_HEIGHT);
+    properties.set_default_column_width(DEFAULT_COL_WIDTH);
 
-    let header_row: u32 = 2;
+    // The title is left-aligned on both sheets regardless of what its column does: Peak_values
+    // left-aligns its whole first column, Interval_values centres it, and both titles are left.
+    set_title(sheet, title);
+    style_font(sheet, 1, 1, if machine_row { 12.0 } else { 13.0 }, true);
+    sheet.row_dimension_mut(1).set_height(if machine_row {
+        PEAK_TITLE_HEIGHT
+    } else {
+        INTERVAL_TITLE_HEIGHT
+    });
+
+    let header_row: u32 = 3;
     for (i, column) in columns.iter().enumerate() {
-        let c = i as u16;
-        sheet.set_column_width(c, column.width - WIDTH_PADDING)?;
+        let c = i as u32 + 1;
+        sheet
+            .column_dimension_mut(&column_letters(c))
+            .set_width(column.width);
         if column.kind == Kind::Spacer {
             continue;
         }
-        sheet.write_string_with_format(header_row, c, column.header, &styles.header)?;
+        set_label(sheet, c, header_row, column.header, column.kind);
+        style_font(sheet, c, header_row, 10.0, true);
+        // The human-header row wraps and sits at the top of its cell; nothing else does.
+        let alignment = sheet.style_mut((c, header_row)).alignment_mut();
+        alignment.set_vertical(VerticalAlignmentValues::Top);
+        alignment.set_wrap_text(true);
+
         if machine_row {
-            sheet.write_string_with_format(header_row + 1, c, column.machine, &styles.machine)?;
+            set_label(sheet, c, header_row + 1, column.machine, column.kind);
+            style_font(sheet, c, header_row + 1, 7.0, true);
         }
     }
-
-    // Match the template's header geometry: the wrapped header row is taller, the rest are not.
-    sheet.set_row_height(0, if machine_row { 15.0 } else { 16.15 })?;
-    sheet.set_row_height(header_row, if machine_row { 24.4 } else { 13.8 })?;
+    if machine_row {
+        sheet
+            .row_dimension_mut(header_row)
+            .set_height(PEAK_HEADER_HEIGHT);
+    }
 
     let first_data_row = if machine_row {
         header_row + 2
@@ -389,31 +359,104 @@ fn write_sheet(
             "a row must match the column table"
         );
         let excel_row = first_data_row + r as u32;
+        if !machine_row {
+            sheet
+                .row_dimension_mut(excel_row)
+                .set_height(INTERVAL_DATA_HEIGHT);
+        }
         for (i, out) in row.iter().enumerate() {
-            let c = i as u16;
-            let Some(format) = styles.for_cell(columns[i].kind, out.fill) else {
+            let c = i as u32 + 1;
+            let kind = columns[i].kind;
+            if kind == Kind::Spacer {
                 continue;
-            };
+            }
             match &out.cell {
                 Cell::Blank => {
                     if out.fill {
-                        sheet.write_blank(excel_row, c, format)?;
+                        style_cell(sheet, c, excel_row, kind, true);
                     }
                 }
                 Cell::Num(v) => {
-                    sheet.write_number_with_format(excel_row, c, *v, format)?;
+                    sheet.cell_mut((c, excel_row)).set_value_number(*v);
+                    style_cell(sheet, c, excel_row, kind, out.fill);
+                    style_font(sheet, c, excel_row, 10.0, false);
                 }
                 Cell::Text(s) => {
-                    sheet.write_string_with_format(excel_row, c, s, format)?;
+                    set_text(sheet, c, excel_row, s, kind, out.fill);
+                    style_font(sheet, c, excel_row, 10.0, false);
                 }
             }
         }
     }
 
-    // One column and three rows, as in the template. Peak_values freezes at row 3 even though its
-    // data starts at row 5, so the machine-name row scrolls away and the human headers stay.
-    sheet.set_freeze_panes(3, 1)?;
-    Ok(())
+    freeze_panes(sheet);
+}
+
+fn set_text(sheet: &mut Worksheet, col: u32, row: u32, text: &str, kind: Kind, fill: bool) {
+    sheet.cell_mut((col, row)).set_value_string(text);
+    style_cell(sheet, col, row, kind, fill);
+}
+
+/// The sheet title in A1: always left, never a number format.
+fn set_title(sheet: &mut Worksheet, title: &str) {
+    sheet.cell_mut((1u32, 1u32)).set_value_string(title);
+    let style = sheet.style_mut((1u32, 1u32));
+    style.number_format_mut().set_format_code(GENERAL_FORMAT);
+    style
+        .alignment_mut()
+        .set_horizontal(HorizontalAlignmentValues::Left);
+}
+
+/// A header or machine-name cell: the column's alignment, but no number format.
+///
+/// The template does carry the column's number format on these cells, an artefact of how
+/// LibreOffice applies column formatting, and its own column A carries `General` regardless. A
+/// number format has no effect on a text cell, so reproducing that would mean a special case for
+/// no visible difference.
+fn set_label(sheet: &mut Worksheet, col: u32, row: u32, text: &str, kind: Kind) {
+    sheet.cell_mut((col, row)).set_value_string(text);
+    let style = sheet.style_mut((col, row));
+    style.number_format_mut().set_format_code(GENERAL_FORMAT);
+    style.alignment_mut().set_horizontal(kind.horizontal());
+}
+
+fn style_cell(sheet: &mut Worksheet, col: u32, row: u32, kind: Kind, fill: bool) {
+    let style = sheet.style_mut((col, row));
+    style
+        .number_format_mut()
+        .set_format_code(kind.number_format());
+    style.alignment_mut().set_horizontal(kind.horizontal());
+    if fill {
+        style.set_background_color(LIGHT_RED);
+    }
+}
+
+fn style_font(sheet: &mut Worksheet, col: u32, row: u32, size: f64, bold: bool) {
+    let font = sheet.style_mut((col, row)).font_mut();
+    font.set_name(FONT);
+    font.set_size(size);
+    font.set_bold(bold);
+}
+
+/// One column and three rows, as in the template. `Peak_values` freezes at row 3 even though its
+/// data starts at row 5, so the machine-name row scrolls away and the human headers stay.
+fn freeze_panes(sheet: &mut Worksheet) {
+    let mut top_left = umya_spreadsheet::Coordinate::default();
+    top_left.set_col_num(2);
+    top_left.set_row_num(4);
+
+    let mut pane = Pane::default();
+    pane.set_horizontal_split(1.0);
+    pane.set_vertical_split(3.0);
+    pane.set_top_left_cell(top_left);
+    pane.set_active_pane(PaneValues::BottomRight);
+    pane.set_state(PaneStateValues::Frozen);
+
+    let views = sheet.sheet_views_mut().sheet_view_list_mut();
+    if views.is_empty() {
+        views.push(umya_spreadsheet::SheetView::default());
+    }
+    views[0].set_pane(pane);
 }
 
 fn peak_row(v: &PeriodValues, feed: &Feed) -> Vec<Out> {
@@ -495,6 +538,17 @@ fn format_counts(counts: &BTreeMap<Anomaly, usize>) -> String {
         .join(",")
 }
 
+/// 1 -> A, 27 -> AA.
+fn column_letters(mut index: u32) -> String {
+    let mut letters = String::new();
+    while index > 0 {
+        let rem = (index - 1) % 26;
+        letters.insert(0, (b'A' + rem as u8) as char);
+        index = (index - 1) / 26;
+    }
+    letters
+}
+
 // cargo test --package green-button --lib -- excel::test --nocapture
 #[cfg(test)]
 mod test {
@@ -553,10 +607,38 @@ mod test {
         );
     }
 
+    /// The template left-aligns the billing-period column throughout and centres everything else.
+    #[test]
+    fn only_the_billing_period_column_is_left_aligned() {
+        assert_eq!(Kind::Date.horizontal(), HorizontalAlignmentValues::Left);
+        for kind in [
+            Kind::Count,
+            Kind::Num,
+            Kind::LocalDt,
+            Kind::UtcDt,
+            Kind::Text,
+        ] {
+            assert_eq!(kind.horizontal(), HorizontalAlignmentValues::Center);
+        }
+        assert_eq!(PEAK_COLUMNS[0].kind, Kind::Date);
+        assert_eq!(
+            PEAK_COLUMNS.iter().filter(|c| c.kind == Kind::Date).count(),
+            1
+        );
+    }
+
     #[test]
     fn anomaly_counts_render_with_their_totals() {
         let counts = BTreeMap::from([(Anomaly::MissingKw, 2), (Anomaly::MissingInterval, 3)]);
         assert_eq!(format_counts(&counts), "MissingKw(2),MissingInterval(3)");
         assert_eq!(format_counts(&BTreeMap::new()), "");
+    }
+
+    #[test]
+    fn column_letters_pass_z() {
+        assert_eq!(column_letters(1), "A");
+        assert_eq!(column_letters(26), "Z");
+        assert_eq!(column_letters(27), "AA");
+        assert_eq!(column_letters(30), "AD");
     }
 }

@@ -23,6 +23,12 @@
 //! `Peak_values` is dumped in full -- it is three data rows. `Interval_values` is dumped as its
 //! header, its first and last few rows, its row count and its column totals: 792 rows of it would
 //! be 4,700 lines nobody would read, while the totals still catch a change anywhere in the middle.
+//!
+//! Each cell records its value, number format, horizontal alignment and fill, and each sheet
+//! records its default and explicit row heights. Alignment and row heights are here because both
+//! have already been got wrong once -- the billing-period column was centred where the reference
+//! workbook left-aligns it, and every row was 15pt where the reference is 13.8 -- and neither
+//! showed up in a dump that recorded only values and number formats.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -87,6 +93,7 @@ fn dump(path: &Path) -> String {
         .sheet_by_name("Peak_values")
         .expect("Peak_values sheet");
     out.push_str("== Peak_values ==\n");
+    dump_geometry(&mut out, peak);
     for row in 1..=peak.highest_row() {
         dump_row(&mut out, peak, row);
     }
@@ -101,6 +108,7 @@ fn dump(path: &Path) -> String {
         last.saturating_sub(3)
     )
     .unwrap();
+    dump_geometry(&mut out, interval);
     for row in 1..=6.min(last) {
         dump_row(&mut out, interval, row);
     }
@@ -130,6 +138,10 @@ fn dump_row(out: &mut String, sheet: &Worksheet, row: u32) {
             .number_format()
             .map(|f| f.format_code())
             .unwrap_or_default();
+        let align = style
+            .alignment()
+            .map(|a| format!("{:?}", a.horizontal()))
+            .unwrap_or_else(|| "-".to_string());
         let fill = match style.background_color() {
             Some(c) => format!("  FILL:{:?}", c.argb()),
             None => String::new(),
@@ -139,11 +151,48 @@ fn dump_row(out: &mut String, sheet: &Worksheet, row: u32) {
         }
         writeln!(
             out,
-            "{}{row}  {value}  [{format}]{fill}",
+            "{}{row}  {value}  [{format}] {align}{fill}",
             column_letters(col)
         )
         .unwrap();
     }
+}
+
+/// Default row height, and any row that overrides it. Both were wrong once and invisible to a dump
+/// that recorded only cell contents.
+fn dump_geometry(out: &mut String, sheet: &Worksheet) {
+    writeln!(
+        out,
+        "default row height: {}",
+        sheet.sheet_format_properties().default_row_height()
+    )
+    .unwrap();
+    // Collapsed into runs. Interval_values sets an explicit height on all 792 data rows, and
+    // listing them one by one would bury the two header rows that actually differ.
+    let heights: Vec<(u32, f64)> = (1..=sheet.highest_row())
+        .filter_map(|r| sheet.row_dimension(r).map(|d| (r, d.height())))
+        .filter(|(_, h)| *h > 0.0)
+        .collect();
+    let mut runs: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < heights.len() {
+        let (start, height) = heights[i];
+        let mut end = start;
+        while i + 1 < heights.len()
+            && heights[i + 1].1 == height
+            && heights[i + 1].0 == heights[i].0 + 1
+        {
+            i += 1;
+            end = heights[i].0;
+        }
+        runs.push(if start == end {
+            format!("{start}:{height}")
+        } else {
+            format!("{start}-{end}:{height}")
+        });
+        i += 1;
+    }
+    writeln!(out, "explicit row heights: {}", runs.join(" ")).unwrap();
 }
 
 /// 1 -> A, 27 -> AA.

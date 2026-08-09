@@ -1,163 +1,167 @@
 == Peak_values ==
-A1  PEAK VALUES  [General]
-A3  Billing period ending  [General]
-B3  Number of intervals  [General]
-D3  kWh used  [General]
-F3  Demand kW  [General]
-G3  Demand kW interval (local time)  [General]
-H3  Demand kW interval (UTC)  [General]
-I3  kVA at interval  [General]
-J3  TOU  [General]
-L3  Peak kW 7-7  [General]
-M3  Peak kW 7-7 interval (local time)  [General]
-N3  Peak kW 7-7 interval (UTC)  [General]
-O3  kVA at interval  [General]
-P3  TOU  [General]
-R3  Demand kVA  [General]
-S3  Demand kVA interval (local time)  [General]
-T3  Demand kVA interval (UTC)  [General]
-U3  kW at interval  [General]
-V3  TOU  [General]
-X3  Peak kVA 7-7  [General]
-Y3  Peak kVA 7-7 interval (local time)  [General]
-Z3  Peak kVA 7-7 interval (UTC)  [General]
-AA3  kW at interval  [General]
-AB3  TOU  [General]
-AD3  Anomalies  [General]
-A4  billing_period_ending  [General]
-B4  nbr_of_intervals  [General]
-D4  kwh  [General]
-F4  max_kw  [General]
-G4  max_kw_interval  [General]
-H4  max_kw_interval_utc  [General]
-I4  max_kw_kva  [General]
-J4  max_kw_tou  [General]
-L4  max_kw_nop  [General]
-M4  max_kw_nop_interval  [General]
-N4  max_kw_nop_interval_utc  [General]
-O4  max_kw_nop_kva  [General]
-P4  max_kw_nop_tou  [General]
-R4  max_kva  [General]
-S4  max_kva_interval  [General]
-T4  max_kva_interval_utc  [General]
-U4  max_kva_kw  [General]
-V4  max_kva_tou  [General]
-X4  max_kva_nop  [General]
-Y4  max_kva_nop_interval  [General]
-Z4  max_kva_nop_interval_utc  [General]
-AA4  max_kva_nop_kw  [General]
-AB4  max_kva_nop_tou  [General]
-AD4  anomalies  [General]
-A5  46014  [yyyy/mm/dd]
-B5  24  [#,##0]  FILL:Argb { a: 255, r: 255, g: 199, b: 206 }
-D5  1931.999952  [#,##0.000]
-F5  90.719997  [#,##0.000]
-G5  45985.666666666664  [yyyy/mm/dd\ hh:mm\ ddd]
-H5  45985.875  [yyyy/mm/dd\ hh:mm]
-I5  109.439997  [#,##0.000]
-J5  MidPeak  [General]
-L5  90.719997  [#,##0.000]
-M5  45985.666666666664  [yyyy/mm/dd\ hh:mm\ ddd]
-N5  45985.875  [yyyy/mm/dd\ hh:mm]
-O5  109.439997  [#,##0.000]
-P5  MidPeak  [General]
-R5  109.439997  [#,##0.000]
-S5  45985.666666666664  [yyyy/mm/dd\ hh:mm\ ddd]
-T5  45985.875  [yyyy/mm/dd\ hh:mm]
-U5  90.719997  [#,##0.000]
-V5  MidPeak  [General]
-X5  109.439997  [#,##0.000]
-Y5  45985.666666666664  [yyyy/mm/dd\ hh:mm\ ddd]
-Z5  45985.875  [yyyy/mm/dd\ hh:mm]
-AA5  90.719997  [#,##0.000]
-AB5  MidPeak  [General]
-A6  45984  [yyyy/mm/dd]
-B6  745  [#,##0]
-D6  59077.31848  [#,##0.000]
-F6  94.559997  [#,##0.000]
-G6  45956.291666666664  [yyyy/mm/dd\ hh:mm\ ddd]
-H6  45956.458333333336  [yyyy/mm/dd\ hh:mm]
-I6  118.559997  [#,##0.000]
-J6  OffPeak  [General]
-L6  91.679997  [#,##0.000]
-M6  45982.708333333336  [yyyy/mm/dd\ hh:mm\ ddd]
-N6  45982.916666666664  [yyyy/mm/dd\ hh:mm]
-O6  108.479997  [#,##0.000]
-P6  OnPeak  [General]
-R6  118.559997  [#,##0.000]
-S6  45956.291666666664  [yyyy/mm/dd\ hh:mm\ ddd]
-T6  45956.458333333336  [yyyy/mm/dd\ hh:mm]
-U6  94.559997  [#,##0.000]
-V6  OffPeak  [General]
-X6  113.759997  [#,##0.000]
-Y6  45957.333333333336  [yyyy/mm/dd\ hh:mm\ ddd]
-Z6  45957.5  [yyyy/mm/dd\ hh:mm]
-AA6  91.199997  [#,##0.000]
-AB6  MidPeak  [General]
-A7  45953  [yyyy/mm/dd]
-B7  23  [#,##0]  FILL:Argb { a: 255, r: 255, g: 199, b: 206 }
-D7  1913.999954  [#,##0.000]
-F7  87.359998  [#,##0.000]
-G7  45953.041666666664  [yyyy/mm/dd\ hh:mm\ ddd]
-H7  45953.208333333336  [yyyy/mm/dd\ hh:mm]
-I7  108.959997  [#,##0.000]
-J7  OffPeak  [General]
-L7  87.359998  [#,##0.000]
-M7  45953.375  [yyyy/mm/dd\ hh:mm\ ddd]
-N7  45953.541666666664  [yyyy/mm/dd\ hh:mm]
-O7  108.479997  [#,##0.000]
-P7  MidPeak  [General]
-R7  108.959997  [#,##0.000]
-S7  45953.041666666664  [yyyy/mm/dd\ hh:mm\ ddd]
-T7  45953.208333333336  [yyyy/mm/dd\ hh:mm]
-U7  87.359998  [#,##0.000]
-V7  OffPeak  [General]
-X7  108.479997  [#,##0.000]
-Y7  45953.333333333336  [yyyy/mm/dd\ hh:mm\ ddd]
-Z7  45953.5  [yyyy/mm/dd\ hh:mm]
-AA7  86.399998  [#,##0.000]
-AB7  MidPeak  [General]
+default row height: 13.8
+explicit row heights: 1:15 3:23.85
+A1  PEAK VALUES  [General] Left
+A3  Billing period ending  [General] Left
+B3  Number of intervals  [General] Center
+D3  kWh used  [General] Center
+F3  Demand kW  [General] Center
+G3  Demand kW interval (local time)  [General] Center
+H3  Demand kW interval (UTC)  [General] Center
+I3  kVA at interval  [General] Center
+J3  TOU  [General] Center
+L3  Peak kW 7-7  [General] Center
+M3  Peak kW 7-7 interval (local time)  [General] Center
+N3  Peak kW 7-7 interval (UTC)  [General] Center
+O3  kVA at interval  [General] Center
+P3  TOU  [General] Center
+R3  Demand kVA  [General] Center
+S3  Demand kVA interval (local time)  [General] Center
+T3  Demand kVA interval (UTC)  [General] Center
+U3  kW at interval  [General] Center
+V3  TOU  [General] Center
+X3  Peak kVA 7-7  [General] Center
+Y3  Peak kVA 7-7 interval (local time)  [General] Center
+Z3  Peak kVA 7-7 interval (UTC)  [General] Center
+AA3  kW at interval  [General] Center
+AB3  TOU  [General] Center
+AD3  Anomalies  [General] Center
+A4  billing_period_ending  [General] Left
+B4  nbr_of_intervals  [General] Center
+D4  kwh  [General] Center
+F4  max_kw  [General] Center
+G4  max_kw_interval  [General] Center
+H4  max_kw_interval_utc  [General] Center
+I4  max_kw_kva  [General] Center
+J4  max_kw_tou  [General] Center
+L4  max_kw_nop  [General] Center
+M4  max_kw_nop_interval  [General] Center
+N4  max_kw_nop_interval_utc  [General] Center
+O4  max_kw_nop_kva  [General] Center
+P4  max_kw_nop_tou  [General] Center
+R4  max_kva  [General] Center
+S4  max_kva_interval  [General] Center
+T4  max_kva_interval_utc  [General] Center
+U4  max_kva_kw  [General] Center
+V4  max_kva_tou  [General] Center
+X4  max_kva_nop  [General] Center
+Y4  max_kva_nop_interval  [General] Center
+Z4  max_kva_nop_interval_utc  [General] Center
+AA4  max_kva_nop_kw  [General] Center
+AB4  max_kva_nop_tou  [General] Center
+AD4  anomalies  [General] Center
+A5  46014  [yyyy/mm/dd] Left
+B5  24  [#,##0] Center  FILL:Argb { a: 255, r: 255, g: 199, b: 206 }
+D5  1931.999952  [#,##0.000] Center
+F5  90.719997  [#,##0.000] Center
+G5  45985.666666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
+H5  45985.875  [yyyy/mm/dd\ hh:mm] Center
+I5  109.439997  [#,##0.000] Center
+J5  MidPeak  [General] Center
+L5  90.719997  [#,##0.000] Center
+M5  45985.666666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
+N5  45985.875  [yyyy/mm/dd\ hh:mm] Center
+O5  109.439997  [#,##0.000] Center
+P5  MidPeak  [General] Center
+R5  109.439997  [#,##0.000] Center
+S5  45985.666666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
+T5  45985.875  [yyyy/mm/dd\ hh:mm] Center
+U5  90.719997  [#,##0.000] Center
+V5  MidPeak  [General] Center
+X5  109.439997  [#,##0.000] Center
+Y5  45985.666666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
+Z5  45985.875  [yyyy/mm/dd\ hh:mm] Center
+AA5  90.719997  [#,##0.000] Center
+AB5  MidPeak  [General] Center
+A6  45984  [yyyy/mm/dd] Left
+B6  745  [#,##0] Center
+D6  59077.31848  [#,##0.000] Center
+F6  94.559997  [#,##0.000] Center
+G6  45956.291666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
+H6  45956.458333333336  [yyyy/mm/dd\ hh:mm] Center
+I6  118.559997  [#,##0.000] Center
+J6  OffPeak  [General] Center
+L6  91.679997  [#,##0.000] Center
+M6  45982.708333333336  [yyyy/mm/dd\ hh:mm\ ddd] Center
+N6  45982.916666666664  [yyyy/mm/dd\ hh:mm] Center
+O6  108.479997  [#,##0.000] Center
+P6  OnPeak  [General] Center
+R6  118.559997  [#,##0.000] Center
+S6  45956.291666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
+T6  45956.458333333336  [yyyy/mm/dd\ hh:mm] Center
+U6  94.559997  [#,##0.000] Center
+V6  OffPeak  [General] Center
+X6  113.759997  [#,##0.000] Center
+Y6  45957.333333333336  [yyyy/mm/dd\ hh:mm\ ddd] Center
+Z6  45957.5  [yyyy/mm/dd\ hh:mm] Center
+AA6  91.199997  [#,##0.000] Center
+AB6  MidPeak  [General] Center
+A7  45953  [yyyy/mm/dd] Left
+B7  23  [#,##0] Center  FILL:Argb { a: 255, r: 255, g: 199, b: 206 }
+D7  1913.999954  [#,##0.000] Center
+F7  87.359998  [#,##0.000] Center
+G7  45953.041666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
+H7  45953.208333333336  [yyyy/mm/dd\ hh:mm] Center
+I7  108.959997  [#,##0.000] Center
+J7  OffPeak  [General] Center
+L7  87.359998  [#,##0.000] Center
+M7  45953.375  [yyyy/mm/dd\ hh:mm\ ddd] Center
+N7  45953.541666666664  [yyyy/mm/dd\ hh:mm] Center
+O7  108.479997  [#,##0.000] Center
+P7  MidPeak  [General] Center
+R7  108.959997  [#,##0.000] Center
+S7  45953.041666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
+T7  45953.208333333336  [yyyy/mm/dd\ hh:mm] Center
+U7  87.359998  [#,##0.000] Center
+V7  OffPeak  [General] Center
+X7  108.479997  [#,##0.000] Center
+Y7  45953.333333333336  [yyyy/mm/dd\ hh:mm\ ddd] Center
+Z7  45953.5  [yyyy/mm/dd\ hh:mm] Center
+AA7  86.399998  [#,##0.000] Center
+AB7  MidPeak  [General] Center
 
 == Interval_values ==
 data rows: 792
-A1  INTERVAL VALUES  [General]
-A3  interval  [General]
-B3  interval_utc  [General]
-C3  kwh  [General]
-D3  kw  [General]
-E3  kva  [General]
-F3  anomalies  [General]
-A4  45985.958333333336  [yyyy/mm/dd\ hh:mm\ ddd]
-B4  45986.166666666664  [yyyy/mm/dd\ hh:mm]
-C4  80.159998  [#,##0.000]
-D4  81.599998  [#,##0.000]
-E4  100.799997  [#,##0.000]
-A5  45985.916666666664  [yyyy/mm/dd\ hh:mm\ ddd]
-B5  45986.125  [yyyy/mm/dd\ hh:mm]
-C5  79.319998  [#,##0.000]
-D5  80.639998  [#,##0.000]
-E5  100.319997  [#,##0.000]
-A6  45985.875  [yyyy/mm/dd\ hh:mm\ ddd]
-B6  45986.083333333336  [yyyy/mm/dd\ hh:mm]
-C6  80.279998  [#,##0.000]
-D6  82.559998  [#,##0.000]
-E6  101.759997  [#,##0.000]
+default row height: 13.8
+explicit row heights: 1:16.15 4-795:12.8
+A1  INTERVAL VALUES  [General] Left
+A3  interval  [General] Center
+B3  interval_utc  [General] Center
+C3  kwh  [General] Center
+D3  kw  [General] Center
+E3  kva  [General] Center
+F3  anomalies  [General] Center
+A4  45985.958333333336  [yyyy/mm/dd\ hh:mm\ ddd] Center
+B4  45986.166666666664  [yyyy/mm/dd\ hh:mm] Center
+C4  80.159998  [#,##0.000] Center
+D4  81.599998  [#,##0.000] Center
+E4  100.799997  [#,##0.000] Center
+A5  45985.916666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
+B5  45986.125  [yyyy/mm/dd\ hh:mm] Center
+C5  79.319998  [#,##0.000] Center
+D5  80.639998  [#,##0.000] Center
+E5  100.319997  [#,##0.000] Center
+A6  45985.875  [yyyy/mm/dd\ hh:mm\ ddd] Center
+B6  45986.083333333336  [yyyy/mm/dd\ hh:mm] Center
+C6  80.279998  [#,##0.000] Center
+D6  82.559998  [#,##0.000] Center
+E6  101.759997  [#,##0.000] Center
 ...
-A793  45953.125  [yyyy/mm/dd\ hh:mm\ ddd]
-B793  45953.291666666664  [yyyy/mm/dd\ hh:mm]
-C793  83.399998  [#,##0.000]
-D793  87.359998  [#,##0.000]
-E793  108.479997  [#,##0.000]
-A794  45953.083333333336  [yyyy/mm/dd\ hh:mm\ ddd]
-B794  45953.25  [yyyy/mm/dd\ hh:mm]
-C794  84.599998  [#,##0.000]
-D794  86.399998  [#,##0.000]
-E794  107.999997  [#,##0.000]
-A795  45953.041666666664  [yyyy/mm/dd\ hh:mm\ ddd]
-B795  45953.208333333336  [yyyy/mm/dd\ hh:mm]
-C795  84.239998  [#,##0.000]
-D795  87.359998  [#,##0.000]
-E795  108.959997  [#,##0.000]
+A793  45953.125  [yyyy/mm/dd\ hh:mm\ ddd] Center
+B793  45953.291666666664  [yyyy/mm/dd\ hh:mm] Center
+C793  83.399998  [#,##0.000] Center
+D793  87.359998  [#,##0.000] Center
+E793  108.479997  [#,##0.000] Center
+A794  45953.083333333336  [yyyy/mm/dd\ hh:mm\ ddd] Center
+B794  45953.25  [yyyy/mm/dd\ hh:mm] Center
+C794  84.599998  [#,##0.000] Center
+D794  86.399998  [#,##0.000] Center
+E794  107.999997  [#,##0.000] Center
+A795  45953.041666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
+B795  45953.208333333336  [yyyy/mm/dd\ hh:mm] Center
+C795  84.239998  [#,##0.000] Center
+D795  87.359998  [#,##0.000] Center
+E795  108.959997  [#,##0.000] Center
 total kwh: 62923.318
 total kw: 64451.038
 total kva: 79724.158
