@@ -111,7 +111,7 @@ Given a time interval of interest **`I`** as described above, the estimation of 
 - Report on the maximal segment(s).
 
 - The software detects data anomalies in the reported session data. Anomalies associated with every session that **intersects `I`** are reported alongside the estimates, as well as anomalies that caused sessions to be excluded from the analysis. Other sessions elsewhere in the workbook are not included in the report.
-  - The two listings are scoped differently, and only one of them says so in a column. The Anomalies table holds sessions reaching `I` and nothing else, so it needs no such column. The Excluded sessions table covers the whole workbook, so it carries an `In interval` column saying whether each record *appears* to fall in `I` — see [Other](#other).
+  - The two listings are scoped differently. The Anomalies table holds sessions reaching `I` and nothing else. The Excluded sessions table covers the whole workbook, so it carries an `In interval` column saying whether each record *appears* to fall in `I` — see [Other](#other).
 
 ### Sessions and segments
 
@@ -209,9 +209,9 @@ The padding is a full `R` rather than one tick less for the same reason. A sessi
 The two formulas above — a per-EV kW rating and a division by a power factor — are a fair
 description of the *shape* of the estimates, and a defensible approximation of their values. They
 are not what the software computes. Both figures come out of a small electrical model of the site,
-`src/site_load.rs`, and it is worth knowing where the model and the shorthand part company.
+described in [Power Factor and kVA Allocation — Level 2 EV Chargers on a 75 kVA, 600–208 V Transformer](docs/ev-charger-power-factor-and-kva-allocation.md), and implemented in `src/site_load.rs`. It is worth knowing where the model and the shorthand part company.
 
-**The per-EV kW figure is an average, not a constant.** A vehicle is current-limited rather than
+**The per-EV kW figure is an average, not a constant.** A charging station is current-limited rather than
 power-limited: the pilot signal caps it at 32 A, so it draws about 6.59 kW whatever else is
 happening. What the site draws on top of that is not proportional to the vehicle count. The
 transformer's core loss and magnetizing current are a fixed standing block, present whenever it is
@@ -235,7 +235,7 @@ At one vehicle the site power factor is about 0.94; by five it is 0.98, and it p
 above that. With no vehicle charging at all it is far lower still, because the standing block is
 then the whole of the load.
 
-**Where the model is written down.** `docs/ev-charger-power-factor-and-kva-allocation.md` derives
+**Where the model is written down.** The above-mentioned [electrotechnical document](docs/ev-charger-power-factor-and-kva-allocation.md) derives
 every constant and every formula, and tabulates the result for each vehicle count from 0 to 10;
 `cargo run --example site_load_report` prints that same table from the code, and
 `tests/fixtures/site_load.report.txt` pins it. `docs/Evolute-Simultaneous_Charging.pdf` is
@@ -260,7 +260,7 @@ Evolute's own description of how the installation behaves when several vehicles 
   Both bounds are strict, because both windows are half-open at the same end. That makes this the one band in the design that is open rather than half-open — an instance of the convention rather than an exception to it, since it is the *intersection* condition of two half-open windows and not an interval anyone chose. The band is not slack: it is precisely what truncation to whole minutes accounts for, and the sample data reaches to within 3 seconds of its lower edge.
 - A session outside that band is flagged `InconsistentDuration` and excluded from the estimates. Both directions are faults: if a record's own fields disagree by more than the reporting can explain, neither its duration nor the span the estimating logic would place it on can be relied on. The overshoot direction subsumes the case of a session ending before it starts, since with `Conn_DateTime_End` a minute or more before `Conn_DateTime_Start` no non-negative duration can satisfy the test.
 - These are the *only* sessions excluded from the estimates. Nothing else removes a session.
-- Excluded sessions get a section of their own in the report, listing **every** one in the workbook rather than only those near the interval of interest, with an `In interval` column saying whether each *appears* to fall in that interval. Appears only: a record whose own fields contradict each other cannot be trusted to say where it belongs, so filtering on that judgement could hide exactly the session a reader most needs to see. Such a record may even report an end before its start, and the column answers for it rather than refusing to.
+- Excluded sessions get a section of their own in the report, listing **every** one in the workbook rather than only those near the interval of interest, with an `In interval` column saying whether each *appears* to fall in that interval. Appears only: a record whose own fields contradict each other cannot be trusted to say where it belongs, so filtering on that judgement could hide exactly the session a reader most needs to see. Such a record may even report an end before its start, and the column answers for it.
 - Sessions with zero `Energy_Use` and non-zero `Active_Charge_Time` do not contribute to `energy_based_kw` and `energy_based_kva` but they do contribute to `count_based_kw` and `count_based_kva`.
 - A session with zero `Active_Charge_Time` delivered energy in no time at all, so its average power is unbounded or undefined.
   - The Excel `avg_kw` cell shows `#DIV/0!` so the fault is visible in the sheet. Function `session_list` returns the session as a *spike*, held apart from the normal sessions fed to the peak logic.

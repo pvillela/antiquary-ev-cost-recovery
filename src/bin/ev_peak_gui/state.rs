@@ -6,8 +6,8 @@
 //! and tested here.
 
 use ev_peak_contrib::{
-    ConversionReport, HourEntry, Interval, IntervalEstimates, IntervalLength, OFFSETS,
-    SessionReport, TIME_ZONE_NAME, checked_interval, hours_of, interval_estimates,
+    ConversionReport, HourEntry, Interval, IntervalEstimates, IoiLength, SessionReport,
+    TIME_ZONE_NAME, TZ_OFFSETS, checked_interval, hours_of, interval_estimates,
     session_csv_to_xlsx, session_list,
 };
 use jiff::{civil, tz::TimeZone};
@@ -165,7 +165,7 @@ pub struct EstimateState {
     pub hours: Vec<HourEntry>,
     pub hour: i8,
     pub minute: i8,
-    pub length: IntervalLength,
+    pub length: IoiLength,
     /// The answer to the twice-a-year question, once it has been given.
     pub designator: Option<&'static str>,
     /// Whether the workbook in hand arrived from a conversion rather than being chosen here. The
@@ -186,7 +186,7 @@ impl Default for EstimateState {
             date,
             hour: 0,
             minute: 0,
-            length: IntervalLength::Hour,
+            length: IoiLength::Hour,
             designator: None,
             carried_over: false,
             outcome: None,
@@ -248,11 +248,11 @@ impl EstimateState {
         self.clear_results();
         self.minute = minute;
         if !self.length.allowed_from(minute) {
-            self.length = IntervalLength::default_for(minute);
+            self.length = IoiLength::default_for(minute);
         }
     }
 
-    pub fn set_length(&mut self, length: IntervalLength) {
+    pub fn set_length(&mut self, length: IoiLength) {
         self.clear_results();
         self.length = length;
     }
@@ -357,18 +357,18 @@ fn covered_range(report: &SessionReport) -> Option<(civil::Date, civil::Date)> {
 
 /// The interval as the report writes it at its head: local times, and the offset named the way a
 /// Toronto Hydro bill names it.
-pub fn interval_heading(interval: Interval, length: IntervalLength) -> String {
+pub fn interval_heading(interval: Interval, length: IoiLength) -> String {
     let tz = TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid zone name");
     let (lo, hi) = (interval.start, interval.end());
     let start = lo.to_zoned(tz.clone());
     let end = hi.to_zoned(tz.clone());
-    let name = OFFSETS
+    let name = TZ_OFFSETS
         .iter()
         .find(|(_, hours)| tz.to_offset(lo) == jiff::tz::Offset::constant(*hours))
         .map_or("", |(name, _)| name);
     let length = match length {
-        IntervalLength::Hour => "1 hour",
-        IntervalLength::FifteenMinutes => "15 minutes",
+        IoiLength::Hour => "1 hour",
+        IoiLength::FifteenMinutes => "15 minutes",
     };
     format!(
         "{} - {} {name}  ({length})",
@@ -468,7 +468,7 @@ mod test {
             );
             estimate.set_hour(16);
             estimate.set_minute(0);
-            estimate.set_length(IntervalLength::Hour);
+            estimate.set_length(IoiLength::Hour);
             assert!(estimate.can_estimate());
             estimate.run();
 
@@ -556,17 +556,17 @@ mod test {
     fn choosing_a_quarter_minute_gives_up_the_hour_length() {
         let mut state = state_on(civil::date(2026, 6, 15));
         state.set_minute(0);
-        state.set_length(IntervalLength::Hour);
+        state.set_length(IoiLength::Hour);
         assert!(state.interval().is_ok());
 
         state.set_minute(15);
-        assert_eq!(state.length, IntervalLength::FifteenMinutes);
+        assert_eq!(state.length, IoiLength::FifteenMinutes);
         assert!(state.interval().is_ok(), "no illegal interval is reachable");
 
         state.set_minute(0);
         assert_eq!(
             state.length,
-            IntervalLength::FifteenMinutes,
+            IoiLength::FifteenMinutes,
             "and it does not spring back"
         );
     }
@@ -589,7 +589,7 @@ mod test {
                 }
                 for minute in [0, 15, 30, 45] {
                     state.set_minute(minute);
-                    for length in [IntervalLength::FifteenMinutes, IntervalLength::Hour] {
+                    for length in [IoiLength::FifteenMinutes, IoiLength::Hour] {
                         if !length.allowed_from(minute) {
                             continue;
                         }
@@ -615,7 +615,7 @@ mod test {
         });
         state.set_hour(16);
         state.set_minute(0);
-        state.set_length(IntervalLength::Hour);
+        state.set_length(IoiLength::Hour);
         assert_eq!(
             state.default_save_name(),
             "Session_Report_June_2026-06-15_1600_1h.report.md"
@@ -646,7 +646,7 @@ mod test {
         for change in [
             (|s: &mut EstimateState| s.set_hour(5)) as fn(&mut EstimateState),
             |s| s.set_minute(15),
-            |s| s.set_length(IntervalLength::FifteenMinutes),
+            |s| s.set_length(IoiLength::FifteenMinutes),
             |s| s.set_date(civil::date(2026, 6, 16)),
         ] {
             state.error = Some("stale".to_owned());
@@ -661,7 +661,7 @@ mod test {
         let mut state = state_on(civil::date(2026, 6, 15));
         state.set_hour(16);
         state.set_minute(0);
-        state.set_length(IntervalLength::Hour);
+        state.set_length(IoiLength::Hour);
         let heading = interval_heading(state.interval().unwrap(), state.length);
         assert_eq!(heading, "2026-06-15 16:00 - 17:00 EDT  (1 hour)");
 

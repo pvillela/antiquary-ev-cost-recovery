@@ -1,4 +1,4 @@
-use ev_peak_contrib::{Interval, IntervalLength, OFFSETS, checked_interval, interval_estimates};
+use ev_peak_contrib::{Interval, IoiLength, TZ_OFFSETS, checked_interval, interval_estimates};
 use jiff::civil;
 use std::{
     path::{Path, PathBuf},
@@ -133,8 +133,8 @@ fn parse_interval(start: &str, length: Option<&str>) -> Result<Interval, String>
 
     let length = match length {
         None => None,
-        Some("1h") => Some(IntervalLength::Hour),
-        Some("15m") => Some(IntervalLength::FifteenMinutes),
+        Some("1h") => Some(IoiLength::Hour),
+        Some("15m") => Some(IoiLength::FifteenMinutes),
         Some(other) => return Err(format!("unknown length \"{other}\"; expected 15m or 1h")),
     };
 
@@ -148,7 +148,7 @@ fn parse_interval(start: &str, length: Option<&str>) -> Result<Interval, String>
 fn split_designator(s: &str) -> (&str, Option<&str>) {
     match s.rsplit_once(char::is_whitespace) {
         Some((head, tail))
-            if OFFSETS
+            if TZ_OFFSETS
                 .iter()
                 .any(|(name, _)| tail.eq_ignore_ascii_case(name)) =>
         {

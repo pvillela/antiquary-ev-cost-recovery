@@ -5,7 +5,7 @@ use crate::{theme, widgets};
 use eframe::egui;
 use egui_extras::DatePickerButton;
 use ev_peak_contrib::{
-    Bracket, IntervalEstimates, IntervalLength, LEGAL_START_MINUTES, Segment, TIME_ZONE_NAME,
+    Bracket, IntervalEstimates, IoiLength, LEGAL_START_MINUTES, Segment, TIME_ZONE_NAME,
 };
 use jiff::{Zoned, tz::TimeZone};
 
@@ -114,11 +114,11 @@ fn interval_controls(ui: &mut egui::Ui, state: &mut EstimateState) {
                 // An hour-long interval is legal only from HH:00, so off the hour the button is
                 // simply not on offer. See README.md, "Interval of interest boundaries".
                 let options = [
-                    (IntervalLength::FifteenMinutes, "15 minutes", true),
+                    (IoiLength::FifteenMinutes, "15 minutes", true),
                     (
-                        IntervalLength::Hour,
+                        IoiLength::Hour,
                         "1 hour",
-                        IntervalLength::Hour.allowed_from(state.minute),
+                        IoiLength::Hour.allowed_from(state.minute),
                     ),
                 ];
                 if let Some(length) = widgets::choice_row(ui, state.length, &options) {
@@ -282,9 +282,12 @@ fn figure(ui: &mut egui::Ui, value: Bracket<f64>, color: egui::Color32) {
 /// The segment a figure was drawn from, as local clock time — the same name the report's
 /// `Segment` column uses, so the two can be read against each other.
 fn segment_label(segment: &Segment) -> String {
-    Zoned::new(segment.start(), TimeZone::get(TIME_ZONE_NAME).expect("a valid time-zone name"))
-        .strftime("%H:%M")
-        .to_string()
+    Zoned::new(
+        segment.start(),
+        TimeZone::get(TIME_ZONE_NAME).expect("a valid time-zone name"),
+    )
+    .strftime("%H:%M")
+    .to_string()
 }
 
 fn export_row(ui: &mut egui::Ui, state: &mut EstimateState, working: &mut WorkingDir) {
