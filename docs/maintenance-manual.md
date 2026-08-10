@@ -15,7 +15,7 @@ and the answer is recorded here rather than kept as a test.
 | Date | 2026-08-09 |
 | Code | commit `c9a8c46` |
 | Input | `data/TH_Electric_Usage_23-11-2024_to_24-06-2026.XML` (18,018,534 bytes) |
-| Reference | `docs/reference/Green_Button_Peak_Values-template.xlsx`, sha256 `6ea76c29efbcf4a613a659abf72efb35b6eb97c8fdb0e20a07cdd29ad1b2a5f0` |
+| Reference | `docs/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx`, sha256 `6ea76c29efbcf4a613a659abf72efb35b6eb97c8fdb0e20a07cdd29ad1b2a5f0` |
 | Method | `Peak_values` compared by **column name** over the shared subset, floats to 5e-7 |
 | Scope | 21 billing periods × 19 shared columns = **399 cells** |
 | Result | **0 mismatches** |
@@ -32,7 +32,19 @@ meant something.
 
 The `docs/reference/` workbook stays as provenance: it is the artefact whose figures were
 reconciled against real invoices, and whose June 2026 period ties out to one to the milli-kWh.
-Nothing in the test suite reads it.
+Nothing in the test suite reads it, and its **formatting is not the current standard** — see §7.
+
+Three workbooks, three jobs, no overlap:
+
+| Path | What | Committed | Read by code |
+|---|---|---|---|
+| `docs/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx` | the Python-era output | yes | never |
+| `tests/fixtures/billed_period.xlsx` | the current formatting standard | yes | regenerated with the goldens |
+| `data/*.xlsx` | whatever you last generated | no, ignored | no |
+
+The standard lives under `tests/fixtures/` rather than beside the reference precisely because the
+`UPDATE_GOLDEN=1` run regenerates it. A committed workbook that nothing regenerates goes stale and
+then misleads about which file is authoritative, which is worse than not having one.
 
 ## 2. Golden files
 

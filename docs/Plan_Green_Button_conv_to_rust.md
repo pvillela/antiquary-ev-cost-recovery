@@ -201,11 +201,12 @@ Loss factor is **not** modelled; the README states the sheet reports raw meter v
 bill's unadjusted columns.
 
 One-time port gate: compare full `data/*.XML` output against
-`docs/reference/Green_Button_Peak_Values-template.xlsx` **by column name over the shared subset**
+`docs/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx` **by column name over the shared subset**
 — it cannot match structurally, since the schema gains TOU and anomalies columns and renames every
 machine name. Record in `docs/maintenance-manual.md`: columns compared, row counts, tolerances,
 the commit SHA that passed, and fixture checksums. **Then delete the test**; the template remains
-at `docs/reference/` as provenance only.
+at `docs/reference/` as provenance only. The current formatting standard is a separate,
+regenerated artifact: `tests/fixtures/billed_period.xlsx`.
 
 ## Housekeeping
 
@@ -235,7 +236,7 @@ at `docs/reference/` as provenance only.
 3. `cargo test -- --ignored` — the one-time full-data gate, before it is deleted.
 4. `gb_peak_values data/TH_Electric_Usage_23-11-2024_to_24-06-2026.XML`, then open
    `data/TH_Electric_Usage_23-11-2024_to_24-06-2026.xlsx` and compare against
-   `docs/reference/Green_Button_Peak_Values-template.xlsx` by eye for formatting.
+   `tests/fixtures/billed_period.xlsx` by eye for formatting.
 5. Re-run the same command and confirm it **refuses** rather than overwriting.
 6. Confirm the June 2026 row matches the invoice: `max_kw` 153.119, `max_kw_nop` 152.639,
    `max_kva` 183.359, `kwh` ≈ 77,281.6.

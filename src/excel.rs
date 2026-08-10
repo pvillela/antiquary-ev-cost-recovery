@@ -4,10 +4,12 @@
 //! its data rows, its column widths and its number formats together, so adding or moving a column
 //! is one edit rather than four that have to agree.
 //!
-//! Formatting follows `docs/reference/Green_Button_Peak_Values-template.xlsx`, the hand-formatted
-//! workbook the Python filled in place, but does not copy it slavishly: the reference stamps a row
-//! height on all 13,924 of its rows because that is what LibreOffice writes, and only three of them
-//! were ever a decision. See `docs/maintenance-manual.md` §7.
+//! Formatting descends from the hand-formatted workbook the Python filled in place, kept as
+//! `docs/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx`, but does not copy it
+//! slavishly: that workbook stamps a row height on all 13,924 of its rows because that is what
+//! LibreOffice writes, and only three of them were ever a decision. See
+//! `docs/maintenance-manual.md` §7. The current standard is `tests/fixtures/billed_period.xlsx`,
+//! regenerated with the goldens.
 //!
 //! `umya-spreadsheet` is used rather than `rust_xlsxwriter` because it stores row heights and
 //! column widths as `f64` written straight through, whereas `rust_xlsxwriter` models them as whole

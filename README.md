@@ -115,5 +115,6 @@ UPDATE_GOLDEN=1 cargo test --test fixtures_golden   # regenerate goldens, then r
 | `src/billing.rs`, `src/peaks.rs` | periods, expected interval counts, the four maxima |
 | `src/excel.rs` | the workbook, driven by two column tables |
 | `docs/maintenance-manual.md` | invariants, procedures, and what would force a re-check |
-| `docs/reference/` | the workbook this replaced, kept as provenance |
+| `tests/fixtures/billed_period.xlsx` | the current formatting standard — open this to see what the output should look like |
+| `docs/reference/` | the workbook this replaced, kept as provenance and never read by code |
 | `docs/archived/python/` | the previous implementation; `explore_model.py` is still current |
