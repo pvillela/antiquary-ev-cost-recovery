@@ -28,3 +28,14 @@ RUN export DEBIAN_FRONTEND=noninteractive \
         dbus-x11 xdg-desktop-portal xdg-desktop-portal-gtk \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Xvfb binds its socket under /tmp/.X11-unix and, running as a non-root user, refuses to create
+# that directory itself -- which is the "_XSERVTransmkdir: ERROR: euid != 0, directory
+# /tmp/.X11-unix will not be created" message on a fresh container. It recovers and the display
+# does come up, so the message is not the failure it looks like; the cost is startup latency, and
+# start-xvfb.sh waits only a bounded interval for the server before starting the window manager.
+#
+# Created here as root because 1777 -- world-writable with the sticky bit -- is the mode X expects,
+# and only root can set it. Being an image layer, it survives a plain container restart as well as
+# a rebuild.
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
