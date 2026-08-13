@@ -1,0 +1,8 @@
+UR_ID,Location_Address,Location_City,Location_Postal_Code,Station_ID,Station_Network_Provider,Station_Make,Station_Model,Charge_Session_ID,User_ID,Conn_DateTime_Start,Conn_DateTime_End,Conn_Duration,Charge_Duration,Active_Charge_Time,Charging_Level,Energy_Use,Total_Fee,Vehicle_Make,Vehicle_Model,Vehicle_Year
+CKT-7,,Toronto,,Station-1,Evolute Inc.,FLO,G5,A,,2026-06-15 15:54,2026-06-15 17:03,1:09:00,1:09:00,1:09:00,Level 2,6.900,1.27,VinFast,Vf8,2024
+CKT-7,,Toronto,,Station-2,Evolute Inc.,FLO,G5,B,,2026-06-15 15:59,2026-06-15 16:15,0:16:00,0:15:00,0:15:00,Level 2,1.600,0.29,Tesla,Model 3,2023
+CKT-7,,Toronto,,Station-3,Evolute Inc.,FLO,G5,C,,2026-06-15 16:08,2026-06-15 16:42,0:34:00,0:30:00,0:30:00,Level 2,3.100,0.57,Hyundai,Ioniq 5,2025
+CKT-7,,Toronto,,Station-4,Evolute Inc.,FLO,G5,D,,2026-06-15 16:24,2026-06-15 16:34,0:10:00,0:10:00,0:10:00,Level 2,1.100,0.20,Kia,EV6,2024
+CKT-7,,Toronto,,Station-5,Evolute Inc.,FLO,G5,E,,2026-06-15 16:20,2026-06-15 16:34,0:14:00,0:12:00,0:12:00,Level 2,1.180,0.22,Ford,Mustang Mach-E,2023
+CKT-7,,Toronto,,Station-6,Evolute Inc.,FLO,G5,F,,2026-06-15 16:34,2026-06-15 16:42,0:08:00,0:06:00,0:06:00,Level 2,0.670,0.12,Chevrolet,Bolt,2022
+CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,G,,2026-06-15 16:48,2026-06-15 16:55,0:07:00,0:06:00,0:06:00,Level 2,0.610,0.11,Volkswagen,ID.4,2025

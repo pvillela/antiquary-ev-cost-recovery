@@ -1,0 +1,21 @@
+[package]
+name = "ev-peak-contrib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+csv = "1"
+jiff = "0.2.35"
+umya-spreadsheet = "3.0.1"
+
+eframe = "0.35"
+egui_extras = { version = "0.35", features = ["datepicker"] }
+rfd = "0.17.2"
+
+[target."cfg(windows)".build-dependencies]
+winresource = "0.1.31"
+
+[profile.release]
+# The app is downloaded as a single file, so the debug symbols are worth removing: they are most
+# of the binary and nothing in the field reads them.
+strip = "symbols"

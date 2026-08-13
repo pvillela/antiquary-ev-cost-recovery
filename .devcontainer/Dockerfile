@@ -1,0 +1,41 @@
+# .devcontainer/Dockerfile
+
+# Pinned to jammy (Ubuntu 22.04) deliberately, not merely inherited: it matches the host and the
+# `ubuntu-22.04` runner in .github/workflows/release-build.yaml, so all three agree on glibc 2.35
+# and a binary built here behaves like the one CI ships. A newer base would build against a newer
+# glibc and reintroduce the "version `GLIBC_2.39' not found" failure on 22.04 machines.
+FROM mcr.microsoft.com/devcontainers/base:jammy
+
+# GUI runtime for the eframe/egui app, and the tooling to drive and observe it headlessly.
+#
+# This lives here rather than in setup.sh so it becomes a cached image layer. Docker keys its
+# build cache on the instructions and base image, not on the workspace path, whereas the
+# devcontainer's own identity is a hash of that path -- so moving the project rebuilds the
+# container but reuses this layer, instead of re-downloading a few hundred MB over the network.
+#
+# The package set is copied verbatim from docs/Devcontainer_GUI_Options.md, where it was verified
+# working on 2026-07-26, with `openbox` added (see start-xvfb.sh). `--no-install-recommends` is
+# deliberately NOT used: the portal packages below pull working defaults through recommends, and
+# trimming them is exactly the kind of change that turns into a silently broken file dialog.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update -qq \
+    && apt-get install -y -qq \
+        xvfb x11-utils xdotool imagemagick \
+        openbox \
+        libx11-6 libxcb1 libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 libwayland-client0 \
+        libgl1 libegl1 libgl1-mesa-dri libvulkan1 mesa-vulkan-drivers \
+        fonts-dejavu-core \
+        dbus-x11 xdg-desktop-portal xdg-desktop-portal-gtk \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Xvfb binds its socket under /tmp/.X11-unix and, running as a non-root user, refuses to create
+# that directory itself -- which is the "_XSERVTransmkdir: ERROR: euid != 0, directory
+# /tmp/.X11-unix will not be created" message on a fresh container. It recovers and the display
+# does come up, so the message is not the failure it looks like; the cost is startup latency, and
+# start-xvfb.sh waits only a bounded interval for the server before starting the window manager.
+#
+# Created here as root because 1777 -- world-writable with the sticky bit -- is the mode X expects,
+# and only root can set it. Being an image layer, it survives a plain container restart as well as
+# a rebuild.
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
