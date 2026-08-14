@@ -1,6 +1,10 @@
 //! Turns a Toronto Hydro Green Button export into the peak-values workbook.
 
-use ev_cost_recovery::green_button::{Feed, holidays, local_date, parse, write_workbook};
+use ev_cost_recovery::{
+    green_button::{Feed, parse, write_workbook},
+    time::holidays,
+    time::local_date,
+};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 

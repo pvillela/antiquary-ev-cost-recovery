@@ -7,37 +7,10 @@
 //! spreadsheet is reconciled against a utility invoice to three decimal places, and accumulating
 //! 744 floating-point divisions before summing them loses that agreement.
 
-use crate::time::time_zone;
 use jiff::{Timestamp, civil::Date, civil::DateTime, tz::TimeZone};
 use std::fmt;
 
-/// The local calendar date an instant falls on.
-pub fn local_date(ts: Timestamp) -> Date {
-    ts.to_zoned(time_zone()).date()
-}
-
-/// The local wall-clock reading of an instant, for the workbook's local-time columns.
-pub(crate) fn local_datetime(ts: Timestamp) -> DateTime {
-    ts.to_zoned(time_zone()).datetime()
-}
-
-/// The instant a given local hour begins on a given local date.
-///
-/// # Panics
-///
-/// Panics if the local time falls in a daylight-saving gap or fold. Callers pass 0, 7, 11, 17 or
-/// 19; Ontario's transitions are at 02:00, so none of them can.
-pub(crate) fn local_hour(d: Date, hour: u8) -> Timestamp {
-    d.at(hour as i8, 0, 0, 0)
-        .to_zoned(time_zone())
-        .expect("callers pass hours that never fall in a daylight-saving transition")
-        .timestamp()
-}
-
-/// The instant a local date begins.
-pub(crate) fn local_midnight(d: Date) -> Timestamp {
-    local_hour(d, 0)
-}
+use crate::time::local_datetime;
 
 /// Excel's day zero for the 1900 date system, as a Unix timestamp: 1899-12-30T00:00:00Z.
 /// Verified by [`test::excel_epoch_matches_jiff`].

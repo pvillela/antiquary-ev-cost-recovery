@@ -12,7 +12,7 @@
 //! give it a day of slack either side and let the partial periods stand. They exercise the
 //! incomplete-period highlight.
 
-use ev_cost_recovery::green_button::local_date;
+use ev_cost_recovery::time::local_date;
 use jiff::Timestamp;
 use jiff::civil::Date;
 use std::path::Path;

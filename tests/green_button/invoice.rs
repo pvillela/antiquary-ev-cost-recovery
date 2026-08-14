@@ -7,8 +7,8 @@
 //! The invoice covers `MAY 23 2026 TO JUN 23 2026`, which is the period the `billed_period`
 //! fixture carries in full.
 
-use ev_cost_recovery::green_button::{Tou, parse, period_values, tou_of};
-use ev_cost_recovery::time::Interval;
+use ev_cost_recovery::green_button::{parse, period_values};
+use ev_cost_recovery::time::{Interval, Tou, tou_of};
 use jiff::civil::date;
 use std::collections::HashMap;
 use std::path::PathBuf;

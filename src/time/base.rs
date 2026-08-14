@@ -1,4 +1,8 @@
-use jiff::{Timestamp, tz::TimeZone};
+use jiff::{
+    Timestamp,
+    civil::{Date, DateTime},
+    tz::TimeZone,
+};
 use std::{sync::LazyLock, time::Duration};
 
 // ---------------------------------------------------------------------------
@@ -22,6 +26,38 @@ pub(crate) fn duration(start: Timestamp, end: Timestamp) -> Duration {
     Duration::try_from(end.duration_since(start))
         .unwrap_or_else(|_| panic!("interval ends at {} before it starts at {}", end, start))
 }
+
+/// The local calendar date an instant falls on.
+pub fn local_date(ts: Timestamp) -> Date {
+    ts.to_zoned(time_zone()).date()
+}
+
+/// The local wall-clock reading of an instant, for the workbook's local-time columns.
+pub(crate) fn local_datetime(ts: Timestamp) -> DateTime {
+    ts.to_zoned(time_zone()).datetime()
+}
+
+/// The instant a given local hour begins on a given local date.
+///
+/// # Panics
+///
+/// Panics if the local time falls in a daylight-saving gap or fold. Callers pass 0, 7, 11, 17 or
+/// 19; Ontario's transitions are at 02:00, so none of them can.
+pub(crate) fn local_hour(d: Date, hour: u8) -> Timestamp {
+    d.at(hour as i8, 0, 0, 0)
+        .to_zoned(time_zone())
+        .expect("callers pass hours that never fall in a daylight-saving transition")
+        .timestamp()
+}
+
+/// The instant a local date begins.
+pub(crate) fn local_midnight(d: Date) -> Timestamp {
+    local_hour(d, 0)
+}
+
+// ---------------------------------------------------------------------------
+// Time grid
+// ---------------------------------------------------------------------------
 
 /// Resolution the session report states session boundaries at: `Conn_DateTime_Start` and
 /// `Conn_DateTime_End` are truncated to whole minutes. `Conn_Duration` and `Active_Charge_Time`

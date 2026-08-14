@@ -5,9 +5,8 @@
 //! its period as `MAY 23 2026 TO JUN 23 2026` over `31` days, which is the same span read from the
 //! meter-reading instants rather than the calendar days.
 
+use crate::time::{local_date, local_midnight};
 use jiff::{Timestamp, civil::Date, civil::date};
-
-use crate::green_button::{local_date, local_midnight};
 
 const SECS_PER_HOUR: i64 = 3600;
 
@@ -94,7 +93,7 @@ fn previous_month(year: i16, month: i8) -> (i16, i8) {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::green_button::local_hour;
+    use crate::time::local_hour;
 
     /// The boundary is local midnight between the 23rd and the 24th, so the last hour of the 23rd
     /// belongs to the period ending that day and the first hour of the 24th starts the next.
