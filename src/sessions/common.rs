@@ -3,7 +3,7 @@ use crate::time::{Interval, TIME_GRID_STEP, duration, time_zone, truncate_to_tim
 use super::site_load::{Load, ev_load, ev_real_power_kw, transformer_load};
 use jiff::{Timestamp, Zoned};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt::{self, Debug},
     iter::Sum,
     ops::{Add, Div, Mul},
@@ -165,6 +165,15 @@ impl Session {
         }
     }
 
+    /// Used to check inconsistent duplicates.
+    pub(crate) fn is_inconsistent_duplicate(&self, other: &Session) -> bool {
+        self.id == other.id
+            && (self.adj_conn_start() != other.adj_conn_start()
+                || self.adj_conn_end() != other.adj_conn_end()
+                || self.charge_time != other.charge_time
+                || self.energy_use != other.energy_use)
+    }
+
     /// The session's overlap with an interval, or `None` when the two do not meet.
     ///
     /// `None` rather than a zero-width [`SessionOverlap`]: there is no pair of brackets that
@@ -247,6 +256,50 @@ impl SessionOverlap {
         };
         let max = duration(self.left.min, self.right.max);
         Bracket::new(min, max)
+    }
+}
+
+/// The result of flattening and deduplicating a list of lists of sessions.
+pub struct DedupedSessions {
+    /// The deduped session list.
+    pub merged: Vec<Session>,
+    /// Each session in this list has the same `id` as a session in `merged` but relevant field
+    /// values don't match.
+    pub duplicates: Vec<Session>,
+}
+
+impl DedupedSessions {
+    /// Flattens and deduplicates lists of sessions.
+    pub fn merge_sessions(session_lists: Vec<Vec<Session>>) -> DedupedSessions {
+        let mut id_map: BTreeMap<String, Session> = BTreeMap::new();
+        let mut merged_ids = Vec::new();
+        let mut duplicates = Vec::new();
+
+        for list in session_lists {
+            for s in list {
+                let id = s.id.clone();
+                if let Some(seen) = id_map.get(&id) {
+                    if seen.is_inconsistent_duplicate(&s) {
+                        duplicates.push(s);
+                    }
+                } else {
+                    id_map.insert(id.clone(), s);
+                    merged_ids.push(id);
+                }
+            }
+        }
+
+        let merged = merged_ids
+            .into_iter()
+            .map(|id| {
+                let s = id_map
+                    .remove(&id)
+                    .unwrap_or_else(|| panic!("session id {id} should be in merged_ids"));
+                s
+            })
+            .collect::<Vec<_>>();
+
+        DedupedSessions { merged, duplicates }
     }
 }
 
@@ -537,6 +590,8 @@ pub enum AnomalyKind {
     /// flagged, according to how its `Energy_Use / Active_Charge_Time` rounds in binary floating
     /// point. That is the price of the guarantee above, and it errs towards reporting.
     ExcessiveAvgKw,
+    /// A previously seen session has the same ID and relevant field values don't match.
+    InconsistentDuplicate,
 }
 
 impl AnomalyKind {
@@ -551,6 +606,7 @@ impl AnomalyKind {
             Self::DstGapShifted => "DstGapShifted",
             Self::DstUnresolvable => "DstUnresolvable",
             Self::ExcessiveAvgKw => "ExcessiveAvgKw",
+            Self::InconsistentDuplicate => "InconsistentDuplicate",
         }
     }
 
@@ -563,6 +619,7 @@ impl AnomalyKind {
             "DstGapShifted" => Self::DstGapShifted,
             "DstUnresolvable" => Self::DstUnresolvable,
             "ExcessiveAvgKw" => Self::ExcessiveAvgKw,
+            "InconsistentDuplicate" => Self::InconsistentDuplicate,
             _ => return None,
         })
     }
@@ -601,6 +658,9 @@ impl fmt::Display for AnomalyKind {
                 "average kilowatts above the Evolute breaker rating, which the hardware should not \
                  allow; the session still counts towards every estimate, but the breaker-spec \
                  figures assume no session draws more than that rating"
+            }
+            Self::InconsistentDuplicate => {
+                "A previously seen session has the same ID and relevant field values don't match"
             }
         };
         f.write_str(s)
