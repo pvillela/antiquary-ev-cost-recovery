@@ -264,7 +264,7 @@ mod test {
             row: 2,
             conn_start,
             conn_end: adj_conn_end - TIME_GRID_STEP,
-            adj_conn_end,
+            // adj_conn_end,
             conn_duration: adj_conn_end.duration_since(conn_start).unsigned_abs(),
             charge_time,
             energy_use: kw * charge_time.as_secs_f64() / 3600.0,

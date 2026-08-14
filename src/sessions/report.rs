@@ -427,8 +427,8 @@ impl IntervalEstimates {
                 vec![
                     s.row.to_string(),
                     s.id.clone(),
-                    ymd_hm(s.conn_start),
-                    ymd_hm_to(s.conn_start, s.adj_conn_end),
+                    ymd_hm(s.adj_conn_start()),
+                    ymd_hm_to(s.adj_conn_start(), s.adj_conn_end()),
                     in_interval(s, &self.interval),
                     // An excluded session is in no segment, but the report holds the session
                     // itself here, so its figure needs no lookup.

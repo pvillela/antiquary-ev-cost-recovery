@@ -1,4 +1,4 @@
-use crate::time::{round_down_timestamp, time_zone};
+use crate::time::{time_zone, truncate_to_time_grid};
 
 use super::{Anomaly, AnomalyKind, BREAKER_RATING_KW, Session};
 use crate::time::TIME_GRID_STEP;
@@ -384,7 +384,7 @@ impl CsvSession {
             .map(|(start_utc, suffix)| {
                 let end_utc = self.resolve_end(tz, start_utc)?;
                 // See README.md, "Excel workbook".
-                let adj_end_utc = round_down_timestamp(end_utc, TIME_GRID_STEP) + TIME_GRID_STEP;
+                let adj_end_utc = truncate_to_time_grid(end_utc) + TIME_GRID_STEP;
 
                 let mut anomalies = common.clone();
                 // Truncation puts the true start in `[start_utc, start_utc + TIME_GRID_STEP)` and the
@@ -855,7 +855,7 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
             row: row as usize,
             conn_start: timestamp_of(number(sheet, &headers, "conn_start_utc", row)?)?,
             conn_end: timestamp_of(number(sheet, &headers, "conn_end_utc", row)?)?,
-            adj_conn_end: timestamp_of(number(sheet, &headers, "adj_conn_end_utc", row)?)?,
+            // adj_conn_end: timestamp_of(number(sheet, &headers, "adj_conn_end_utc", row)?)?,
             conn_duration: duration_of(number(sheet, &headers, "Conn_Duration", row)?),
             charge_time,
             energy_use,
@@ -1605,7 +1605,7 @@ S2,2026-06-02 10:00,2026-06-02 09:00,0:10:00,0:09:00,1.5
                 .contains(&AnomalyKind::InconsistentDuration)
         );
         // The inverted session would put a Right end-point before its own Left.
-        assert!(report.excluded[0].adj_conn_end < report.excluded[0].conn_start);
+        assert!(report.excluded[0].adj_conn_end() < report.excluded[0].adj_conn_start());
 
         fs::remove_dir_all(xlsx.parent().unwrap()).ok();
     }
@@ -1664,12 +1664,20 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
         assert_eq!(s.id, "S69865");
         assert_eq!(s.row, 2);
         assert!(timing_anomalies(&s.anomalies).is_empty());
-        // 16:22 EDT is 20:22 UTC.
+        // The reported start, 16:22 EDT is 20:22 UTC, unadjusted.
         assert_eq!(s.conn_start, utc(civil::date(2026, 6, 1).at(20, 22, 0, 0)));
+        // The adjusted start, 16:22 EDT is 20:22 UTC.
+        assert_eq!(
+            s.adj_conn_start(),
+            utc(civil::date(2026, 6, 1).at(20, 22, 0, 0))
+        );
         // The reported end, 21:29 EDT, unadjusted.
         assert_eq!(s.conn_end, utc(civil::date(2026, 6, 2).at(1, 29, 0, 0)));
         // The adjusted end: 21:30:00 EDT, exclusive.
-        assert_eq!(s.adj_conn_end, utc(civil::date(2026, 6, 2).at(1, 30, 0, 0)));
+        assert_eq!(
+            s.adj_conn_end(),
+            utc(civil::date(2026, 6, 2).at(1, 30, 0, 0))
+        );
         assert_eq!(s.conn_duration, Duration::from_secs(5 * 3600 + 7 * 60 + 53));
         assert_eq!(s.charge_time, Duration::from_secs(5 * 3600 + 7 * 60 + 52));
         assert!((s.energy_use - 30.6).abs() < 1e-9);

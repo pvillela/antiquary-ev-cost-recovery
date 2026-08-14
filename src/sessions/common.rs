@@ -1,4 +1,4 @@
-use crate::time::{Interval, TIME_GRID_STEP, duration, time_zone};
+use crate::time::{Interval, TIME_GRID_STEP, duration, time_zone, truncate_to_time_grid};
 
 use super::site_load::{Load, ev_load, ev_real_power_kw, transformer_load};
 use jiff::{Timestamp, Zoned};
@@ -43,23 +43,11 @@ pub struct Session {
     pub row: usize,
     /// `conn_start_utc`: connection start date-time from `session report`.
     pub conn_start: Timestamp,
-    // TODO /// `adj_conn_start_utc`: connection start date-time from `session report`, rounded down to
-    // /// [`TIME_GRID_STEP`], so the true start lies in
-    // /// `[adj_conn_start, adj_conn_start + TIME_GRID_STEP)`.
-    // pub adj_conn_start: Timestamp,
     /// `conn_end_utc`: connection end date-time as reported, truncated to the minute.
     ///
     /// Held for reporting only. Every calculation wants [`Session::adj_conn_end`], which is the
     /// bound that actually contains the session.
     pub conn_end: Timestamp,
-    /// `adj_conn_end_utc`: [`Session::conn_end`] padded by one [`TIME_GRID_STEP`],
-    /// which makes it the session's **exclusive** end — the true end lies in
-    /// `[adj_conn_end - TIME_GRID_STEP, adj_conn_end)`.
-    ///
-    /// This is the end the estimating logic uses throughout, so that
-    /// `[conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the real
-    /// connection. See README.md, "Sessions and segments".
-    pub adj_conn_end: Timestamp,
     /// `Conn_Duration` from `session report`: the physical elapsed time of the connection, which is
     /// what makes the DST fold inference possible. See README.md, "Time zone".
     pub conn_duration: Duration,
@@ -75,6 +63,24 @@ pub struct Session {
 }
 
 impl Session {
+    /// `adj_conn_start_utc`: connection start date-time from `session report`, rounded down to
+    /// [`TIME_GRID_STEP`], so the true start lies in
+    /// `[adj_conn_start, adj_conn_start + TIME_GRID_STEP)`.
+    pub fn adj_conn_start(&self) -> Timestamp {
+        truncate_to_time_grid(self.conn_start)
+    }
+
+    /// `adj_conn_end_utc`: [`Session::conn_end`] padded by one [`TIME_GRID_STEP`],
+    /// which makes it the session's **exclusive** end — the true end lies in
+    /// `[adj_conn_end - TIME_GRID_STEP, adj_conn_end)`.
+    ///
+    /// This is the end the estimating logic uses throughout, so that
+    /// `[conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the real
+    /// connection. See README.md, "Sessions and segments".
+    pub fn adj_conn_end(&self) -> Timestamp {
+        truncate_to_time_grid(self.conn_end) + TIME_GRID_STEP
+    }
+
     /// Whether the session overlaps with an interval.
     ///
     /// # Panics
@@ -91,7 +97,7 @@ impl Session {
     /// one caller that legitimately holds excluded sessions — the report, which lists them on
     /// purpose — asks [`Self::lenient_intersects`] instead.
     pub(crate) fn intersects(&self, interval: &Interval) -> bool {
-        let sess_itvl = Interval::from_start_end(self.conn_start, self.adj_conn_end);
+        let sess_itvl = Interval::from_start_end(self.adj_conn_start(), self.adj_conn_end());
         !sess_itvl.intersection(interval).is_empty()
     }
 
@@ -110,9 +116,9 @@ impl Session {
     ///
     /// Identical to [`Self::intersects`] for every session that is not inverted.
     pub(crate) fn lenient_intersects(&self, interval: &Interval) -> bool {
-        let (lo, hi) = match self.conn_start <= self.adj_conn_end {
-            true => (self.conn_start, self.adj_conn_end),
-            false => (self.adj_conn_end, self.conn_start),
+        let (lo, hi) = match self.adj_conn_start() <= self.adj_conn_end() {
+            true => (self.adj_conn_start(), self.adj_conn_end()),
+            false => (self.adj_conn_end(), self.adj_conn_start()),
         };
         !Interval::from_start_end(lo, hi)
             .intersection(interval)
@@ -129,14 +135,19 @@ impl Session {
         Zoned::new(self.conn_end, time_zone())
     }
 
-    /// Adjusted, exclusive connection end in local time (ET).
-    pub fn adj_conn_end_local(&self) -> Zoned {
-        Zoned::new(self.adj_conn_end, time_zone())
+    /// Adjusted, inclusive connection start in local time (ET).
+    pub fn adj_conn_start_local(&self) -> Zoned {
+        Zoned::new(self.adj_conn_start(), time_zone())
     }
 
-    /// Session duration from `conn_start` to `adj_conn_end`
+    /// Adjusted, exclusive connection end in local time (ET).
+    pub fn adj_conn_end_local(&self) -> Zoned {
+        Zoned::new(self.adj_conn_end(), time_zone())
+    }
+
+    /// Session duration from `adj_conn_start` to `adj_conn_end`
     pub fn adj_duration(&self) -> Duration {
-        duration(self.conn_start, self.adj_conn_end)
+        duration(self.adj_conn_start(), self.adj_conn_end())
     }
 
     /// Average power draw in kW: [`Self::energy_use`] / ([`Self::charge_time`] in hours).
@@ -161,19 +172,19 @@ impl Session {
     /// from the extremes of the timestamp range only defers the problem to whoever measures its
     /// duration. The absence is in the type instead.
     pub(crate) fn interval_overlap(&self, interval: &Interval) -> Option<SessionOverlap> {
-        let sess_itvl = Interval::from_start_end(self.conn_start, self.adj_conn_end);
+        let sess_itvl = Interval::from_start_end(self.adj_conn_start(), self.adj_conn_end());
         let overlap = sess_itvl.intersection(interval);
         if overlap.is_empty() {
             return None;
         }
 
-        let left = if self.conn_start == overlap.start {
+        let left = if self.adj_conn_start() == overlap.start {
             Bracket::new(overlap.start, overlap.start + TIME_GRID_STEP)
         } else {
             Bracket::exact(overlap.start)
         };
 
-        let right = if self.adj_conn_end == overlap.end() {
+        let right = if self.adj_conn_end() == overlap.end() {
             Bracket::new(overlap.end() - TIME_GRID_STEP, overlap.end())
         } else {
             Bracket::exact(overlap.end())

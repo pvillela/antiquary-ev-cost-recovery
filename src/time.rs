@@ -41,11 +41,12 @@ pub(crate) fn duration(start: Timestamp, end: Timestamp) -> Duration {
 /// See README.md, "Boundaries and the time grid".
 pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
 
-/// Rounds down a `Timestamp` by the specified `step`.
-pub fn round_down_timestamp(ts: Timestamp, step: Duration) -> Timestamp {
-    let ts_nanos = ts.as_nanosecond();
-    let rd_ts_nanos = ts_nanos - ts_nanos.rem_euclid(step.as_nanos() as i128);
-    Timestamp::from_nanosecond(rd_ts_nanos).unwrap_or_else(|_| {
+/// Rounds down a `Timestamp` to align with the time grid.
+pub fn truncate_to_time_grid(ts: Timestamp) -> Timestamp {
+    let step = TIME_GRID_STEP;
+    let ts_nanos = ts.as_second();
+    let rd_ts_secs = ts_nanos - ts_nanos.rem_euclid(step.as_secs() as i64);
+    Timestamp::from_second(rd_ts_secs).unwrap_or_else(|_| {
         panic!("rounding down Timestamp {ts:?} by step {step:?} that is too large")
     })
 }
