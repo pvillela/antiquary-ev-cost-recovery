@@ -1,6 +1,7 @@
-use crate::time::time_zone;
+use crate::time::{round_down_timestamp, time_zone};
 
-use super::{Anomaly, AnomalyKind, BREAKER_RATING_KW, Session, TIME_GRID_STEP};
+use super::{Anomaly, AnomalyKind, BREAKER_RATING_KW, Session};
+use crate::time::TIME_GRID_STEP;
 use jiff::{
     SignedDuration, Timestamp, civil,
     tz::{AmbiguousOffset, TimeZone},
@@ -16,10 +17,6 @@ use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
 /// Excel's day-zero for the 1900 date system, as a Unix timestamp.
 /// 1899-12-30T00:00:00Z; verified by [`test::excel_epoch_constant_matches_jiff`].
 const EXCEL_EPOCH_UNIX_SECS: i64 = -2_209_161_600;
-
-/// [`TIME_GRID_STEP`] in the signed form the timestamp arithmetic needs.
-/// See README.md, "Excel workbook".
-const END_PADDING: SignedDuration = SignedDuration::from_secs(TIME_GRID_STEP.as_secs() as i64);
 
 /// Widest gap between `Conn_start + Conn_Duration` and the reported end that truncation alone can
 /// explain. Both reported timestamps are truncated to the minute while `Conn_Duration` carries
@@ -221,9 +218,16 @@ fn field<'a>(headers: &Headers, record: &'a csv::StringRecord, name: &str) -> &'
         .trim()
 }
 
-/// Local time as `YYYY-MM-DD HH:MM`; the report carries no seconds, which is what makes
-/// `adj_conn_end` necessary in the first place.
+/// Local time as `YYYY-MM-DD HH:MM`; currently, the report carries no seconds, which is what makes
+/// `adj_conn_end` necessary in the first place. However, if seconds are added in the future,
+/// we want to be able to handle that.
 fn parse_local(s: &str, row: usize, column: &str) -> Result<civil::DateTime, Box<dyn Error>> {
+    // 1. Try parsing with seconds first
+    if let Ok(dt) = civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", s) {
+        return Ok(dt);
+    }
+
+    // 2. Fall back to parsing without seconds (seconds default to 00)
     civil::DateTime::strptime("%Y-%m-%d %H:%M", s).map_err(|e| {
         format!("row {row}, column `{column}`: cannot parse timestamp {s:?}: {e}").into()
     })
@@ -380,10 +384,10 @@ impl CsvSession {
             .map(|(start_utc, suffix)| {
                 let end_utc = self.resolve_end(tz, start_utc)?;
                 // See README.md, "Excel workbook".
-                let adj_end_utc = end_utc + END_PADDING;
+                let adj_end_utc = round_down_timestamp(end_utc, TIME_GRID_STEP) + TIME_GRID_STEP;
 
                 let mut anomalies = common.clone();
-                // Truncation puts the true start in `[start_utc, start_utc + END_PADDING)` and the
+                // Truncation puts the true start in `[start_utc, start_utc + TIME_GRID_STEP)` and the
                 // true end in `[end_utc, adj_end_utc)`. An honest `Conn_Duration` carries some
                 // instant of the first window to some instant of the second, so the record is
                 // sound exactly while the first window, shifted by the duration, still meets the
@@ -392,7 +396,7 @@ impl CsvSession {
                 // reporting can explain, and the session is excluded from the estimates
                 // downstream. See `AnomalyKind::InconsistentDuration`.
                 let implied_end = start_utc + self.conn_duration;
-                if implied_end >= adj_end_utc || implied_end <= end_utc - END_PADDING {
+                if implied_end >= adj_end_utc || implied_end <= end_utc - TIME_GRID_STEP {
                     anomalies.push(AnomalyKind::InconsistentDuration);
                 }
 

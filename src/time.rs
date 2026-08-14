@@ -23,6 +23,33 @@ pub(crate) fn duration(start: Timestamp, end: Timestamp) -> Duration {
         .unwrap_or_else(|_| panic!("interval ends at {} before it starts at {}", end, start))
 }
 
+/// Resolution the session report states session boundaries at: `Conn_DateTime_Start` and
+/// `Conn_DateTime_End` are truncated to whole minutes. `Conn_Duration` and `Active_Charge_Time`
+/// are *not* — they carry seconds, which is what makes the DST fold inference possible.
+///
+/// Every allowance the software makes for that truncation is this one value, so all of them move
+/// together should Evolute ever report seconds:
+///
+/// - Added to the reported session end to give `adj_conn_end`, the session's exclusive end.
+/// - The half-width of the band a sound record's `Conn_start + Conn_Duration` must land in.
+///
+/// This constant defines the step of the time grid on which this software relies.
+///
+/// Must divide [`SEGMENT_DURATION`] without leaving a remainder. Otherwise, [`Segment`]s
+/// partitioning the interval of interest will not be on the time grid.
+///
+/// See README.md, "Boundaries and the time grid".
+pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
+
+/// Rounds down a `Timestamp` by the specified `step`.
+pub fn round_down_timestamp(ts: Timestamp, step: Duration) -> Timestamp {
+    let ts_nanos = ts.as_nanosecond();
+    let rd_ts_nanos = ts_nanos - ts_nanos.rem_euclid(step.as_nanos() as i128);
+    Timestamp::from_nanosecond(rd_ts_nanos).unwrap_or_else(|_| {
+        panic!("rounding down Timestamp {ts:?} by step {step:?} that is too large")
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Interval
 // ---------------------------------------------------------------------------

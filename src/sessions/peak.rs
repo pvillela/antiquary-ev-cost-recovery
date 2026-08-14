@@ -227,8 +227,10 @@ fn collect_session_anomalies(interval: &Interval, rsessions: &[RSession]) -> Vec
 
 #[cfg(test)]
 mod test {
+    use crate::time::TIME_GRID_STEP;
+
     use super::super::{
-        SEGMENT_DURATION, TIME_GRID_STEP,
+        SEGMENT_DURATION,
         site_load::{ev_load, site_load},
     };
     use super::*;

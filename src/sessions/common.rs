@@ -1,4 +1,4 @@
-use crate::time::{Interval, duration, time_zone};
+use crate::time::{Interval, TIME_GRID_STEP, duration, time_zone};
 
 use super::site_load::{Load, ev_load, ev_real_power_kw, transformer_load};
 use jiff::{Timestamp, Zoned};
@@ -10,24 +10,6 @@ use std::{
     rc::Rc,
     time::Duration,
 };
-
-/// Resolution the session report states session boundaries at: `Conn_DateTime_Start` and
-/// `Conn_DateTime_End` are truncated to whole minutes. `Conn_Duration` and `Active_Charge_Time`
-/// are *not* — they carry seconds, which is what makes the DST fold inference possible.
-///
-/// Every allowance the software makes for that truncation is this one value, so all of them move
-/// together should Evolute ever report seconds:
-///
-/// - Added to the reported session end to give `adj_conn_end`, the session's exclusive end.
-/// - The half-width of the band a sound record's `Conn_start + Conn_Duration` must land in.
-///
-/// This constant defines the step of the time grid on which this software relies.
-///
-/// Must divide [`SEGMENT_DURATION`] without leaving a remainder. Otherwise, [`Segment`]s
-/// partitioning the interval of interest will not be on the time grid.
-///
-/// See README.md, "Boundaries and the time grid".
-pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
 
 /// The width of the [`Segment`]s an interval of interest is partitioned into.
 ///
@@ -59,10 +41,12 @@ pub struct Session {
     /// is 2. This is *not* the CSV row: a record duplicated to resolve a DST fold occupies two
     /// workbook rows, so the two diverge from that point on.
     pub row: usize,
-    /// `conn_start_utc`: connection start date-time from `session report`, truncated to the
-    /// minute like every reported time, so the true start lies in
-    /// `[conn_start, conn_start + TIME_GRID_STEP)`.
+    /// `conn_start_utc`: connection start date-time from `session report`.
     pub conn_start: Timestamp,
+    // TODO /// `adj_conn_start_utc`: connection start date-time from `session report`, rounded down to
+    // /// [`TIME_GRID_STEP`], so the true start lies in
+    // /// `[adj_conn_start, adj_conn_start + TIME_GRID_STEP)`.
+    // pub adj_conn_start: Timestamp,
     /// `conn_end_utc`: connection end date-time as reported, truncated to the minute.
     ///
     /// Held for reporting only. Every calculation wants [`Session::adj_conn_end`], which is the
