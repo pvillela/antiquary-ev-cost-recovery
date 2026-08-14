@@ -1,16 +1,19 @@
 [package]
-name = "ev-peak-contrib"
+name = "ev_cost_recovery"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-csv = "1"
+csv = "1.4.0"
+eframe = "0.36.1"
+egui_extras = { version = "0.36.1", features = ["datepicker"] }
 jiff = "0.2.35"
-umya-spreadsheet = "3.0.1"
-
-eframe = "0.35"
-egui_extras = { version = "0.35", features = ["datepicker"] }
 rfd = "0.17.2"
+# Whole-document tree rather than a streaming reader: the ESPI join needs random access, since an
+# IntervalBlock resolves to its ReadingType only through a MeterReading entry that may appear
+# anywhere in the feed.
+roxmltree = "0.21.1"
+umya-spreadsheet = "3.0.1"
 
 [target."cfg(windows)".build-dependencies]
 winresource = "0.1.31"

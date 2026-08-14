@@ -5,12 +5,14 @@
 //! asked, whether an estimate may be run at all, what a saved report is called — is decided here
 //! and tested here.
 
-use ev_peak_contrib::sessions::{
-    ConversionReport, HourEntry, Interval, IntervalEstimates, IoiLength, SessionReport,
-    TIME_ZONE_NAME, TZ_OFFSETS, checked_interval, hours_of, interval_estimates,
-    session_csv_to_xlsx, session_list,
+use ev_cost_recovery::{
+    sessions::{
+        ConversionReport, HourEntry, IntervalEstimates, IoiLength, SessionReport, TZ_OFFSETS,
+        checked_interval, hours_of, interval_estimates, session_csv_to_xlsx, session_list,
+    },
+    time::{Interval, time_zone},
 };
-use jiff::{civil, tz::TimeZone};
+use jiff::civil;
 use std::path::{Path, PathBuf};
 
 /// Which of the two jobs the user is doing. `None` is the landing screen: the app opens with
@@ -182,7 +184,7 @@ impl Default for EstimateState {
         let date = jiff::Zoned::now().date();
         Self {
             workbook: None,
-            hours: hours_of(date).unwrap_or_default(),
+            hours: hours_of(date),
             date,
             hour: 0,
             minute: 0,
@@ -225,7 +227,7 @@ impl EstimateState {
 
     pub fn set_date(&mut self, date: civil::Date) {
         self.clear_results();
-        self.hours = hours_of(date).unwrap_or_default();
+        self.hours = hours_of(date);
         self.date = date;
         // A date without the hour previously chosen is the DST-gap date; fall back rather than
         // leave a selection that names no instant.
@@ -358,7 +360,7 @@ fn covered_range(report: &SessionReport) -> Option<(civil::Date, civil::Date)> {
 /// The interval as the report writes it at its head: local times, and the offset named the way a
 /// Toronto Hydro bill names it.
 pub fn interval_heading(interval: Interval, length: IoiLength) -> String {
-    let tz = TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid zone name");
+    let tz = time_zone();
     let (lo, hi) = (interval.start, interval.end());
     let start = lo.to_zoned(tz.clone());
     let end = hi.to_zoned(tz.clone());

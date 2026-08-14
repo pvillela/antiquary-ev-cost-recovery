@@ -20,13 +20,13 @@
 //! than two that could drift.
 
 use super::{
-    Anomaly, AnomalyKind, Bracket, Interval, IntervalEstimates, Segment, Session,
+    Anomaly, AnomalyKind, Bracket, IntervalEstimates, Segment, Session,
     site_load::{
         BREAKER_COUNT, BREAKER_RATING_A, CONTINUOUS_DUTY_DERATE, PANEL_VOLTAGE_V, XFMR_RATING_KVA,
         ev_load, ev_pilot_current_a, loading_ratio, site_load,
     },
-    time_zone,
 };
+use crate::time::{Interval, time_zone};
 use jiff::{Timestamp, Zoned};
 use std::{collections::HashMap, fmt};
 

@@ -4,10 +4,11 @@ use crate::state::{EstimateState, WorkingDir, report_sections};
 use crate::{theme, widgets};
 use eframe::egui;
 use egui_extras::DatePickerButton;
-use ev_peak_contrib::sessions::{
-    Bracket, IntervalEstimates, IoiLength, LEGAL_START_MINUTES, Segment, TIME_ZONE_NAME,
+use ev_cost_recovery::sessions::{
+    Bracket, IntervalEstimates, IoiLength, LEGAL_START_MINUTES, Segment,
 };
-use jiff::{Zoned, tz::TimeZone};
+use ev_cost_recovery::time::time_zone;
+use jiff::Zoned;
 
 pub fn ui(ui: &mut egui::Ui, state: &mut EstimateState, working: &mut WorkingDir) {
     widgets::heading(ui, "Estimate peak contribution");
@@ -282,12 +283,9 @@ fn figure(ui: &mut egui::Ui, value: Bracket<f64>, color: egui::Color32) {
 /// The segment a figure was drawn from, as local clock time — the same name the report's
 /// `Segment` column uses, so the two can be read against each other.
 fn segment_label(segment: &Segment) -> String {
-    Zoned::new(
-        segment.start(),
-        TimeZone::get(TIME_ZONE_NAME).expect("a valid time-zone name"),
-    )
-    .strftime("%H:%M")
-    .to_string()
+    Zoned::new(segment.start(), time_zone())
+        .strftime("%H:%M")
+        .to_string()
 }
 
 fn export_row(ui: &mut egui::Ui, state: &mut EstimateState, working: &mut WorkingDir) {

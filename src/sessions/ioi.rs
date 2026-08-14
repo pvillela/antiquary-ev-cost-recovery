@@ -9,7 +9,7 @@
 //! and reports what is wrong with it, the other offers only choices that are right — so what is
 //! shared here is the rules themselves, not their presentation.
 
-use super::{Interval, TIME_ZONE_NAME};
+use crate::time::{Interval, time_zone};
 use jiff::{
     SignedDuration, Timestamp, civil,
     tz::{Offset, TimeZone},
@@ -80,8 +80,8 @@ pub enum TzLocalMapping {
 }
 
 /// Maps a local wall time to the instant or instants it names.
-pub fn map_local(dt: civil::DateTime) -> Result<TzLocalMapping, String> {
-    let tz = TimeZone::get(TIME_ZONE_NAME).map_err(|e| e.to_string())?;
+pub fn map_local(dt: civil::DateTime) -> TzLocalMapping {
+    let tz = time_zone();
     let candidates: Vec<(&'static str, Timestamp)> = TZ_OFFSETS
         .iter()
         .filter_map(|(name, hours)| {
@@ -91,11 +91,11 @@ pub fn map_local(dt: civil::DateTime) -> Result<TzLocalMapping, String> {
         })
         .collect();
 
-    Ok(match candidates.len() {
+    match candidates.len() {
         0 => TzLocalMapping::Never,
         1 => TzLocalMapping::Unique(candidates[0].1),
         _ => TzLocalMapping::Twice(candidates),
-    })
+    }
 }
 
 /// An hour that occurs at least once on `date`.
@@ -116,13 +116,13 @@ pub struct HourEntry {
 /// In [`TIME_ZONE_NAME`] the transitions fall on the hour and the four always agree, so this is
 /// only insurance — and cheap insurance, because a zone whose minutes disagreed would still be
 /// caught by [`checked_interval`] rather than yielding a figure for the wrong instant.
-pub fn hours_of(date: civil::Date) -> Result<Vec<HourEntry>, String> {
+pub fn hours_of(date: civil::Date) -> Vec<HourEntry> {
     let mut entries = Vec::with_capacity(24);
     for hour in 0..24 {
         let mut occurs = false;
         let mut ambiguous = false;
         for minute in LEGAL_START_MINUTES {
-            match map_local(date.at(hour, minute, 0, 0))? {
+            match map_local(date.at(hour, minute, 0, 0)) {
                 TzLocalMapping::Never => {}
                 TzLocalMapping::Unique(_) => occurs = true,
                 TzLocalMapping::Twice(_) => {
@@ -135,7 +135,7 @@ pub fn hours_of(date: civil::Date) -> Result<Vec<HourEntry>, String> {
             entries.push(HourEntry { hour, ambiguous });
         }
     }
-    Ok(entries)
+    entries
 }
 
 /// Turns a local wall time into the instant it names, refusing rather than guessing when it names
@@ -144,14 +144,14 @@ pub fn resolve_local(dt: civil::DateTime, designator: Option<&str>) -> Result<Ti
     let names =
         |cs: &[(&str, Timestamp)]| cs.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(" or ");
 
-    match (designator, map_local(dt)?) {
+    match (designator, map_local(dt)) {
         (_, TzLocalMapping::Never) => Err(format!(
-            "{dt} never occurred in {TIME_ZONE_NAME}: the clocks jump forward over it when DST \
+            "{dt} never occurred in local time zone: the clocks jump forward over it when DST \
              begins. Pick a time outside the skipped hour."
         )),
         (None, TzLocalMapping::Unique(ts)) => Ok(ts),
         (None, TzLocalMapping::Twice(several)) => Err(format!(
-            "{dt} occurs twice in {TIME_ZONE_NAME}, an hour apart, because DST ends that night. \
+            "{dt} occurs twice in local time zone, an hour apart, because DST ends that night. \
              Add {} to say which is meant.",
             names(&several)
         )),
@@ -160,7 +160,7 @@ pub fn resolve_local(dt: civil::DateTime, designator: Option<&str>) -> Result<Ti
                 TzLocalMapping::Unique(ts) => {
                     // The name that picks out a wall time occurring once is whichever offset the
                     // zone is actually on then.
-                    let tz = TimeZone::get(TIME_ZONE_NAME).map_err(|e| e.to_string())?;
+                    let tz = time_zone();
                     TZ_OFFSETS
                         .iter()
                         .filter(|(_, hours)| tz.to_offset(ts) == Offset::constant(*hours))
@@ -175,7 +175,7 @@ pub fn resolve_local(dt: civil::DateTime, designator: Option<&str>) -> Result<Ti
                 .map(|(_, ts)| *ts)
                 .ok_or_else(|| {
                     format!(
-                        "{dt} is not {} in {TIME_ZONE_NAME}; that date is on {}.",
+                        "{dt} is not {} in local time zone; that date is on {}.",
                         want.to_uppercase(),
                         names(&cs)
                     )
@@ -369,7 +369,7 @@ mod test {
     /// An ordinary date offers all 24 hours and asks nothing.
     #[test]
     fn an_ordinary_date_offers_every_hour() {
-        let hours = hours_of(civil::date(2026, 6, 15)).unwrap();
+        let hours = hours_of(civil::date(2026, 6, 15));
         assert_eq!(hours.len(), 24);
         assert!(hours.iter().all(|h| !h.ambiguous));
         assert_eq!(hours[0].hour, 0);
@@ -379,7 +379,7 @@ mod test {
     /// The hour the clocks jump over is not offered at all: there is nothing to choose between.
     #[test]
     fn the_dst_gap_hour_is_not_offered() {
-        let hours = hours_of(civil::date(2026, 3, 8)).unwrap();
+        let hours = hours_of(civil::date(2026, 3, 8));
         assert_eq!(hours.len(), 23);
         assert!(!hours.iter().any(|h| h.hour == 2), "02 should be absent");
         assert!(hours.iter().any(|h| h.hour == 1));
@@ -391,7 +391,7 @@ mod test {
     /// to answer.
     #[test]
     fn the_dst_fold_hour_is_offered_once_and_marked() {
-        let hours = hours_of(civil::date(2026, 11, 1)).unwrap();
+        let hours = hours_of(civil::date(2026, 11, 1));
         assert_eq!(hours.len(), 24);
         let ambiguous: Vec<i8> = hours
             .iter()

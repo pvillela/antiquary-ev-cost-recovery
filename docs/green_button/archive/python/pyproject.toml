@@ -1,0 +1,11 @@
+[project]
+name = "green-button"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "greenbutton-objects>=2024.7.11",
+    "holidays>=0.100",
+    "openpyxl>=3.1.5",
+]

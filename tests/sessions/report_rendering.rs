@@ -25,8 +25,9 @@
 //! UPDATE_REPORT_GOLDEN=1 cargo test --test report_rendering
 //! ```
 
-use ev_peak_contrib::sessions::{
-    Interval, interval_estimates, session_csv_to_xlsx, site_load_report,
+use ev_cost_recovery::{
+    sessions::{interval_estimates, session_csv_to_xlsx, site_load_report},
+    time::Interval,
 };
 use jiff::Timestamp;
 use std::{fs, path::PathBuf};

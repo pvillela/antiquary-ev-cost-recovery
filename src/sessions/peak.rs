@@ -1,7 +1,8 @@
 use super::{
-    Anomaly, Bracket, Interval, RSegment, RSession, SEGMENT_DURATION, Segment, Session,
-    SessionReport, session_list,
+    Anomaly, Bracket, RSegment, RSession, SEGMENT_DURATION, Segment, Session, SessionReport,
+    session_list,
 };
+use crate::time::Interval;
 use std::{
     error::Error,
     path::{Path, PathBuf},

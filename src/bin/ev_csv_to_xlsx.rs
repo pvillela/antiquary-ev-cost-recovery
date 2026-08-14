@@ -1,6 +1,5 @@
+use ev_cost_recovery::sessions::session_csv_to_xlsx;
 use std::{path::PathBuf, process::ExitCode};
-
-use ev_peak_contrib::sessions::session_csv_to_xlsx;
 
 const USAGE: &str = "\
 Converts a charging session report from CSV to .xlsx.

@@ -1,4 +1,6 @@
-use super::{Anomaly, AnomalyKind, BREAKER_RATING_KW, Session, TIME_GRID_STEP, time_zone};
+use crate::time::time_zone;
+
+use super::{Anomaly, AnomalyKind, BREAKER_RATING_KW, Session, TIME_GRID_STEP};
 use jiff::{
     SignedDuration, Timestamp, civil,
     tz::{AmbiguousOffset, TimeZone},
@@ -950,7 +952,6 @@ fn duration_of(days: f64) -> Duration {
 #[cfg(test)]
 // cargo test --package ev-peak-contrib --lib --all-features -- excel::test --nocapture
 mod test {
-    use super::super::time_zone;
     use super::*;
     use std::fs;
 

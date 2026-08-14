@@ -1,5 +1,7 @@
+use crate::time::{Interval, duration, time_zone};
+
 use super::site_load::{Load, ev_load, ev_real_power_kw, transformer_load};
-use jiff::{Timestamp, Zoned, tz::TimeZone};
+use jiff::{Timestamp, Zoned};
 use std::{
     collections::BTreeSet,
     fmt::{self, Debug},
@@ -8,9 +10,6 @@ use std::{
     rc::Rc,
     time::Duration,
 };
-
-/// Time zone the session report's timestamps are stated in. See README.md, "Time zone".
-pub const TIME_ZONE_NAME: &str = "America/Toronto";
 
 /// Resolution the session report states session boundaries at: `Conn_DateTime_Start` and
 /// `Conn_DateTime_End` are truncated to whole minutes. `Conn_Duration` and `Active_Charge_Time`
@@ -44,56 +43,6 @@ pub const SEGMENT_DURATION: Duration = Duration::from_mins(15);
 
 /// Continuous use breaker kW rating.
 pub const BREAKER_RATING_KW: f64 = ev_real_power_kw();
-
-pub(crate) fn time_zone() -> TimeZone {
-    TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid time-zone name")
-}
-
-pub(crate) fn duration(start: Timestamp, end: Timestamp) -> Duration {
-    Duration::try_from(end.duration_since(start))
-        .unwrap_or_else(|_| panic!("interval ends at {} before it starts at {}", end, start))
-}
-
-// ---------------------------------------------------------------------------
-// Interval
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
-/// Time interval. Must be on the time grid defined by [`TIME_GRID_STEP`].
-pub struct Interval {
-    pub start: Timestamp,
-    pub duration: Duration,
-}
-
-impl Interval {
-    pub fn new(start: Timestamp, duration: Duration) -> Interval {
-        Self { start, duration }
-    }
-
-    pub fn from_start_end(start: Timestamp, end: Timestamp) -> Interval {
-        let duration = duration(start, end);
-        Self { start, duration }
-    }
-
-    pub fn end(&self) -> Timestamp {
-        self.start + self.duration
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.duration == Duration::ZERO
-    }
-
-    pub fn intersection(&self, other: &Interval) -> Self {
-        let start = self.start.max(other.start);
-        let end = self.end().min(other.end());
-        let duration = if start <= end {
-            duration(start, end)
-        } else {
-            Duration::ZERO
-        };
-        Self { start, duration }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Session

@@ -27,8 +27,11 @@
 //! No assertion here names an electrical constant. The numbers this file does state are clock
 //! times and session counts, which are properties of the fixture rather than of the site model.
 
-use ev_peak_contrib::sessions::{
-    AnomalyKind, BREAKER_RATING_KW, Interval, interval_estimates, session_csv_to_xlsx,
+use ev_cost_recovery::{
+    sessions::{
+        AnomalyKind, BREAKER_RATING_KW, IntervalEstimates, interval_estimates, session_csv_to_xlsx,
+    },
+    time::Interval,
 };
 use jiff::{Timestamp, Zoned, tz::TimeZone};
 use std::{
@@ -77,7 +80,7 @@ fn hm(ts: Timestamp) -> String {
 /// A directory per call, not per process: the tests below run in parallel and each tears its own
 /// down afterwards, so a shared one would be removed from under a test still reading it.
 /// `IntervalEstimates` holds `Rc`s, so it cannot be computed once and shared across threads either.
-fn estimates() -> ev_peak_contrib::sessions::IntervalEstimates {
+fn estimates() -> IntervalEstimates {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
         "ev_peak_tiling_{}_{}",

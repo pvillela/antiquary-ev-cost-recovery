@@ -218,3 +218,6 @@ target/derby*
 
 _nogit
 Kanban*
+
+# Workbooks generated beside their input data.
+**/data/*.xlsx
