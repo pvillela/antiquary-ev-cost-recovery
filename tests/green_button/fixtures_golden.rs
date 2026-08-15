@@ -30,9 +30,10 @@
 //! workbook left-aligns it, and every row was 15pt where the reference is 13.8 -- and neither
 //! showed up in a dump that recorded only values and number formats.
 
+use super::{fixture, fixtures_dir};
 use ev_cost_recovery::green_button::{parse, write_workbook};
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use umya_spreadsheet::{Worksheet, reader};
 
 const FIXTURES: &[&str] = &["billed_period", "civic_holiday", "dst_fall", "dst_spring"];
@@ -50,17 +51,13 @@ const FIXTURES: &[&str] = &["billed_period", "civic_holiday", "dst_fall", "dst_s
 /// never read by a test, kept only as provenance.
 const STANDARD: &str = "billed_period";
 
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
-}
-
 #[test]
 fn each_fixture_matches_its_golden() {
     let update = std::env::var_os("UPDATE_GOLDEN").is_some();
     let mut failures = Vec::new();
 
     for name in FIXTURES {
-        let xml = std::fs::read_to_string(fixtures_dir().join(format!("{name}.XML")))
+        let xml = std::fs::read_to_string(fixture(&format!("{name}.XML")))
             .unwrap_or_else(|e| panic!("{name}.XML: {e}"));
         let feed = parse(&xml).unwrap_or_else(|e| panic!("{name}.XML: {e}"));
 
