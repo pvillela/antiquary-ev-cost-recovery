@@ -1,0 +1,30 @@
+# Only what actually ships. Filtering here drops graph entries that never reach a
+# release binary, such as r-efi, which is pulled in only for UEFI targets.
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+# Neither reaches the user: build scripts run on the build machine, and dev
+# dependencies are linked only into tests.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# An OR expression resolves to the first accepted entry, so this order is the
+# preference order. GPL-2.0-only and LGPL-2.1-or-later are deliberately absent:
+# excluding them is what makes self_cell resolve to Apache-2.0 and r-efi to MIT,
+# rather than a choice that would have to be defended somewhere.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "BSL-1.0",
+    # AND-ed onto other terms rather than offered as alternatives, so these are
+    # not optional: the run fails if they are not accepted.
+    "Unicode-3.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]

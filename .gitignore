@@ -221,3 +221,7 @@ Kanban*
 
 # Workbooks generated beside their input data.
 **/data/*.xlsx
+
+# Generated at release time by `cargo about`, embedded by build.rs, and shipped in the release
+# archive. Not committed: a copy in the tree goes stale the moment a dependency moves.
+THIRD-PARTY-NOTICES.md

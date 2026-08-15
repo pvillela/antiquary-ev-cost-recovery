@@ -32,25 +32,51 @@ jobs:
       # Ahead of the build so a failure stops the release before any artifact is uploaded.
       - name: Run tests
         run: cargo test --verbose
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      # Before the build, and not optional: `build.rs` refuses to compile a release whose notices
+      # are missing or stamped with a different dependency graph. The file is not committed, so
+      # this is the only place it exists.
+      - name: Generate third-party notices
+        shell: bash
+        run: bash scripts/gen-notices.sh
       - name: Run Build
         run: cargo build --release --target ${{ matrix.target }} --verbose
+      # The licences travel with the download, not only inside the binary, so the terms can be
+      # read without running the program. Staged in `dist` because `upload-artifact` roots the
+      # archive at the common ancestor of its inputs: handing it the binary under `target` and
+      # the licences from the root would nest everything under the build path.
+      - name: Stage the download (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/ev_peak_gui dist/
+          cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES.md dist/
+      - name: Stage the download (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/${{ matrix.target }}/release/ev_peak_gui.exe dist/
+          Copy-Item LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-NOTICES.md dist/
       # `upload-artifact` zips its inputs and drops the Unix mode bits, so an uploaded binary
       # arrives without its executable bit. Tarring first carries the mode through ourselves.
       - name: Package Linux binary
         if: runner.os == 'Linux'
-        run: tar -czf ev_peak_gui-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release ev_peak_gui
+        run: tar -czf ev_peak_gui-${{ matrix.target }}.tar.gz -C dist .
       - name: Upload Linux Artifact
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
           path: ev_peak_gui-${{ matrix.target }}.tar.gz
-      # No tarball on Windows: nothing there depends on a permission bit surviving the trip.
+      # No tarball on Windows: nothing there depends on a permission bit surviving the trip, so
+      # the zip `upload-artifact` makes on its own is enough.
       - name: Upload Windows Artifact
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/ev_peak_gui.exe
+          path: dist/*
 
 

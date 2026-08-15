@@ -2,6 +2,7 @@
 name = "ev_cost_recovery"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 csv = "1.4.0"
@@ -14,6 +15,12 @@ rfd = "0.17.2"
 # anywhere in the feed.
 roxmltree = "0.21.1"
 umya-spreadsheet = "3.0.1"
+
+[build-dependencies]
+# Verifies that the generated third-party notices match the dependency graph they were made from.
+# Already in the graph transitively, so this compiles nothing new, and `ignore-build-dependencies`
+# in `about.toml` keeps it out of the notices it guards.
+sha2 = "0.11.0"
 
 [target."cfg(windows)".build-dependencies]
 winresource = "0.1.31"

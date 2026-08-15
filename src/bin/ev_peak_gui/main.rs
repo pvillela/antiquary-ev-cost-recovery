@@ -10,6 +10,7 @@
 // builds, where a panic message on stderr is worth more than the tidiness.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about;
 mod app;
 mod convert;
 mod estimate;

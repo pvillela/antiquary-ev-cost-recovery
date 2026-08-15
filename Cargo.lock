@@ -1287,6 +1287,7 @@ dependencies = [
  "jiff",
  "rfd",
  "roxmltree",
+ "sha2",
  "umya-spreadsheet",
  "winresource",
 ]

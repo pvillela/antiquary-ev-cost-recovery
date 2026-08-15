@@ -1,7 +1,7 @@
 //! The window: the tab bar, the landing screen, and which tab is drawn.
 
 use crate::state::{AppState, Tab};
-use crate::{convert, estimate, theme};
+use crate::{about, convert, estimate, theme};
 use eframe::egui;
 
 pub const APP_NAME: &str = "EV Peak Power Contribution";
@@ -21,6 +21,9 @@ pub struct App {
     /// Uploaded on first use rather than at startup, so nothing is paid for it until the landing
     /// screen is actually drawn.
     logo: Option<egui::TextureHandle>,
+    /// Window chrome rather than workflow state, so it sits here and not in `AppState`: opening
+    /// the About window is not a step in either tab's work and must not survive as one.
+    about_open: bool,
 }
 
 impl eframe::App for App {
@@ -53,6 +56,13 @@ impl eframe::App for App {
                             self.state.tab = Some(tab);
                         }
                     }
+                    // Pushed to the far end, away from the tabs: About is not a third place to
+                    // work, and reads as chrome only if it does not sit in their row.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("About").clicked() {
+                            self.about_open = true;
+                        }
+                    });
                 });
                 let rect = ui.max_rect();
                 let y = rect.bottom() + 6.0;
@@ -98,6 +108,9 @@ impl eframe::App for App {
                     }
                 });
         });
+
+        // After the panels, so it is drawn over whichever tab is open.
+        about::window(root_ui.ctx(), &mut self.about_open);
     }
 }
 
