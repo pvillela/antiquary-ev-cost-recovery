@@ -3,6 +3,7 @@ name = "ev_cost_recovery"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+description = "Supports calculation of net impact of EV charging activity on building's electrical costs."
 
 [dependencies]
 csv = "1.4.0"
