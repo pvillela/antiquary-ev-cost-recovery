@@ -1,0 +1,18 @@
+# Update code and docs after merger of `ev-peak-contrib` and `green-button` projects
+
+Two projects, `ev-peak-contrib` and `green-button`, were meged into one and are now modules `sessions` and `green_button`, respectively, and  here. Their histories are in branches `history-ev-peak-contrib` and `history-green-button`.
+
+In addition to the directory structure adjustments, several changes have been introduced:
+- New method `Session::adj_conn_start`; change of `Session::adj_conn_end` from field to method.
+- New columns `adj_conn_start_utc` and `adj_conn_start` to be added to the Excel conversion of the CSV Session Report. With the introduction of these new fields, I would like to have all fields not coming from the CSV placed at the right end of the sheet.
+- Updated determination of `InconsistentDuration` anomaly in `sessions::excel`. See `docs/sessions/time-reporting-uncertainty.md`.
+- I suggest that the `sessions::excel::Row` struct be modified to include a `session: Session` field to avoid duplicaton of logic.
+- New `time` module that combines and attempts to rationalize time logic from both original modules.
+- New placeholder `hydro_bill` module that will be developed in the future.
+- `data` folder that was version-controlled in original `green-button` module has been stripped out of history and is now gitignored for the sake of privacy in what is currently a public repo.
+- Example of revised fixture function pattern in `tests::common` and `tests::green_button`. This pattern should be used for all fixtures in all modules.
+- New module `sessions::energy` to be used to compute the energy consumption of EV charging during a billing period. As a billing period overlaps two session report months, the sessions from 2 session reports will be merged by new function `sessions::DedupedSessions::merge_sessions` to feed into `sessions::energy::tou_kwh`.
+
+There are probably other changes I left out of the above list.
+
+Review the merged code and docs to identify gaps and areas for improvement in code, comments, and docs.

@@ -59,9 +59,13 @@ pub(crate) fn local_midnight(d: Date) -> Timestamp {
 // Time grid
 // ---------------------------------------------------------------------------
 
-/// Resolution the session report states session boundaries at: `Conn_DateTime_Start` and
-/// `Conn_DateTime_End` are truncated to whole minutes. `Conn_Duration` and `Active_Charge_Time`
-/// are *not* — they carry seconds, which is what makes the DST fold inference possible.
+/// Resolution the session report states session boundaries at.
+///
+/// Currently, `Conn_DateTime_Start` and `Conn_DateTime_End` are truncated to whole minutes,
+/// but it could change to whole seconds in the future. In the latter case, this value
+/// should be changed to 1 second.
+///
+/// `Conn_Duration` and `Active_Charge_Time` are *not* truncaged — they carry seconds.
 ///
 /// Every allowance the software makes for that truncation is this one value, so all of them move
 /// together should Evolute ever report seconds:

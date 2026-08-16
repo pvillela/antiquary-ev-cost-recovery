@@ -277,7 +277,9 @@ struct Row {
     end_local: civil::DateTime,
     start_utc: Timestamp,
     end_utc: Timestamp,
+    adj_start_utc: Timestamp,
     adj_end_utc: Timestamp,
+    adj_start_local: civil::DateTime,
     adj_end_local: civil::DateTime,
     /// Everything about this row that needs review. Rendered into the `anomalies` column and,
     /// stamped with the row's workbook number, into [`ConversionReport::anomalies`].
@@ -384,19 +386,18 @@ impl CsvSession {
             .map(|(start_utc, suffix)| {
                 let end_utc = self.resolve_end(tz, start_utc)?;
                 // See README.md, "Excel workbook".
+                let adj_start_utc = truncate_to_time_grid(start_utc);
                 let adj_end_utc = truncate_to_time_grid(end_utc) + TIME_GRID_STEP;
 
                 let mut anomalies = common.clone();
-                // Truncation puts the true start in `[start_utc, start_utc + TIME_GRID_STEP)` and the
-                // true end in `[end_utc, adj_end_utc)`. An honest `Conn_Duration` carries some
-                // instant of the first window to some instant of the second, so the record is
-                // sound exactly while the first window, shifted by the duration, still meets the
-                // second. Both bounds are strict because both windows are half-open at the same
-                // end. Outside the band the three fields contradict each other by more than the
-                // reporting can explain, and the session is excluded from the estimates
-                // downstream. See `AnomalyKind::InconsistentDuration`.
+
+                // TODO: Update comments based on `docs/time-reporting-uncertainty.md`.
+
                 let implied_end = start_utc + self.conn_duration;
-                if implied_end >= adj_end_utc || implied_end <= end_utc - TIME_GRID_STEP {
+
+                if implied_end >= end_utc + 2 * TIME_GRID_STEP + Duration::from_secs(1)
+                    || implied_end < end_utc
+                {
                     anomalies.push(AnomalyKind::InconsistentDuration);
                 }
 
@@ -410,7 +411,9 @@ impl CsvSession {
                     end_local: self.end_local,
                     start_utc,
                     end_utc,
+                    adj_start_utc,
                     adj_end_utc,
+                    adj_start_local: adj_start_utc.to_zoned(tz.clone()).datetime(),
                     adj_end_local: adj_end_utc.to_zoned(tz.clone()).datetime(),
                     anomalies,
                 })
