@@ -12,6 +12,7 @@ In addition to the directory structure adjustments, several changes have been in
 - `data` folder that was version-controlled in original `green-button` module has been stripped out of history and is now gitignored for the sake of privacy in what is currently a public repo.
 - Example of revised fixture function pattern in `tests::common` and `tests::green_button`. This pattern should be used for all fixtures in all modules.
 - New module `sessions::energy` to be used to compute the energy consumption of EV charging during a billing period. As a billing period overlaps two session report months, the sessions from 2 session reports will be merged by new function `sessions::DedupedSessions::merge_sessions` to feed into `sessions::energy::tou_kwh`.
+- GUI binary has been renamed to `ev_cost_recovery` in anticipation of addition of more functionality.
 
 There are probably other changes I left out of the above list.
 
