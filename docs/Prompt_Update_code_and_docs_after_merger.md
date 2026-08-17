@@ -5,7 +5,7 @@ Two projects, `ev-peak-contrib` and `green-button`, were meged into one and are 
 In addition to the directory structure adjustments, several changes have been introduced:
 - New method `Session::adj_conn_start`; change of `Session::adj_conn_end` from field to method.
 - New columns `adj_conn_start_utc` and `adj_conn_start` to be added to the Excel conversion of the CSV Session Report. With the introduction of these new fields, I would like to have all fields not coming from the CSV placed at the right end of the sheet.
-- Updated determination of `InconsistentDuration` anomaly in `sessions::excel`. See `docs/sessions/time-reporting-uncertainty.md`.
+- Updated determination of `InconsistentDuration` anomaly -- see `docs/sessions/time-reporting-uncertainty.md`. The implementation of it that I started in `sessions::excel` was based on a previous version of the document and needs to be revised to align with the document.
 - I suggest that the `sessions::excel::Row` struct be modified to include a `session: Session` field to avoid duplicaton of logic.
 - New `time` module that combines and attempts to rationalize time logic from both original modules.
 - New placeholder `hydro_bill` module that will be developed in the future.
@@ -16,4 +16,4 @@ In addition to the directory structure adjustments, several changes have been in
 
 There are probably other changes I left out of the above list.
 
-Review the merged code and docs to identify gaps and areas for improvement in code, comments, and docs.
+Review the merged code and docs to identify gaps, errors, and other areas for improvement in code, comments, and docs.

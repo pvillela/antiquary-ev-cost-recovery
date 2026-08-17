@@ -70,6 +70,7 @@ impl Session {
         truncate_to_time_grid(self.conn_start)
     }
 
+    // TODO: See `docs/sessions/time-reporting-uncertainty.md` and adjust doc comment below.
     /// `adj_conn_end_utc`: [`Session::conn_end`] padded by one [`TIME_GRID_STEP`],
     /// which makes it the session's **exclusive** end — the true end lies in
     /// `[adj_conn_end - TIME_GRID_STEP, adj_conn_end)`.
@@ -78,7 +79,7 @@ impl Session {
     /// `[conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the real
     /// connection. See README.md, "Sessions and segments".
     pub fn adj_conn_end(&self) -> Timestamp {
-        truncate_to_time_grid(self.conn_end) + TIME_GRID_STEP
+        truncate_to_time_grid(self.conn_end + Duration::from_secs(1)) + TIME_GRID_STEP
     }
 
     /// Whether the session overlaps with an interval.
