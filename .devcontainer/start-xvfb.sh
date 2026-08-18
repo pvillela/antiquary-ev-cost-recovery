@@ -26,6 +26,12 @@ mkdir -p /tmp/.X11-unix
 # The display server itself. Guarded so a second run is harmless. `setsid` puts it in its own
 # process group so it is not signalled when postStartCommand finishes.
 if ! pgrep -x Xvfb >/dev/null; then
+    # /tmp survives a plain container restart, so the lock file and socket from the previous run
+    # are still there while the server that owned them is gone. Xvfb refuses to start against
+    # them ("Server is already active for display 99") and the wait loop below then fails. No
+    # Xvfb process exists at this point, so nothing can be using them.
+    rm -f "/tmp/.X${DISPLAY#:}-lock" "/tmp/.X11-unix/X${DISPLAY#:}"
+
     setsid Xvfb "$DISPLAY" -screen 0 1280x1024x24 -nolisten tcp >>"$LOG" 2>&1 &
 fi
 

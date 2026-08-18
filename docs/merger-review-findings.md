@@ -468,7 +468,8 @@ Re-derive `excel.rs:25` from the document as the asymmetric `(−STEP, +STEP + 1
 - Add a **Result** section stating the three checks together, and cite it from `excel.rs`. The
   absence of one consolidated statement is why the code drifted.
 - Demote check 3 to a derived remark.
-- Retitle so the `InconsistentDuration`-only scope is visible.
+- Keep the title. Add a one-line scope note under it: the first two sections define `adj_start`
+  and `adj_end` generally; the rest derives `InconsistentDuration` only.
 - `multiles` → `multiples`, lines 58 and 118.
 
 ### Smaller correctness items
