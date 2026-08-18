@@ -780,6 +780,41 @@ against the current name, so the test lands on what Phase 3 leaves behind. Cases
 Then re-point the `adj_conn_end_of` doc comment at it, so a reader of the bound can find the
 property it depends on.
 
+### A fixture that exercises the band
+
+Nothing end to end distinguishes a record just inside the `InconsistentDuration` band from one just
+outside. That is how the band could move in `1d99e29` with a green suite, and the two rewritten unit
+tests in `excel.rs` are still the only thing holding it.
+
+**New `tests/fixtures/sessions/Session_Report_Band.csv`.** Reported times `16:10` and `16:40`, so
+`Δ = 30:00` and the sound durations are `[Δ − 59s, Δ + 60s]` = `[0:29:01, 0:31:00]`. Five records,
+each one second from a decision:
+
+| id | `Conn_DateTime_Start` | `Conn_DateTime_End` | `Conn_Duration` | expected |
+| --- | --- | --- | --- | --- |
+| `EARLYOUT` | 16:10 | 16:40 | `0:29:00` | flagged — last value check 3 rejects |
+| `EARLYIN` | 16:10 | 16:40 | `0:29:01` | sound — first value it accepts |
+| `LATEIN` | 16:10 | 16:40 | `0:31:00` | sound — last value check 2 accepts |
+| `LATEOUT` | 16:10 | 16:40 | `0:31:01` | flagged — first value it rejects |
+| `INVERT1` | 16:31 | 16:30 | `0:00:00` | flagged by **check 1 alone** |
+
+`INVERT1` is the case that matters most and the one no fixture has ever carried: a one-minute
+inversion with a zero duration satisfies checks 2 and 3, and is the smallest inversion whole-minute
+reporting can express. It also picks up `ZeroActiveChargeTime`, which is honest — the two travel
+together by arithmetic, not by coincidence.
+
+Give the four band records `Active_Charge_Time` and `Energy_Use` matching the existing `N1` row, so
+`avg_kw` stays under `BREAKER_RATING_KW` and no `ExcessiveAvgKw` noise enters.
+
+**Driven by an assertion, not a golden.** A rendered report is a coarse instrument for "is this
+record excluded". Add the case to `tests/sessions/` and assert membership of
+`IntervalEstimates::excluded_sessions` directly, the way `segment_tiling.rs` asserts segment
+membership — `EARLYOUT`, `LATEOUT` and `INVERT1` in, `EARLYIN` and `LATEIN` out. No new golden file,
+so this is **not** coupled to the column reorder and can land at any point in the phase.
+
+Each of the four band records must state its arithmetic in a comment. A bare `0:29:01` in a CSV is
+unreadable, and the next person to touch the band needs to know which second each row is testing.
+
 ### `SignedDuration`
 
 Convert at the parse boundary so `parse_duration`, `CsvSession` and `excel_duration` use unsigned
@@ -890,8 +925,7 @@ After Phase 3 the workbook cannot be byte-identical to the baseline's, so the ga
 **Scheduled.** `truncate_to_time_grid` has no direct test — now in Phase 3 scope, written against
 the parameterised `truncate_to` / `is_on_grid` it becomes.
 
-**Not scheduled**, and left as a decision: no fixture exercises the `InconsistentDuration` band. The
-two rewritten unit tests in `excel.rs` pin it, but nothing end-to-end does, which is why the band
-could move in `1d99e29` with a green suite. A CSV fixture carrying one record just inside each bound
-and one just outside would close it. It needs a new golden file, so it is cheaper to add during
-Phase 3, when the column reorder regenerates the goldens anyway, than at any later point.
+**Scheduled.** No fixture exercises the `InconsistentDuration` band end to end — now in Phase 3
+scope as `Session_Report_Band.csv`, asserted against `excluded_sessions` rather than a golden.
+
+Nothing else is knowingly unguarded.
