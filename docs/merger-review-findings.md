@@ -756,6 +756,30 @@ where they are.
 - **`METER_INTERVAL: Duration = 1h` in `green_button`**, replacing the four encodings of 3600.
 - **Leave both DST resolvers alone**, and document why.
 
+### Test the truncation directly
+
+`truncate_to_time_grid` has never had a direct test, and Phase 2 made it the base of both
+`adj_conn_start_of` and `adj_conn_end_of` — so every session span in the crate now rests on one
+untested function. Finding 13 was a helper mis-inverting exactly it, and the mistake survived
+because nothing states what it does.
+
+Written against the **parameterised** `truncate_to(ts, step)` / `is_on_grid(ts, step)` above, not
+against the current name, so the test lands on what Phase 3 leaves behind. Cases worth stating:
+
+- A timestamp already on the grid is unchanged — `truncate_to` is idempotent.
+- A timestamp carrying seconds moves **back** to the step below it, never forward.
+- The result satisfies `is_on_grid`, whatever went in. The two functions must agree, since
+  Phase 3's off-grid warning uses one to decide what the other will do.
+- The bound the document rests on: `truncate_to(ts, step) <= ts < truncate_to(ts, step) + step`.
+  This is the `Givens` line of `docs/sessions/time-reporting-uncertainty.md` stated in code, and
+  it is what makes `adj_start <= real_start` true.
+- A negative timestamp — before the Unix epoch — truncates the same way. The implementation uses
+  `rem_euclid`, which is chosen for exactly this and would be an easy thing to "simplify" to `%`.
+- A step other than 60 s, since the point of parameterising is that callers may pass one.
+
+Then re-point the `adj_conn_end_of` doc comment at it, so a reader of the bound can find the
+property it depends on.
+
 ### `SignedDuration`
 
 Convert at the parse boundary so `parse_duration`, `CsvSession` and `excel_duration` use unsigned
@@ -847,8 +871,8 @@ After Phase 3 the workbook cannot be byte-identical to the baseline's, so the ga
 3. ~~Golden files change once, in Phase 2~~ — **they did not change at all.** Neither session
    fixture carries a record the band change reclassifies, which is why the suite never caught
    finding 1 and cannot guard it. The two rewritten tests in `excel.rs` are what pin the band, and
-   they are unit tests, not goldens. A fixture exercising the band would be worth adding; it is not
-   scheduled.
+   they are unit tests, not goldens. See **Still unguarded** below. Goldens *will* change in
+   Phase 3, from the column reorder.
 4. `cargo run --example sessions`, `--example site_load_report`, `--example gb_trim_fixture`. First
    two done; `gb_trim_fixture` not yet run.
 5. Convert `data/Session_Report_June_1_2026-June_30_2026.csv`, then read the workbook back. Both
@@ -861,10 +885,13 @@ After Phase 3 the workbook cannot be byte-identical to the baseline's, so the ga
    this compares against a figure produced outside the crate.
 7. Every path in the consolidated manual's fixture-regeneration procedure resolves. **Phase 4.**
 
-## Still untested, and now load-bearing
+## Still unguarded
 
-`truncate_to_time_grid` (`time/base.rs`) has no direct test. Phase 2 made it the base of both
-`adj_conn_start_of` and `adj_conn_end_of`, so it is the single point every session span now depends
-on — and finding 13 was a helper mis-inverting exactly this function. A handful of assertions,
-including one on a timestamp already on the grid and one carrying seconds, would be cheap. **Not
-scheduled**, and flagged here so it stays a decision.
+**Scheduled.** `truncate_to_time_grid` has no direct test — now in Phase 3 scope, written against
+the parameterised `truncate_to` / `is_on_grid` it becomes.
+
+**Not scheduled**, and left as a decision: no fixture exercises the `InconsistentDuration` band. The
+two rewritten unit tests in `excel.rs` pin it, but nothing end-to-end does, which is why the band
+could move in `1d99e29` with a green suite. A CSV fixture carrying one record just inside each bound
+and one just outside would close it. It needs a new golden file, so it is cheaper to add during
+Phase 3, when the column reorder regenerates the goldens anyway, than at any later point.
