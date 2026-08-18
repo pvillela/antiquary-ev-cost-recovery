@@ -65,7 +65,7 @@ pub(crate) fn local_midnight(d: Date) -> Timestamp {
 /// but it could change to whole seconds in the future. In the latter case, this value
 /// should be changed to 1 second.
 ///
-/// `Conn_Duration` and `Active_Charge_Time` are *not* truncaged — they carry seconds.
+/// `Conn_Duration` and `Active_Charge_Time` are *not* truncated — they carry seconds.
 ///
 /// Every allowance the software makes for that truncation is this one value, so all of them move
 /// together should Evolute ever report seconds:

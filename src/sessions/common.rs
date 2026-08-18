@@ -27,6 +27,63 @@ pub const SEGMENT_DURATION: Duration = Duration::from_mins(15);
 pub const BREAKER_RATING_KW: f64 = ev_real_power_kw();
 
 // ---------------------------------------------------------------------------
+// Reported time, adjusted
+// ---------------------------------------------------------------------------
+//
+// The three functions below are the code counterpart of
+// `docs/sessions/time-reporting-uncertainty.md`, which derives all of them. They are free
+// functions rather than methods so the write path, which has a CSV record and not yet a
+// [`Session`], calls the same code the read path does. Two definitions of `adj_conn_end` is how
+// the two drifted apart last time.
+
+/// `adj_start` of the document: the reported start truncated to the time grid, so the true start
+/// lies in `[adj_conn_start, adj_conn_start + TIME_GRID_STEP)`.
+pub(crate) fn adj_conn_start_of(conn_start: Timestamp) -> Timestamp {
+    truncate_to_time_grid(conn_start)
+}
+
+/// `adj_end` of the document: `our_truncate(rep_end + 1s) + OUR_STEP`.
+///
+/// The `+ 1s` is not padding. The reported end is truncated, *and* it is not known whether the
+/// reporting includes or excludes its last second, so the true end may lie a second beyond the
+/// minute the report names. Dropping it makes the bound too tight by up to one whole step for any
+/// `conn_end` carrying seconds; they agree only while every reported end lands on the minute.
+pub(crate) fn adj_conn_end_of(conn_end: Timestamp) -> Timestamp {
+    truncate_to_time_grid(conn_end + Duration::from_secs(1)) + TIME_GRID_STEP
+}
+
+/// Whether a record's reported start, end and duration can all be true at once.
+///
+/// Three checks, and any failure raises [`AnomalyKind::InconsistentDuration`]:
+///
+/// ```text
+/// 1.  rep_start <= rep_end
+/// 2.  rep_start + conn_duration  <  rep_end + TIME_GRID_STEP + 1s
+/// 3.  rep_end - TIME_GRID_STEP   <  rep_start + conn_duration
+/// ```
+///
+/// Checks 2 and 3 are the document's consistency checks 1 and 2, the second rearranged. Neither is
+/// chosen: they are what truncation to `TIME_GRID_STEP` accounts for and nothing more, so widening
+/// either lets a real fault through and narrowing either flags a sound record.
+///
+/// Check 1 is explicit because the document's own check 3, `adj_start <= adj_end`, is too weak to
+/// stand in for it: with `rep_start = 10:01:00` and `rep_end = 10:00:00` both sides truncate to
+/// `10:01:00`, so a one-minute inversion passes. It only bites beyond roughly two steps. That
+/// matters because [`Session::intersects`] panics on an inverted span and documents exclusion by
+/// this very test as the reason it cannot happen — an inverted record with a small
+/// `conn_duration` satisfies both of the other two checks and would reach it.
+pub(crate) fn duration_is_consistent(
+    conn_start: Timestamp,
+    conn_end: Timestamp,
+    conn_duration: Duration,
+) -> bool {
+    let implied_end = conn_start + conn_duration;
+    conn_start <= conn_end
+        && implied_end < conn_end + TIME_GRID_STEP + Duration::from_secs(1)
+        && conn_end - TIME_GRID_STEP < implied_end
+}
+
+// ---------------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------------
 
@@ -53,8 +110,17 @@ pub struct Session {
     pub conn_duration: Duration,
     /// Active charge time from `session report`.
     ///
-    /// May differ from `adj_conn_end - conn_start` for several reasons: the padding on
-    /// `adj_conn_end`, and a car that stays connected without drawing power.
+    /// Differs from `adj_conn_end - conn_start` by the padding on `adj_conn_end`, and from
+    /// `conn_duration` by about a second. It does **not** measure charging as distinct from
+    /// connection. Evolute, 22 Jul 2026:
+    ///
+    /// > All 3 will show as almost the same, with Active charging being off by maybe 1 second due
+    /// > to rounding as it is on a slightly different timer. These fields are here for grant
+    /// > reporting, but for our system we do not track them differently.
+    ///
+    /// The reason previously given here — a car that stays connected without drawing power — was
+    /// wrong, and the correction matters: it is what makes a zero `Active_Charge_Time` a reporting
+    /// fault rather than an idle connection. See `Questions_for_Evolute.md`, "Answers received".
     pub charge_time: Duration,
     /// From `session report`.
     pub energy_use: f64,
@@ -63,23 +129,18 @@ pub struct Session {
 }
 
 impl Session {
-    /// `adj_conn_start_utc`: connection start date-time from `session report`, rounded down to
-    /// [`TIME_GRID_STEP`], so the true start lies in
-    /// `[adj_conn_start, adj_conn_start + TIME_GRID_STEP)`.
+    /// `adj_conn_start_utc`: see [`adj_conn_start_of`], which this defers to.
     pub fn adj_conn_start(&self) -> Timestamp {
-        truncate_to_time_grid(self.conn_start)
+        adj_conn_start_of(self.conn_start)
     }
 
-    // TODO: See `docs/sessions/time-reporting-uncertainty.md` and adjust doc comment below.
-    /// `adj_conn_end_utc`: [`Session::conn_end`] padded by one [`TIME_GRID_STEP`],
-    /// which makes it the session's **exclusive** end — the true end lies in
-    /// `[adj_conn_end - TIME_GRID_STEP, adj_conn_end)`.
+    /// `adj_conn_end_utc`: see [`adj_conn_end_of`], which this defers to.
     ///
     /// This is the end the estimating logic uses throughout, so that
-    /// `[conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the real
-    /// connection. See README.md, "Sessions and segments".
+    /// `[adj_conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the
+    /// real connection. See README.md, "Sessions and segments".
     pub fn adj_conn_end(&self) -> Timestamp {
-        truncate_to_time_grid(self.conn_end + Duration::from_secs(1)) + TIME_GRID_STEP
+        adj_conn_end_of(self.conn_end)
     }
 
     /// Whether the session overlaps with an interval.
@@ -89,9 +150,12 @@ impl Session {
     /// If `adj_conn_end` precedes `conn_start`. That is a precondition, not a defensive check: a
     /// session whose span is inverted has fields that contradict each other, is flagged
     /// [`AnomalyKind::InconsistentDuration`] on conversion, and is sorted into
-    /// [`crate::SessionReport::excluded`] — so it never reaches the estimating logic at all. The
-    /// implication is not incidental: `conn_duration` is unsigned, so the soundness test's
-    /// `conn_start + conn_duration < adj_conn_end` cannot hold unless `conn_start < adj_conn_end`.
+    /// [`crate::SessionReport::excluded`] — so it never reaches the estimating logic at all.
+    ///
+    /// What establishes that is check 1 of [`duration_is_consistent`], `conn_start <= conn_end`,
+    /// which is there for this reason. It is not implied by the other two: a one-minute inversion
+    /// with a near-zero duration satisfies both of them, and before check 1 existed such a record
+    /// reached here and panicked.
     ///
     /// Panicking here is therefore the honest behaviour. Reaching it means an excluded session got
     /// somewhere it should not have, and that is worth a crash rather than a plausible answer. The
@@ -519,30 +583,28 @@ pub enum AnomalyKind {
     /// [`TIME_GRID_STEP`] or more, in one direction or the other, so the reported
     /// start, end and duration are mutually inconsistent.
     ///
-    /// The tolerance is what makes this a real test rather than a formality, and it is not chosen
-    /// — it is forced. Truncation puts the true start somewhere in `[Conn_start, Adj_conn_start)`
-    /// and the true end somewhere in `[Conn_end, adj_conn_end)`: two half-open windows one
-    /// [`TIME_GRID_STEP`] wide, the same convention the software uses everywhere
-    /// else. An honest `Conn_Duration` spans some instant of the first to some instant of the
-    /// second, so the record is sound exactly when the first window, shifted by `Conn_Duration`,
-    /// still meets the second:
+    /// The test is [`duration_is_consistent`], which carries the derivation. Three checks, and any
+    /// failure raises this:
     ///
     /// ```text
-    /// sound  <=>  Conn_start + Conn_Duration  <  adj_conn_end
-    ///        and  Conn_start + Conn_Duration  >  Conn_end - TIME_GRID_STEP
+    /// 1.  rep_start <= rep_end
+    /// 2.  rep_start + conn_duration  <  rep_end + TIME_GRID_STEP + 1s
+    /// 3.  rep_end - TIME_GRID_STEP   <  rep_start + conn_duration
     /// ```
     ///
-    /// The band is open at both ends, unlike every other interval here, because both windows are
-    /// half-open at the same end — it is an instance of the convention, not an exception to it.
-    /// `adj_conn_end` is the upper bound, now as the exclusive one.
+    /// The window checks 2 and 3 draw is not chosen — it is forced, being exactly what truncation
+    /// to [`TIME_GRID_STEP`] accounts for and nothing more. It is asymmetric: one second wider on
+    /// the late side, because the reported end is not only truncated but also of unknown last-
+    /// second convention. Every bound is strict.
     ///
-    /// Both directions are faults, and both exclude the session from the estimates: if a record's
-    /// own fields disagree by more than the reporting can explain, neither its duration nor the
-    /// span the estimating logic would place it on can be relied on. The overshoot direction also
-    /// subsumes a session that ends before it starts — with `Conn_DateTime_End` a minute or more
-    /// before `Conn_DateTime_Start`, no non-negative duration satisfies the test.
+    /// Check 1 is not redundant. A record whose end precedes its start by one minute, with a
+    /// duration near zero, satisfies both of the others.
     ///
-    /// See README.md, "Other".
+    /// Every direction is a fault, and all of them exclude the session from the estimates: if a
+    /// record's own fields disagree by more than the reporting can explain, neither its duration
+    /// nor the span the estimating logic would place it on can be relied on.
+    ///
+    /// See `docs/sessions/time-reporting-uncertainty.md` and README.md, "Other".
     InconsistentDuration,
     /// The start fell in the DST fold and both offsets reproduce the reported end,
     /// so the record was duplicated. See README.md, "Time zone".

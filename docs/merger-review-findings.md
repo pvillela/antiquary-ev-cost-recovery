@@ -21,17 +21,34 @@ this document is the record and the work list.
 The dedicated `green_button` read and the baseline content diff are both complete and folded in
 (findings 11 and 12).
 
-**Phase 1 is complete.** `cargo test` now runs end to end: **140 passed, 4 failed, 1 ignored**
-across all targets. All four failures are in the library target.
+**Phases 1 and 2 are complete.** `cargo test` is green: **144 passed, 0 failed, 1 ignored** across
+all targets. `cargo clippy --all-targets` reports two warnings, both pre-existing and both owned by
+Phase 3.
 
-- Two are the anticipated `InconsistentDuration` pins, `excel.rs:1137` and `:1344`, which Phase 2
-  rewrites.
-- Two are **new** — `sessions::peak::a_session_covering_half_a_segment_counts_a_half` and
-  `::the_two_derivations_agree_on_a_partially_covered_segment`. See finding 13. Confirmed
-  pre-existing: both fail identically with every Phase 1 change stashed.
+**Measured effect of the Phase 2 fix, on the real report.** Converting
+`data/Session_Report_June_1_2026-June_30_2026.csv` under each rule in turn:
 
-A green run would still not evidence the main defect: finding 1a is invisible to the suite by
-construction.
+| | `InconsistentDuration` | `ExcessiveAvgKw` |
+| --- | --- | --- |
+| Old predicate | **116** of 238 | 70 |
+| Three checks | **0** | 70 |
+
+116 sound sessions — 49% of the report — were being excluded from every estimate. That is the exact
+figure the derivation deleted in `8fafaa2` predicted for the rule it warned against, quoted at
+`excel.rs` as *"116 of the 238 rows in this project's `data` directory"*. Every estimate this
+software has produced since `1d99e29` was computed on half the data.
+
+No genuine fault was masked in the trade: the count went to zero, not down.
+
+**The golden files did not change**, which is itself a finding — neither session fixture carries a
+record in the affected region, so the suite could not have caught this and cannot guard it. The two
+rewritten unit tests in `excel.rs` are now the only thing pinning the band.
+
+Phase 1 closed with four failures: the two anticipated `InconsistentDuration` pins, and two in
+`sessions::peak` that were new to the review and pre-existing (finding 13). Phase 2 resolved all
+four. Of the two pins, `adj_conn_end_pads_the_reported_end` needed **no change at all** — it was
+asserting soundness on a record the old predicate flagged, so correcting the predicate turned it
+green on its own.
 
 ---
 
@@ -498,9 +515,10 @@ the dead `Row` fields (`excel.rs:280-282`, Phase 3's column reorder) and `let_an
 newline. Left alone — Phase 3 gives that file a doc comment, which settles it. It is the only thing
 standing between the tree and a clean `fmt --check`.
 
-## Phase 2 — Fix the arithmetic
+## Phase 2 — Fix the arithmetic — **DONE**
 
-Golden files are regenerated **once**, at the end of this phase.
+Golden files needed **no regeneration**: neither session fixture carries a record the change
+reclassifies. See Status for what it did move on the real report.
 
 ### The `InconsistentDuration` test — three checks
 
@@ -517,34 +535,67 @@ Check 1 is explicit because the document's own check 3 (`adj_start <= adj_end`) 
 passes. It only catches inversions beyond roughly 2·`TIME_GRID_STEP`, and an inverted record with
 `conn_duration == 0` escapes all three checks as currently written.
 
-Rewrite the three pinning tests at `excel.rs:1130-1137`, `:1344-1347`, `:1355`.
+- [x] Implemented as `duration_is_consistent` in `sessions/common.rs`, not inline in `excel.rs`, so
+  the document has exactly one code counterpart. `CsvSession.conn_duration` is still a
+  `SignedDuration`; it is converted at the call site and a negative value is inconsistent by
+  definition. Phase 3 moves that conversion to the parse boundary.
+- [x] `inconsistent_duration_is_reported` rewritten. It now pins `0:31:00` as **sound** where the
+  old test pinned it as a fault — the one second the pre-`1d99e29` code was also missing — and adds
+  the case that check 1 alone catches.
+- [x] `adj_conn_end_pads_the_reported_end` needed no change. It was already asserting soundness on a
+  record the old predicate flagged.
 
-### One `adj_conn_end`
+### One `adj_conn_end` — **DONE**
 
-Delete the local computation at `excel.rs:389-390`; derive from `Session::adj_conn_start()` and
-`adj_conn_end()` (`common.rs:69,81`).
+Better than derived from the methods: `adj_conn_start_of` and `adj_conn_end_of` are now free
+functions in `sessions/common.rs`, and `Session`'s two methods defer to them. The write path holds a
+CSV record and not yet a `Session`, so methods alone would have left it recomputing. There is now
+one definition of each bound in the crate, reachable from both sides.
 
-### `TRUNCATION_SLACK`
+### `TRUNCATION_SLACK` — **DONE**
 
-Re-derive `excel.rs:25` from the document as the asymmetric `(−STEP, +STEP + 1s)`.
+Replaced by `SLACK_EARLY` / `SLACK_LATE`, the asymmetric `(−STEP, +STEP + 1s)`, both **computed
+from `TIME_GRID_STEP`** rather than written out, so a change to the grid carries them with it. The
+symmetric ±60 s constant is gone.
 
-### Document amendments — `docs/sessions/time-reporting-uncertainty.md`
+### Document amendments — **DONE**
 
-- Add a **Result** section stating the three checks together, and cite it from `excel.rs`. The
-  absence of one consolidated statement is why the code drifted.
-- Demote check 3 to a derived remark.
-- Keep the title. Add a one-line scope note under it: the first two sections define `adj_start`
-  and `adj_end` generally; the rest derives `InconsistentDuration` only.
-- `multiles` → `multiples`, lines 58 and 118.
+`docs/sessions/time-reporting-uncertainty.md`:
 
-### Smaller correctness items
+- [x] **Result** section added, stating all three checks together with notes on why each bound is
+  strict, why the window is asymmetric, and why check 1 is not implied. It names
+  `duration_is_consistent` as its one implementation.
+- [x] Check 3 demoted to a derived remark, with the worked one-minute inversion that defeats it.
+  New **check 4**, `rep_start <= rep_end`, derived and added — it is what the software tests
+  instead.
+- [x] Title kept; scope note added under it.
+- [x] `multiles` → `multiples`.
 
-- `src/sessions/energy.rs` — `TouKkh` → `TouKwh`; guard the zero-`adj_duration()` division. The
-  attribution model is deliberate and unchanged.
-- `src/sessions/common.rs:56` — correct the comment and quote Evolute, 22 Jul 2026. Add an
-  **Answers received** section to `Questions_for_Evolute.md` carrying the same quote and date.
-- `src/sessions/excel.rs:773` — revise the `spikes` justification. Keep the bucket.
-- `src/time/base.rs:68` — `truncaged` → `truncated`.
+`docs/sessions/README.md` — the "Other" section stated the abandoned rule verbatim (finding 11). It
+now states the three checks, cites the derivation and the implementation, and explains why check 1
+is not redundant. Corrected here rather than deferred to Phase 4 because Phase 2 is what made it
+wrong.
+
+### Smaller correctness items — **DONE**
+
+- [x] `sessions/energy.rs` — `TouKkh` → `TouKwh`; a zero `adj_duration()` now skips the session
+  rather than dividing by it. The attribution model is unchanged.
+- [x] `sessions/common.rs` — `charge_time`'s comment corrected and the Evolute quote of 22 Jul 2026
+  carried in it. `Questions_for_Evolute.md` gains an **Answers received** section with the quote,
+  the date, and the two consequences for the software. Note the file is at the repository root, not
+  under `docs/sessions/`.
+- [x] `sessions/excel.rs` — the `spikes` justification revised: a zero `Active_Charge_Time` is a
+  reporting fault, not energy delivered in no time. Bucket kept.
+- [x] `time/base.rs` — `truncaged` → `truncated`.
+
+### Finding 13, scheduled here — **DONE**
+
+`peak.rs`'s test helper now derives `conn_end` and then **asserts the round trip** through
+`Session::adj_conn_end`, so it cannot silently invert a formula the code no longer has. That assert
+immediately rejected both fixtures: they asked for an adjusted end of `20:07:30`, which is off the
+time grid and so a session the software cannot produce. Every adjusted end is truncated, so a
+15-minute segment can only be covered in whole minutes and **half is not a reachable fraction**.
+Both moved to five minutes of fifteen, and the first test was renamed accordingly.
 
 ## Phase 3 — Restructure
 

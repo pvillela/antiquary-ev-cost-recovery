@@ -1,6 +1,9 @@
-use crate::time::{time_zone, truncate_to_time_grid};
+use crate::time::time_zone;
 
-use super::{Anomaly, AnomalyKind, BREAKER_RATING_KW, Session};
+use super::{
+    Anomaly, AnomalyKind, BREAKER_RATING_KW, Session, adj_conn_end_of, adj_conn_start_of,
+    duration_is_consistent,
+};
 use crate::time::TIME_GRID_STEP;
 use jiff::{
     SignedDuration, Timestamp, civil,
@@ -18,11 +21,18 @@ use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
 /// 1899-12-30T00:00:00Z; verified by [`test::excel_epoch_constant_matches_jiff`].
 const EXCEL_EPOCH_UNIX_SECS: i64 = -2_209_161_600;
 
-/// Widest gap between `Conn_start + Conn_Duration` and the reported end that truncation alone can
-/// explain. Both reported timestamps are truncated to the minute while `Conn_Duration` carries
-/// seconds, so for a consistent record the two land strictly within a minute of each other, either
-/// side. See README.md, "Time zone".
-const TRUNCATION_SLACK: SignedDuration = SignedDuration::from_secs(60);
+/// The window `Conn_start + Conn_Duration` may land in, stated as an offset from the reported end.
+///
+/// Both bounds are exclusive, and the window is **asymmetric**: it is
+/// [`duration_is_consistent`]'s checks 2 and 3 with the reported end subtracted from each side.
+/// The extra second on the late side is there because the reported end is not only truncated —
+/// it is also unknown whether the reporting includes or excludes its last second. See
+/// `docs/sessions/time-reporting-uncertainty.md`.
+///
+/// Derived from [`TIME_GRID_STEP`] rather than written out, so a change to the grid moves this
+/// with it.
+const SLACK_EARLY: SignedDuration = SignedDuration::from_secs(-(TIME_GRID_STEP.as_secs() as i64));
+const SLACK_LATE: SignedDuration = SignedDuration::from_secs(TIME_GRID_STEP.as_secs() as i64 + 1);
 
 const DATETIME_FORMAT: &str = "yyyy-mm-dd hh:mm:ss ddd";
 /// Elapsed-time format: unlike `hh:mm:ss` it does not wrap a 25-hour duration to `01:00:00`.
@@ -385,19 +395,19 @@ impl CsvSession {
             .into_iter()
             .map(|(start_utc, suffix)| {
                 let end_utc = self.resolve_end(tz, start_utc)?;
-                // See README.md, "Excel workbook".
-                let adj_start_utc = truncate_to_time_grid(start_utc);
-                let adj_end_utc = truncate_to_time_grid(end_utc) + TIME_GRID_STEP;
+                // Through the shared functions, not recomputed here: the write path and the
+                // estimating logic must agree on where a session sits. See README.md,
+                // "Excel workbook".
+                let adj_start_utc = adj_conn_start_of(start_utc);
+                let adj_end_utc = adj_conn_end_of(end_utc);
 
                 let mut anomalies = common.clone();
-
-                // TODO: Update comments based on `docs/time-reporting-uncertainty.md`.
-
-                let implied_end = start_utc + self.conn_duration;
-
-                if implied_end >= end_utc + 2 * TIME_GRID_STEP + Duration::from_secs(1)
-                    || implied_end < end_utc
-                {
+                // A negative `Conn_Duration` fails the conversion and so is inconsistent by
+                // definition: no reported start and end can be reconciled with it. Phase 3 moves
+                // this conversion to the parse boundary, where it belongs.
+                let consistent = Duration::try_from(self.conn_duration)
+                    .is_ok_and(|d| duration_is_consistent(start_utc, end_utc, d));
+                if !consistent {
                     anomalies.push(AnomalyKind::InconsistentDuration);
                 }
 
@@ -423,20 +433,20 @@ impl CsvSession {
 
     /// Does `start` plus the reported elapsed duration land back on the reported end?
     ///
-    /// Both reported timestamps are truncated to the minute while `Conn_Duration` carries seconds,
-    /// so for a consistent record `start + Conn_Duration` falls strictly within a minute of the
-    /// reported end, on either side. Requiring equal minutes instead rejects roughly half of all
-    /// consistent records — 116 of the 238 rows in this project's `data` directory.
+    /// The same window [`duration_is_consistent`] applies, expressed as an offset — see
+    /// [`SLACK_EARLY`] and [`SLACK_LATE`]. Requiring equal minutes instead rejects roughly half of
+    /// all consistent records — 116 of the 238 rows in this project's `data` directory.
     ///
     /// The comparison is made on *local wall time*, not on instants. That is what lets both fold
     /// candidates match a session short enough to fit inside the repeated hour, which is the very
-    /// ambiguity this test exists to detect. The tolerance cannot blur the two candidates together
+    /// ambiguity this test exists to detect. The window cannot blur the two candidates together
     /// otherwise: they lie a full hour apart.
     fn reproduces_reported_end(&self, tz: &TimeZone, start: Timestamp) -> bool {
         let end = (start + self.conn_duration).to_zoned(tz.clone()).datetime();
         match (wall_clock_instant(end), wall_clock_instant(self.end_local)) {
             (Ok(implied), Ok(reported)) => {
-                implied.duration_since(reported).abs() < TRUNCATION_SLACK
+                let offset = implied.duration_since(reported);
+                SLACK_EARLY < offset && offset < SLACK_LATE
             }
             _ => false,
         }
@@ -772,9 +782,16 @@ pub struct SessionReport {
     pub sessions: Vec<Session>,
     /// Sessions with zero `Active_Charge_Time`, so [`Session::charge_time`] is zero and energy
     /// over charge time is infinite or `NaN`. Kept out of `sessions` because those values would
-    /// swamp or poison any segment they entered, and surfaced rather than dropped because energy
-    /// delivered in no time at all is exactly what a demand charge bills on.
-    /// [`Session::avg_kw`] substitutes a finite figure for them. See README.md, "Other".
+    /// swamp or poison any segment they entered.
+    ///
+    /// Surfaced rather than dropped because such a row is almost certainly a **reporting fault**
+    /// and someone should see it. That is a correction: the reason given here used to be that
+    /// energy delivered in no time at all is what a demand charge bills on, which read the field
+    /// as a real measurement of charging. Evolute has since stated that the three duration fields
+    /// track the same thing to within about a second and are not measured separately, so a zero
+    /// beside a non-zero `Energy_Use` is a contradiction in the report rather than an event. See
+    /// `Questions_for_Evolute.md`, "Answers received". [`Session::avg_kw`] substitutes a finite
+    /// figure so the row can still be listed. See README.md, "Other".
     pub spikes: Vec<Session>,
     /// Sessions flagged [`AnomalyKind::InconsistentDuration`]: their reported start, end and duration
     /// contradict each other, so they cannot be placed on a timeline at all. Excluded from the
@@ -1311,12 +1328,16 @@ mod test {
         }
     }
 
-    /// `Conn_start + Conn_Duration` must land strictly inside one `TIME_GRID_STEP`
-    /// of the reported end, on either side; truncation to the minute explains that much and no
-    /// more. Both boundaries are pinned, because getting either off by a second would silently
-    /// reclassify real records: the sample data reaches −57s, so the band is exercised almost to
-    /// its edge. The exclusive cases are pinned too — landing *exactly* a minute out is a fault,
-    /// since a sound record's two truncation windows would then merely touch, not meet.
+    /// The three checks of [`duration_is_consistent`], each pinned at the boundary it draws.
+    ///
+    /// Both bounds are exclusive and both are pinned to the second, because getting either off by
+    /// one silently reclassifies real records — the sample data reaches to within 3 seconds of the
+    /// early edge. With the reported times at 10:00 and 10:30 the sound durations are exactly
+    /// `[0:29:01, 0:31:00]`.
+    ///
+    /// The window is asymmetric: one second wider late than early. That second is not slack, it is
+    /// the reporting's uncertainty about whether the last second of the end minute is included.
+    /// See `docs/sessions/time-reporting-uncertainty.md`.
     #[test]
     fn inconsistent_duration_is_reported() {
         let kinds = |start, end, conn| {
@@ -1329,20 +1350,35 @@ mod test {
         };
         let bad = vec![AnomalyKind::InconsistentDuration];
 
-        // Overshoot: 10:00 + 2h = 12:00, well past the 10:31:00 upper bound.
+        // Overshoot: 10:00 + 2h = 12:00, well past the 10:31:01 upper bound.
         assert_eq!(
             kinds("2026-06-01 10:00", "2026-06-01 10:30", "2:00:00"),
             bad
         );
-        // Ends before it starts — the extreme of the overshoot direction, needing no rule of its own.
+
+        // Check 1, doing work no other check does. A one-minute inversion with a zero duration
+        // satisfies both of the others -- 10:01 + 0 = 10:01 is under the 10:01:01 upper bound and
+        // over the 09:59:00 lower one -- so nothing but the start-before-end test rejects it. It
+        // is also the smallest inversion the reporting can express, since both reported times are
+        // whole minutes; that in turn forces the duration to zero, hence the extra anomaly here.
+        // Letting this row through panics `Session::intersects` downstream.
+        assert_eq!(
+            kinds("2026-06-01 10:01", "2026-06-01 10:00", "0:00:00"),
+            vec![
+                AnomalyKind::ZeroActiveChargeTime,
+                AnomalyKind::InconsistentDuration
+            ]
+        );
+        // The same fault at a scale the overshoot check would also have caught.
         assert_eq!(
             kinds("2026-06-01 10:00", "2026-06-01 09:00", "0:10:00"),
             bad
         );
-        // Exactly on the bounds, which are exclusive: 10:31:00 and 10:29:00. These are the cases
-        // that separate the half-open reading from the closed one.
+
+        // One second outside each bound. 10:31:01 is the first instant check 2 rejects, 10:29:00
+        // the last one check 3 does.
         assert_eq!(
-            kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:31:00"),
+            kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:31:01"),
             bad
         );
         assert_eq!(
@@ -1350,8 +1386,9 @@ mod test {
             bad
         );
 
-        // One second inside each bound, and both sound.
-        assert!(kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:30:59").is_empty());
+        // Exactly on each bound, and both sound. `0:31:00` is the case the old predicate rejected
+        // and the document accepts.
+        assert!(kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:31:00").is_empty());
         assert!(kinds("2026-06-01 10:00", "2026-06-01 10:30", "0:29:01").is_empty());
     }
 

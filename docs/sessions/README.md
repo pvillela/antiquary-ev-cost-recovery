@@ -250,15 +250,17 @@ Evolute's own description of how the installation behaves when several vehicles 
 ### Other
 
 - Every session in the report is written to the workbook, anomalous ones included: the sheet is a faithful rendering of the session report, and which sessions take part in an estimate is decided on the reading side.
-- Each session is checked for internal consistency, and the test is *derived* rather than chosen. Truncation puts the true start somewhere in `[Conn_start, Conn_start + R)` and the true end somewhere in `[Conn_end, adj_conn_end)` — two half-open windows one `R` wide, the same convention used everywhere else. An honest `Conn_Duration` carries some instant of the first window to some instant of the second, so the record is sound exactly when the first window, shifted by the duration, still *meets* the second:
+- Each session is checked for internal consistency, and the test is *derived* rather than chosen. `docs/sessions/time-reporting-uncertainty.md` carries the derivation; its **Result** section states the three checks together, and `duration_is_consistent` in `src/sessions/common.rs` is the one place they appear in code. Any failure raises the anomaly:
 
   ```
-  sound  <=>  Conn_start + Conn_Duration  <  adj_conn_end
-         and  Conn_start + Conn_Duration  >  Conn_end - TIME_GRID_STEP
+  1.  Conn_start <= Conn_end
+  2.  Conn_start + Conn_Duration  <  Conn_end + R + 1s
+  3.  Conn_end - R                <  Conn_start + Conn_Duration
   ```
 
-  Both bounds are strict, because both windows are half-open at the same end. That makes this the one band in the design that is open rather than half-open — an instance of the convention rather than an exception to it, since it is the *intersection* condition of two half-open windows and not an interval anyone chose. The band is not slack: it is precisely what truncation to whole minutes accounts for, and the sample data reaches to within 3 seconds of its lower edge.
-- A session outside that band is flagged `InconsistentDuration` and excluded from the estimates. Both directions are faults: if a record's own fields disagree by more than the reporting can explain, neither its duration nor the span the estimating logic would place it on can be relied on. The overshoot direction subsumes the case of a session ending before it starts, since with `Conn_DateTime_End` a minute or more before `Conn_DateTime_Start` no non-negative duration can satisfy the test.
+  Every bound is strict, because checks 2 and 3 are the condition for two half-open windows to *meet* rather than an interval anyone chose. That makes this the one band in the design that is open rather than half-open — an instance of the convention rather than an exception to it. The band is not slack: it is precisely what truncation to whole minutes accounts for, and the sample data reaches to within 3 seconds of its lower edge. It is also asymmetric, one second wider on the late side, because the reported end is truncated *and* of unknown last-second convention — the same second that appears in `adj_conn_end`.
+- Check 1 is not implied by the other two, and is the reason they are three rather than two. A record whose end precedes its start by a single minute, carrying a duration near zero, satisfies checks 2 and 3; letting it through gives the estimating logic a span that ends before it begins.
+- A session failing any of the three is flagged `InconsistentDuration` and excluded from the estimates. Every direction is a fault: if a record's own fields disagree by more than the reporting can explain, neither its duration nor the span the estimating logic would place it on can be relied on.
 - These are the *only* sessions excluded from the estimates. Nothing else removes a session.
 - Excluded sessions get a section of their own in the report, listing **every** one in the workbook rather than only those near the interval of interest, with an `In interval` column saying whether each *appears* to fall in that interval. Appears only: a record whose own fields contradict each other cannot be trusted to say where it belongs, so filtering on that judgement could hide exactly the session a reader most needs to see. Such a record may even report an end before its start, and the column answers for it.
 - Sessions with zero `Energy_Use` and non-zero `Active_Charge_Time` do not contribute to `energy_based_kw` and `energy_based_kva` but they do contribute to `count_based_kw` and `count_based_kva`.

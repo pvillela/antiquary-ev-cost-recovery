@@ -252,24 +252,39 @@ mod test {
 
     /// A session spanning `[start, end)` exactly, drawing `kw` on average.
     ///
-    /// `adj_conn_end` is set to `end` rather than to `end + TIME_GRID_STEP`, so the span the
-    /// estimating logic sees is the span named here and a test can state the geometry it means.
+    /// `end` is the **adjusted** end, so a test states the geometry it means rather than the
+    /// reported end that produces it. `conn_end` is worked back from it, and the result is checked
+    /// against [`Session::adj_conn_end`], which is the only definition of that bound.
+    ///
+    /// The check is not ceremony. This helper used to subtract one [`TIME_GRID_STEP`] and stop
+    /// there, inverting a formula `adj_conn_end` no longer has, and so quietly built sessions
+    /// ending before the `end` named here for every `end` off the grid. An adjusted end is always
+    /// on the grid -- that is what truncation means -- so an `end` that is not names a geometry the
+    /// software cannot produce, and a test asking for one is asking about a session that cannot
+    /// exist.
+    ///
     /// `charge_time` and `energy_use` are chosen so that `avg_kw()` returns `kw`.
     fn session(id: &str, start: &str, end: &str, kw: f64) -> RSession {
         let conn_start = ts(start);
         let adj_conn_end = ts(end);
         let charge_time = Duration::from_secs(3600);
-        Rc::new(Session {
+        let session = Session {
             id: id.to_owned(),
             row: 2,
             conn_start,
             conn_end: adj_conn_end - TIME_GRID_STEP,
-            // adj_conn_end,
             conn_duration: adj_conn_end.duration_since(conn_start).unsigned_abs(),
             charge_time,
             energy_use: kw * charge_time.as_secs_f64() / 3600.0,
             anomalies: Vec::new(),
-        })
+        };
+        assert_eq!(
+            session.adj_conn_end(),
+            adj_conn_end,
+            "{id}: no reported end yields an adjusted end of {adj_conn_end}; it is off the time \
+             grid"
+        );
+        Rc::new(session)
     }
 
     // -----------------------------------------------------------------------
@@ -394,12 +409,16 @@ mod test {
         reversed.intersects(&hour());
     }
 
-    /// A session covering exactly half a segment counts as half a session in it.
+    /// A session covering part of a segment counts as that fraction of a session in it.
+    ///
+    /// The fraction is a third rather than a half. Every adjusted end lands on the time grid, so a
+    /// session can only ever cover a whole number of grid steps of a segment: with a 15-minute
+    /// segment and a one-minute step, halves are not among the reachable fractions and five
+    /// minutes of fifteen is.
     #[test]
-    fn a_session_covering_half_a_segment_counts_a_half() {
-        // 20:00–20:07:30 is the first half of the 20:00 segment. Its ends fall strictly inside the
-        // session rather than on its reported boundaries, so no minute of doubt applies and the
-        // bracket is exact.
+    fn a_session_covering_part_of_a_segment_counts_that_fraction() {
+        // A session running well past both edges of the segment covers all of it. Neither of its
+        // reported boundaries falls inside, so no minute of doubt applies and the bracket is exact.
         let s = session("H", "2026-06-15T19:00:00Z", "2026-06-15T22:00:00Z", 1.0);
         let half = Interval::new(hour().start, SEGMENT_DURATION / 2);
         let mut segment = Segment::new(half.start, half.duration);
@@ -409,16 +428,16 @@ mod test {
         assert!((count.min - 1.0).abs() < TOLERANCE, "{count:?}");
         assert!((count.max - 1.0).abs() < TOLERANCE, "{count:?}");
 
-        // Against the whole segment, the same session covers half of it.
+        // Against the whole segment, a session running 20:00–20:05 covers a third of it.
         let mut whole = Segment::new(hour().start, SEGMENT_DURATION);
         whole.add_session(session(
             "H",
             "2026-06-15T20:00:00Z",
-            "2026-06-15T20:07:30Z",
+            "2026-06-15T20:05:00Z",
             1.0,
         ));
         let count = whole.agg_count();
-        assert!((count.max - 0.5).abs() < TOLERANCE, "{count:?}");
+        assert!((count.max - 1.0 / 3.0).abs() < TOLERANCE, "{count:?}");
     }
 
     /// An empty segment is not a zero: the transformer is energised whether or not a car is
@@ -556,24 +575,25 @@ mod test {
         }
     }
 
-    /// Half a segment's worth of vehicles is half a segment's worth of count, and the energy-based
-    /// figure follows it exactly.
+    /// Part of a segment's worth of vehicles is that part of a segment's worth of count, and the
+    /// energy-based figure follows it exactly.
     ///
     /// The same identity as above read at a fractional count, which is what a segment ordinarily
     /// holds: `site_load` takes a whole number of vehicles, so the check is that the two
-    /// derivations still agree with each other rather than against a third figure.
+    /// derivations still agree with each other rather than against a third figure. A third rather
+    /// than a half, for the reason given above: halves are off the time grid.
     #[test]
     fn the_two_derivations_agree_on_a_partially_covered_segment() {
         let sessions = vec![session(
             "P",
             "2026-06-15T20:00:00Z",
-            "2026-06-15T20:07:30Z",
+            "2026-06-15T20:05:00Z",
             ev_load().real_kw,
         )];
         let segments = segments_for_ioi(hour(), &sessions);
         let est = segment_estimate(&segments[0]);
 
-        assert!((segments[0].agg_count().max - 0.5).abs() < TOLERANCE);
+        assert!((segments[0].agg_count().max - 1.0 / 3.0).abs() < TOLERANCE);
         assert!(
             (est.energy_based_kw.max - est.count_based_kw.max).abs() < TOLERANCE,
             "{:?} vs {:?}",
