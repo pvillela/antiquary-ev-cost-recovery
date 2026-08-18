@@ -16,4 +16,15 @@ In addition to the directory structure adjustments, several changes have been in
 
 There are probably other changes I left out of the above list.
 
+Additional changes to be made by you:
+- `sessions` functionality: produce log files for conversion from CSV to Excel and reading of Excel.
+- `grenn_button` functionality: produce log file for conversion from XML to Excel.
+- Warning to be reported is session start/end times don't fall on the time grid defined by TIME_GRID_STEP.
+- Maintenance manual: consider changing TIME_GRID_STEP if Evolute changes time resolution of session start/end times (which would have generated a warning according to the previous point). 
+- In crate-level README.md, add links to module-level README.md files located under `docs`.
+- Consolidate in crate module `time` any redudant date and time functionality currently in crate modules `sessions` and `green_button`.
+- Fix any broken inter-document references or links under `docs`.
+- Fix .github/workflows if broken.
+
+
 Review the merged code and docs to identify gaps, errors, and other areas for improvement in code, comments, and docs.
