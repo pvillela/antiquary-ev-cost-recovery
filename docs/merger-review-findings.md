@@ -102,6 +102,8 @@ green on its own.
 
 ## 1. The `InconsistentDuration` test is wrong — it changes results, and it panics
 
+**RESOLVED — Phase 2.** Reconciled against `history-ev-peak-contrib`: identical output on real data.
+
 ### 1a. The accepted band is shifted one step late
 
 `src/sessions/excel.rs:398` accepts a range one whole `TIME_GRID_STEP` later than
@@ -130,9 +132,9 @@ specification. A `// TODO: Update comments based on docs/time-reporting-uncertai
 Three tests pin the old behaviour and contradict the current predicate:
 `src/sessions/excel.rs:1130-1137`, `:1344-1347`, `:1355`.
 
-**Scale.** The derivation deleted in `8fafaa2` stated that requiring equal minutes "rejected roughly
-half of all real records". The new lower bound is that same rejection in weaker form, so the defect
-is expected to touch a large fraction of every report.
+**Scale — measured, not estimated.** 116 of the 238 sessions in
+`data/Session_Report_June_1_2026-June_30_2026.csv`, 49%. The derivation deleted in `8fafaa2` gave
+that same figure for the rule it was warning against. See Status for the three-build table.
 
 **The suite cannot see it.** `src/sessions/excel.rs:1217-1220` —
 `fold_resolves_when_start_plus_duration_falls_short_of_the_reported_minute` — has a fixture (start
@@ -184,6 +186,8 @@ Fix: check `rep_start <= rep_end` explicitly, as step 1 of the Phase 2 predicate
 
 ## 2. Tests are broken in both modules, and the golden discipline is unenforceable
 
+**RESOLVED — Phase 1.**
+
 Every site below points at `tests/fixtures/…` where the file now lives at
 `tests/fixtures/{sessions,green_button}/…`. The merger updated `fixtures_golden.rs` to the shared
 helper and left the others behind.
@@ -220,10 +224,16 @@ panic message misdirects.
 
 ## 3. Every release build fails
 
+**RESOLVED — Phase 1.** Not verified by running the workflow; the change is a literal rename at four
+sites.
+
 `.github/workflows/release-build.yaml:54,60,66,72` copy `ev_peak_gui` / `ev_peak_gui.exe`. The
 binary was renamed to `ev_cost_recovery` in `046d4ba`. The workflow fails at "Stage the download".
 
 ## 4. Two definitions of `adj_conn_end`
+
+**RESOLVED — Phase 2.** One definition now, `adj_conn_end_of` in `sessions/common.rs`. The unread
+`adj_conn_end_utc` column remains; Phase 3 restores the read-back.
 
 ```
 src/sessions/common.rs:82  (method)      truncate_to_time_grid(conn_end + 1s) + TIME_GRID_STEP
@@ -240,11 +250,15 @@ read — `excel.rs:861` is commented out — so nothing detects the divergence.
 
 ## 5. A third, unaligned tolerance
 
+**RESOLVED — Phase 2.**
+
 `src/sessions/excel.rs:25` `TRUNCATION_SLACK` is a symmetric ±60 s window driving DST-fold
 resolution at `:439`. The document implies an asymmetric `(−STEP, +STEP + 1s)`. Three encodings of
 one uncertainty model is how the drift in finding 1 happened.
 
 ## 6. Every `See README.md, "<section>"` citation is broken
+
+**OPEN — Phase 4.**
 
 ~33 of them. Before the merger each project had one README, at its root, holding the cited sections.
 The root README now holds licence text only; the sections live in `docs/sessions/README.md`.
@@ -258,6 +272,8 @@ need the rule stated inline.
 run-in label at `docs/sessions/README.md:11`.
 
 ## 7. Stale paths throughout the documentation
+
+**OPEN — Phase 4.**
 
 Worst first:
 
@@ -280,6 +296,8 @@ decision: they are historical records.
 
 ## 8. Duplicated date/time logic
 
+**OPEN — Phase 3.**
+
 - **Excel serial dates, verbatim.** Same epoch constant, same value, same intent, and duplicate
   pinning tests: `green_button/common.rs:17,120,125,134,139,153` against
   `sessions/excel.rs:19,483,488,493,948,955,1034`. **Hazard:** `excel_serial` means two different
@@ -293,6 +311,9 @@ decision: they are historical records.
   matching offsets. Three intra-doc links at `ioi.rs:21,65,117` are dead as a result.
 
 ## 9. Doc comments that contradict known facts
+
+**PART DONE — Phase 2** closed the `common.rs` `charge_time` comment and the `excel.rs` `spikes`
+justification. The `TIME_GRID_STEP` doc comment is **open**, in Phase 3.
 
 - `src/sessions/common.rs:56` gives *"a car that stays connected without drawing power"* as a reason
   the duration fields differ. Evolute stated otherwise on **22 Jul 2026**: *"All 3 will show as
@@ -308,6 +329,9 @@ decision: they are historical records.
 
 ## 10. Smaller items
 
+**PART DONE — Phase 2** closed `TouKwh`, the zero-division guard, `truncaged` and `multiles`.
+`hydro_bills` and `SignedDuration` are **open** in Phase 3; the prompt typos in Phase 4.
+
 - `src/sessions/energy.rs` — `TouKkh` is a typo for `TouKwh`; division by `adj_duration()` is
   unguarded when that is zero.
 - `src/hydro_bills/mod.rs` is 0 bytes. The merger prompt calls the module `hydro_bill` (singular);
@@ -321,6 +345,8 @@ decision: they are historical records.
   `grenn_button` (21), `redudant` (25), `hydro_bill` → `hydro_bills` (11).
 
 ## 13. The `peak` test helper's `adj_conn_end` inverse is wrong — two tests fail
+
+**RESOLVED — Phase 2.**
 
 `sessions/peak.rs:258` takes its `end` argument as the **adjusted** end and back-computes
 `conn_end = end − TIME_GRID_STEP`. That inverts the old `truncate(conn_end) + STEP` formula, not the
@@ -346,6 +372,30 @@ first thing that depended on it silently.
 Fix belongs in **Phase 2**, alongside the `adj_conn_end` unification: make the helper take the
 reported `conn_end` and derive the adjusted end through `Session::adj_conn_end()`, so the two cannot
 drift again. The two fixtures then need ends that survive the round trip.
+
+## 14. A generated workbook is not byte-reproducible
+
+Found by the baseline reconciliation, and not previously known.
+
+Converting the same input twice with the same binary produces two `.xlsx` files that differ.
+`xl/styles.xml` lists the same `numFmt` entries, with the same ids, in a different order — it is
+`HashMap` iteration order inside umya-spreadsheet. Observed on both writers, over four runs each.
+Every worksheet is byte-identical; only the style table moves.
+
+Consequences:
+
+- **No check may compare workbook bytes.** A byte or hash comparison of two `.xlsx` files fails at
+  random. Both golden suites already dump sheet contents instead, so nothing in the tree is broken
+  by this — but the reason they must is now recorded, and `fixtures_golden.rs` commits a standard
+  workbook (`fixtures_golden.rs:78`) that a maintainer could reasonably think reproducible.
+- **The `.gitignore` rationale is undercut.** Finding 11 notes that `.gitignore` lost the reason
+  `Cargo.lock` is committed: that a reproducible build lets a figure in a workbook be traced to the
+  code that produced it. That still holds for the *figures*; it does not hold for the file.
+- Worth a line in the consolidated maintenance manual (Phase 4), beside the golden-regeneration
+  procedure.
+
+Cheap to remove if it is ever wanted: sort the style table on write. Not scheduled — nothing
+depends on it today.
 
 ## 11. What the merger lost
 
@@ -404,6 +454,9 @@ Confirmed non-losses: `src/sessions/peak.rs` is the former `src/estimates.rs` in
 code.
 
 ## 12. `green_button` defects
+
+**PART DONE — Phase 1** closed the `espi.rs:145` series-keying defect and added the first two
+`ReadingType` error-path tests. Everything else is **open** and needs the scope call below.
 
 The merger changed nothing but `use` paths in all five library files, the binary and the example.
 These are pre-existing, found by the dedicated read.
@@ -757,14 +810,61 @@ decision rather than an oversight.
 
 # Verification
 
-1. `cargo test` passes. It cannot run at all before Phase 1.
-2. `cargo clippy --all-targets` and `cargo fmt --check` are clean.
-3. Golden files change **once**, in Phase 2, and the diff is explainable by the
-   `InconsistentDuration` change alone: sessions whose implied end falls 1–59 s before the reported
-   end leave `excluded`; sessions overshooting by 61–120 s enter it.
-4. `cargo run --example sessions`, `--example site_load_report`, `--example gb_trim_fixture`.
+## The gate: baseline parity
+
+The strongest check available, and the one to run at the end of every phase. The two baselines are
+the reference; merged `main` never was. Build each in a worktree — `history-green-button` needs a
+sibling `history-ev-peak-contrib` worktree, its `Cargo.toml` takes it as a path dependency — and
+compare full output on the real inputs, not anomaly counts.
+
+**Established after Phase 2, and the number to hold:**
+
+| Path | Baseline | Result |
+| --- | --- | --- |
+| sessions | `d4da113` | workbook sheets byte-identical; 240 estimate reports identical; `sessions` listing identical; `site_load_report` identical |
+| green_button | `af8ffea` | `gb_peak_values` stdout identical; workbook sheets byte-identical |
+
+Compare **sheets, never files** — see finding 14.
+
+**Phase 3 breaks this deliberately, and that is the point of recording it now.** The column reorder
+adds `adj_conn_start` and `adj_conn_start_utc` and moves seven columns; the log files are new output.
+After Phase 3 the workbook cannot be byte-identical to the baseline's, so the gate changes shape:
+
+- Every column the baseline also has must carry the **same values in the same rows**.
+- The two new columns and the reordering are the **only** structural differences, and each is
+  named in the Phase 3 plan.
+- The 240 estimate reports must still be **identical**, since no figure in them depends on column
+  order. A difference there is a Phase 3 defect, not a Phase 3 intention.
+- `gb_peak_values` output must stay byte-identical throughout: Phase 3 touches `green_button` only
+  to replace four encodings of 3600 with a constant.
+
+## Per-phase checks
+
+1. `cargo test` passes. **Green since Phase 1**: 144 passed, 0 failed, 1 ignored.
+2. `cargo clippy --all-targets` clean — two pre-existing warnings remain, both closed by Phase 3.
+   `cargo fmt --check` clean — fails only on the 0-byte `src/hydro_bills/mod.rs`, which Phase 3
+   fills in.
+3. ~~Golden files change once, in Phase 2~~ — **they did not change at all.** Neither session
+   fixture carries a record the band change reclassifies, which is why the suite never caught
+   finding 1 and cannot guard it. The two rewritten tests in `excel.rs` are what pin the band, and
+   they are unit tests, not goldens. A fixture exercising the band would be worth adding; it is not
+   scheduled.
+4. `cargo run --example sessions`, `--example site_load_report`, `--example gb_trim_fixture`. First
+   two done; `gb_trim_fixture` not yet run.
 5. Convert `data/Session_Report_June_1_2026-June_30_2026.csv`, then read the workbook back. Both
    logs appear, and the read log reports no discrepancies for a workbook this crate just wrote.
+   **Phase 3** — the logs do not exist yet. The round trip itself is already exercised: all 238
+   sessions read back, none excluded.
 6. Run `gb_peak_values` on `data/TH_Electric_Usage_23-11-2024_to_24-06-2026.XML` and reconcile
-   against `docs/green_button/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx`.
-7. Every path in the consolidated manual's fixture-regeneration procedure resolves.
+   against `docs/green_button/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx`. **Not
+   done.** Parity with `af8ffea` shows the merger changed nothing, not that either is right; only
+   this compares against a figure produced outside the crate.
+7. Every path in the consolidated manual's fixture-regeneration procedure resolves. **Phase 4.**
+
+## Still untested, and now load-bearing
+
+`truncate_to_time_grid` (`time/base.rs`) has no direct test. Phase 2 made it the base of both
+`adj_conn_start_of` and `adj_conn_end_of`, so it is the single point every session span now depends
+on — and finding 13 was a helper mis-inverting exactly this function. A handful of assertions,
+including one on a timestamp already on the grid and one carrying seconds, would be cheap. **Not
+scheduled**, and flagged here so it stays a decision.
