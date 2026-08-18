@@ -51,6 +51,41 @@ half the data.
 No genuine fault was masked in the trade: the count returns to zero, and to the same zero the
 pre-merger build reports.
 
+### Reconciliation against both baselines
+
+Anomaly counts agreeing is weak evidence. The two baselines were built in worktrees and run against
+the same real inputs as the current tree, output compared in full. **The correct question is not
+where the current numbers differ from merged `main`, but where they differ from the baselines** —
+`main` was never a reference, and every difference from a baseline needs an account.
+
+`history-ev-peak-contrib` (`d4da113`) against the current tree, on
+`data/Session_Report_June_1_2026-June_30_2026.csv`:
+
+| Comparison | Result |
+| --- | --- |
+| Generated workbook, every sheet, cell by cell | **byte-identical** |
+| Estimate report over 240 intervals — 30 days × 8 slots, 15 min and 1 h | **identical, all 240** |
+| `sessions` listing of all 238 sessions | identical but for the echoed input path |
+| `site_load_report` | identical |
+
+`history-green-button` (`af8ffea`) against the current tree, on
+`data/TH_Electric_Usage_23-11-2024_to_24-06-2026.XML` — built with its sibling `ev-peak-contrib`
+worktree, which its `Cargo.toml` takes as a path dependency:
+
+| Comparison | Result |
+| --- | --- |
+| `gb_peak_values` stdout — holiday list, period and interval counts, completeness warnings | **identical** |
+| Generated workbook, every sheet, cell by cell | **byte-identical** |
+
+One difference in each, and the same one: `xl/styles.xml` lists the same `numFmt` entries with the
+same ids in a different order. Not a build difference — **the order varies between consecutive runs
+of a single binary**, checked four times on each side. It is `HashMap` iteration order inside
+umya-spreadsheet. Worth knowing separately: it means a generated workbook is not reproducible byte
+for byte, so any future check on one must compare sheets rather than files.
+
+Nothing else differs. The `espi.rs` guard added in Phase 1 is new behaviour by design and does not
+fire on the real export, which the identical output confirms.
+
 **The golden files did not change**, which is itself a finding — neither session fixture carries a
 record in the affected region, so the suite could not have caught this and cannot guard it. The two
 rewritten unit tests in `excel.rs` are now the only thing pinning the band.
