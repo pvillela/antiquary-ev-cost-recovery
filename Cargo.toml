@@ -15,6 +15,9 @@ rfd = "0.17.2"
 # IntervalBlock resolves to its ReadingType only through a MeterReading entry that may appear
 # anywhere in the feed.
 roxmltree = "0.21.1"
+# Stores row heights and column widths as f64 written straight through, which is what lets this
+# reproduce the reference workbook exactly. rust_xlsxwriter models both as whole pixels and cannot
+# represent the template's 13.8pt rows or 1.39-wide spacers.
 umya-spreadsheet = "3.0.1"
 
 [build-dependencies]
