@@ -26,19 +26,30 @@ all targets. `cargo clippy --all-targets` reports two warnings, both pre-existin
 Phase 3.
 
 **Measured effect of the Phase 2 fix, on the real report.** Converting
-`data/Session_Report_June_1_2026-June_30_2026.csv` under each rule in turn:
+`data/Session_Report_June_1_2026-June_30_2026.csv`, 238 sessions, through three builds:
 
-| | `InconsistentDuration` | `ExcessiveAvgKw` |
+| Build | `InconsistentDuration` | `ExcessiveAvgKw` |
 | --- | --- | --- |
-| Old predicate | **116** of 238 | 70 |
-| Three checks | **0** | 70 |
+| `history-ev-peak-contrib` tip (`d4da113`, 11 Aug 2026) | **0** | 70 |
+| `main` after `1d99e29` (16 Aug 2026) | **116** of 238 | 70 |
+| After Phase 2 | **0** | 70 |
 
-116 sound sessions — 49% of the report — were being excluded from every estimate. That is the exact
-figure the derivation deleted in `8fafaa2` predicted for the rule it warned against, quoted at
-`excel.rs` as *"116 of the 238 rows in this project's `data` directory"*. Every estimate this
-software has produced since `1d99e29` was computed on half the data.
+Read the first row first: the pre-merger software was **already correct** on this data. `1d99e29`
+introduced the defect and Phase 2 reverses it, so the right description is a **five-day regression
+restored**, not a long-standing fault found. The `ExcessiveAvgKw` count is identical in all three,
+which is the control: nothing else about the conversion moved.
 
-No genuine fault was masked in the trade: the count went to zero, not down.
+116 is the exact figure the derivation deleted in `8fafaa2` gave for the rule it was warning
+against, still quoted at `excel.rs` as *"116 of the 238 rows in this project's `data` directory"*.
+The commit that deleted the warning implemented the rule it warned about.
+
+The defect never reached a release: `1d99e29`, `c568e4a`, `046d4ba`, `bfc1eab` and `919eb0f` are the
+only commits between its introduction and this fix, and the CI release build has been broken across
+all of them (finding 3). Any estimate produced from a `main` build in that window was computed on
+half the data.
+
+No genuine fault was masked in the trade: the count returns to zero, and to the same zero the
+pre-merger build reports.
 
 **The golden files did not change**, which is itself a finding — neither session fixture carries a
 record in the affected region, so the suite could not have caught this and cannot guard it. The two
