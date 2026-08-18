@@ -4,7 +4,7 @@ mod invoice;
 
 use crate::common::{fixture_in, fixtures_dir_in};
 
-const MODULE_NAME: &'static str = "green_button";
+const MODULE_NAME: &str = "green_button";
 
 pub fn fixture(name: &str) -> std::path::PathBuf {
     fixture_in(MODULE_NAME, name)

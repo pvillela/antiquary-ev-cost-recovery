@@ -202,7 +202,7 @@ fn tomorrow(d: Date) -> Date {
         .expect("a meter reading never sits on the last representable date")
 }
 
-// cargo test --package green-button --lib -- tou::test --nocapture
+// cargo test --lib -- time::tou::test --nocapture
 #[cfg(test)]
 mod test {
     use crate::time::time_zone;

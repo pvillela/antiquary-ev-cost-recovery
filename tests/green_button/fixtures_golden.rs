@@ -15,7 +15,7 @@
 //! Regenerate with:
 //!
 //! ```text
-//! UPDATE_GOLDEN=1 cargo test --test fixtures_golden
+//! UPDATE_GOLDEN=1 cargo test --test integration -- green_button::fixtures_golden
 //! ```
 //!
 //! Then **read what changed**. Regenerating without reading turns these into a rubber stamp.

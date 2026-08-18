@@ -36,10 +36,11 @@ use ev_cost_recovery::{
 use jiff::{Timestamp, Zoned, tz::TimeZone};
 use std::{
     fs,
-    path::PathBuf,
     rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},
 };
+
+use super::fixture;
 
 /// The interval of interest: 16:00–17:00 local on a date with no DST transition.
 const LO: &str = "2026-06-15T20:00:00Z";
@@ -63,10 +64,6 @@ const MEMBERSHIP: [(&str, &[&str]); 4] = [
     ("16:45", &["A", "G"]),
 ];
 
-fn fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
-}
-
 /// Local clock time, the way the report names a segment.
 fn hm(ts: Timestamp) -> String {
     Zoned::new(ts, TimeZone::get("America/Toronto").unwrap())
@@ -89,7 +86,7 @@ fn estimates() -> IntervalEstimates {
     ));
     fs::create_dir_all(&dir).unwrap();
     let csv = dir.join("Session_Report_Diagram.csv");
-    fs::copy(fixtures().join("Session_Report_Diagram.csv"), &csv).unwrap();
+    fs::copy(fixture("Session_Report_Diagram.csv"), &csv).unwrap();
 
     let xlsx = session_csv_to_xlsx(&csv).unwrap().output_path;
     let interval = Interval::from_start_end(LO.parse().unwrap(), HI.parse().unwrap());

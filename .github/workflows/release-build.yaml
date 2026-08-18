@@ -51,25 +51,25 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/ev_peak_gui dist/
+          cp target/${{ matrix.target }}/release/ev_cost_recovery dist/
           cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES.md dist/
       - name: Stage the download (Windows)
         if: runner.os == 'Windows'
         run: |
           New-Item -ItemType Directory -Force -Path dist
-          Copy-Item target/${{ matrix.target }}/release/ev_peak_gui.exe dist/
+          Copy-Item target/${{ matrix.target }}/release/ev_cost_recovery.exe dist/
           Copy-Item LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-NOTICES.md dist/
       # `upload-artifact` zips its inputs and drops the Unix mode bits, so an uploaded binary
       # arrives without its executable bit. Tarring first carries the mode through ourselves.
       - name: Package Linux binary
         if: runner.os == 'Linux'
-        run: tar -czf ev_peak_gui-${{ matrix.target }}.tar.gz -C dist .
+        run: tar -czf ev_cost_recovery-${{ matrix.target }}.tar.gz -C dist .
       - name: Upload Linux Artifact
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
-          path: ev_peak_gui-${{ matrix.target }}.tar.gz
+          path: ev_cost_recovery-${{ matrix.target }}.tar.gz
       # No tarball on Windows: nothing there depends on a permission bit surviving the trip, so
       # the zip `upload-artifact` makes on its own is enough.
       - name: Upload Windows Artifact

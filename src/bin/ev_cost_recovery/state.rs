@@ -439,7 +439,8 @@ mod test {
     /// a figure happens here; a click is only which of these it calls.
     #[test]
     fn the_app_produces_the_same_report_as_the_command_line() {
-        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sessions");
         for stem in ["Session_Report_Diagram", "Session_Report_Anomalies"] {
             // Convert in a scratch directory, so no generated workbook lands in the fixtures.
             let dir =
@@ -677,8 +678,9 @@ mod test {
     /// are what the report actually produces.
     #[test]
     fn the_report_is_split_at_its_own_section_titles() {
-        let text = std::fs::read_to_string("tests/fixtures/Session_Report_Anomalies.report.md")
-            .expect("run from the crate root");
+        let text =
+            std::fs::read_to_string("tests/fixtures/sessions/Session_Report_Anomalies.report.md")
+                .expect("run from the crate root");
         let titles: Vec<String> = report_sections(&text)
             .into_iter()
             .map(|s| s.title)
@@ -706,7 +708,8 @@ mod test {
     #[test]
     fn every_golden_report_splits_into_titled_sections() {
         let fixture = "Session_Report_Diagram";
-        let text = std::fs::read_to_string(format!("tests/fixtures/{fixture}.report.md")).unwrap();
+        let text = std::fs::read_to_string(format!("tests/fixtures/sessions/{fixture}.report.md"))
+            .unwrap();
         let titles: Vec<String> = report_sections(&text)
             .into_iter()
             .map(|s| s.title)
@@ -723,7 +726,8 @@ mod test {
     /// button at the foot of the Convert tab and a click on the tab itself now do the same thing.
     #[test]
     fn a_conversion_hands_its_workbook_on_exactly_once() {
-        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sessions");
         let dir = std::env::temp_dir().join(format!("ev_peak_handoff_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let csv = dir.join("Session_Report_Diagram.csv");

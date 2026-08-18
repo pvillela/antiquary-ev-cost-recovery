@@ -19,7 +19,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-trim_fixture -- cut a small ESPI feed out of a large one.
+gb_trim_fixture -- cut a small ESPI feed out of a large one.
 
 Keeps every entry needed to make the feed parse, plus the IntervalBlocks covering days from FROM to
 TO inclusive, both read as Toronto local dates. Writes to stdout.
@@ -28,10 +28,10 @@ Give a day of slack either side of the billing period you want covered: blocks a
 05:00 UTC, so in summer they start at 01:00 local and will not line up with a period boundary.
 
 Usage:
-    trim_fixture <XML> <FROM> <TO> > out.XML
+    cargo run --example gb_trim_fixture -- <XML> <FROM> <TO> > out.XML
 
 Example:
-    trim_fixture data/TH_Electric_Usage_23-11-2024_to_24-06-2026.XML 2025-07-23 2025-08-24
+    cargo run --example gb_trim_fixture -- data/TH_Electric_Usage_23-11-2024_to_24-06-2026.XML 2025-07-23 2025-08-24
 
 See docs/maintenance-manual.md.
 ";

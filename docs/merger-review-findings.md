@@ -21,9 +21,17 @@ this document is the record and the work list.
 The dedicated `green_button` read and the baseline content diff are both complete and folded in
 (findings 11 and 12).
 
-`cargo test` has **not** been run. It is the first measurement of Phase 1 rather than an input to
-this document, because a green run would not evidence the main defect: finding 1a is invisible to
-the suite by construction.
+**Phase 1 is complete.** `cargo test` now runs end to end: **140 passed, 4 failed, 1 ignored**
+across all targets. All four failures are in the library target.
+
+- Two are the anticipated `InconsistentDuration` pins, `excel.rs:1137` and `:1344`, which Phase 2
+  rewrites.
+- Two are **new** — `sessions::peak::a_session_covering_half_a_segment_counts_a_half` and
+  `::the_two_derivations_agree_on_a_partially_covered_segment`. See finding 13. Confirmed
+  pre-existing: both fail identically with every Phase 1 change stashed.
+
+A green run would still not evidence the main defect: finding 1a is invisible to the suite by
+construction.
 
 ---
 
@@ -249,6 +257,33 @@ decision: they are historical records.
 - `docs/Prompt_Update_code_and_docs_after_merger.md` — `meged` (3), `duplicaton` (9),
   `grenn_button` (21), `redudant` (25), `hydro_bill` → `hydro_bills` (11).
 
+## 13. The `peak` test helper's `adj_conn_end` inverse is wrong — two tests fail
+
+`sessions/peak.rs:258` takes its `end` argument as the **adjusted** end and back-computes
+`conn_end = end − TIME_GRID_STEP`. That inverts the old `truncate(conn_end) + STEP` formula, not the
+current `Session::adj_conn_end()`, which is `truncate(conn_end + 1s) + STEP`. The two agree only when
+`end` sits on the 60 s grid.
+
+Two tests pass an `end` that does not — `20:07:30`, chosen to be exactly half a segment. Measured:
+
+```
+end passed to helper  = 20:07:30
+conn_end stored       = 20:06:30   (end − 60s)
+adj_conn_end()        = 20:07:00   (truncate(20:06:31) + 60s)
+```
+
+30 s short, so a segment the test builds as half-covered is measured at `7/15 = 0.4667` where it
+asserts `0.5`. The commented-out `// adj_conn_end,` at `peak.rs:267` is the field that used to carry
+the value directly; the helper was never re-derived when it went.
+
+**Not a production defect.** Every `conn_end` Evolute reports lands on the minute, where the two
+formulas agree. It is finding 11's *"`truncate_to_time_grid` has no direct test"* showing up as the
+first thing that depended on it silently.
+
+Fix belongs in **Phase 2**, alongside the `adj_conn_end` unification: make the helper take the
+reported `conn_end` and derive the adjusted end through `Session::adj_conn_end()`, so the two cannot
+drift again. The two fixtures then need ends that survive the round trip.
+
 ## 11. What the merger lost
 
 Verified against both baselines by inventory: **every** `fn`, `struct`, `enum`, `const` and
@@ -372,7 +407,7 @@ Recorded with reasons, so the deferral is a decision rather than an omission.
 | --- | --- |
 | Wiring `sessions::energy` into a caller. It is re-exported `#[allow(unused)]` and nothing calls it. | Waits for the GUI that will use it. |
 | `DedupedSessions::merge_sessions` returns `duplicates`, which nothing consumes. | Becomes warnings once the GUI calls it. |
-| Extending `time-reporting-uncertainty.md` to the other six `AnomalyKind`s. | A separate project. The document is retitled instead, so its narrow scope is visible. |
+| Extending `time-reporting-uncertainty.md` to the other six `AnomalyKind`s. | A separate project. A scope note is added under the title instead, so the narrow scope is visible. |
 | Splitting `EV_STEP` from `OUR_STEP` in code. | `EV_STEP` is a conceptual device for the analysis only; `OUR_STEP` is `TIME_GRID_STEP`. |
 | Unifying the two DST resolvers, `sessions/excel.rs:329` and `sessions/ioi.rs:83`. | They solve different problems with deliberately different tie-breaks. Documented instead, so nobody merges them. |
 | Adding a push/PR CI job. | Releases are gated on `vx.y.z-rc` tags, which already match the `v*` trigger. |
@@ -384,22 +419,35 @@ Recorded with reasons, so the deferral is a decision rather than an omission.
 
 Ordered so that each phase is measurable when it starts.
 
-## Phase 1 — Unblock the tests
+## Phase 1 — Unblock the tests — **DONE**
 
 Nothing later can be measured until `cargo test` runs.
 
-- `tests/sessions/mod.rs` — add `fixture()`/`fixtures_dir()` mirroring `tests/green_button/mod.rs:9,13`,
-  which already wrap `fixture_in`/`fixtures_dir_in` from `tests/common/mod.rs`.
-- Delete the local duplicates: `tests/sessions/segment_tiling.rs:66`,
-  `tests/sessions/report_rendering.rs:52`, `tests/green_button/invoice.rs:19`.
-- `src/bin/ev_cost_recovery/state.rs:680,709` — add the missing `sessions/` segment.
-- `.github/workflows/release-build.yaml:54,60,66,72` — `ev_peak_gui` → `ev_cost_recovery`. Keep the
-  `v*` tag trigger.
-- Correct the stale test commands so the golden discipline is enforceable again:
-  `fixtures_golden.rs:18`, `full_feed.rs:7`, the five `--package green-button` lines
-  (`espi.rs:304`, `peaks.rs:131`, `billing.rs:92`, `green_button/common.rs:143`,
-  `green_button/excel.rs:578`), and the `USAGE` string in `examples/gb_trim_fixture.rs:22,31,34`.
-- `full_feed.rs:24` — correct the "tracked in git" expectation message.
+- [x] `tests/sessions/mod.rs` — `fixture()`/`fixtures_dir()` added, mirroring
+  `tests/green_button/mod.rs` exactly.
+- [x] Local duplicates deleted from `tests/sessions/segment_tiling.rs`,
+  `tests/sessions/report_rendering.rs` and `tests/green_button/invoice.rs`; each now imports the
+  module helper. Inputs go through `fixture()`, which asserts existence, so a moved fixture fails by
+  name. Goldens keep `fixtures_dir()`, since a golden may legitimately not exist yet under
+  `UPDATE_*_GOLDEN`.
+- [x] `src/bin/ev_cost_recovery/state.rs` — **four** sites, not the two recorded in finding 2.
+  `:442` and `:726` build the same path from `CARGO_MANIFEST_DIR` and were equally broken; both
+  tests panicked in `fs::copy`.
+- [x] `.github/workflows/release-build.yaml` — `ev_peak_gui` → `ev_cost_recovery` at all four sites,
+  including the two tarball names. `v*` tag trigger untouched.
+- [x] Stale test commands — **eleven** sites, not the seven recorded. The extra four:
+  `src/time/tou.rs:205` and `src/time/holidays.rs:181` also said `--package green-button`;
+  `src/sessions/excel.rs:960` said `--package ev-peak-contrib`; and
+  `tests/sessions/report_rendering.rs:25` had the same `--test <file>` break as the two green_button
+  ones. Unit tests now read `cargo test --lib -- <module>::test --nocapture`; integration tests read
+  `cargo test --test integration -- <module>::<file>`. All three integration forms were run and
+  produce the intended selection.
+- [x] `examples/gb_trim_fixture.rs` — `USAGE` names `gb_trim_fixture`, and both Usage and Example
+  lines give the runnable `cargo run --example gb_trim_fixture -- …` form.
+- [x] `full_feed.rs:24` — the message now says the export is not in the repository and names the path
+  to put in place.
+- [x] Also fixed, found by `cargo clippy`: the redundant `&'static` on `MODULE_NAME` in both test
+  module files.
 
 **Also in this phase, by decision: the `espi.rs:145` guard** (finding 12). It is the only silent
 wrong-number path in the crate, and closing it is small and self-contained.
@@ -425,13 +473,30 @@ if let Some((_, seen)) = series.get(uom)
 ```
 
 Compare the **href**, not the mere presence of an entry: many `IntervalBlock`s legitimately share one
-`ReadingType`. Add a test — no `ReadingType` error path has one today (finding 12, coverage).
+`ReadingType`.
+
+**Done.** `series` is now keyed `HashMap<&str, (Series, &str)>` and `take` drops the href on the way
+out. Two tests added at `espi.rs`, the first error-path tests the `ReadingType` chain has ever had:
+`a_second_reading_type_for_one_unit_is_rejected` and `many_blocks_may_share_one_reading_type` — the
+second pins the href comparison, so a future simplification to "an entry already exists" fails
+loudly. The real 18 MB export was parsed under the guard (`full_feed`, `--ignored`) and is
+unaffected.
 
 Not fixed by this, and still open: a second meter is rejected rather than summed, and `espi.rs:109`
 still validates `intervalLength` for units the tool never reads.
 
-Run `cargo test` at the end of this phase. Expect the three `InconsistentDuration` tests to be the
-only remaining red, and treat anything else as a new finding.
+**Result.** 140 passed, 4 failed, 1 ignored — the ignored one being the full-export test, run
+separately and green. The `InconsistentDuration` pins are two of the four, as expected. The
+other two were treated as a new finding and are written up as finding 13; they are pre-existing,
+verified by stashing every change above and re-running.
+
+`cargo clippy --all-targets` reports two warnings, both pre-existing and both owned by a later phase:
+the dead `Row` fields (`excel.rs:280-282`, Phase 3's column reorder) and `let_and_return` at
+`sessions/common.rs:299`.
+
+`cargo fmt --check` fails on one file: `src/hydro_bills/mod.rs` is 0 bytes and rustfmt wants a
+newline. Left alone — Phase 3 gives that file a doc comment, which settles it. It is the only thing
+standing between the tree and a clean `fmt --check`.
 
 ## Phase 2 — Fix the arithmetic
 

@@ -22,7 +22,7 @@
 //! To regenerate after an intended change, having read the diff:
 //!
 //! ```sh
-//! UPDATE_REPORT_GOLDEN=1 cargo test --test report_rendering
+//! UPDATE_REPORT_GOLDEN=1 cargo test --test integration -- sessions::report_rendering
 //! ```
 
 use ev_cost_recovery::{
@@ -30,7 +30,9 @@ use ev_cost_recovery::{
     time::Interval,
 };
 use jiff::Timestamp;
-use std::{fs, path::PathBuf};
+use std::fs;
+
+use super::{fixture, fixtures_dir};
 
 /// `(fixture stem, interval start UTC, interval end UTC)`.
 ///
@@ -49,17 +51,13 @@ const CASES: [(&str, &str, &str); 2] = [
     ),
 ];
 
-fn fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
-}
-
 /// Converts the fixture in a scratch directory and renders its report, so no generated workbook
 /// lands in `tests/fixtures/`.
 fn render(stem: &str, lo: &str, hi: &str) -> String {
     let dir = std::env::temp_dir().join(format!("ev_peak_report_{stem}_{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let csv = dir.join(format!("{stem}.csv"));
-    fs::copy(fixtures().join(format!("{stem}.csv")), &csv).unwrap();
+    fs::copy(fixture(&format!("{stem}.csv")), &csv).unwrap();
 
     let xlsx = session_csv_to_xlsx(&csv)
         .unwrap_or_else(|e| panic!("{stem} converts: {e}"))
@@ -84,7 +82,7 @@ fn rendered_reports_match_their_golden_files() {
     let mut stale: Vec<String> = Vec::new();
     for (stem, lo, hi) in CASES {
         let rendered = render(stem, lo, hi);
-        let golden = fixtures().join(format!("{stem}.report.md"));
+        let golden = fixtures_dir().join(format!("{stem}.report.md"));
 
         if std::env::var_os("UPDATE_REPORT_GOLDEN").is_some() {
             fs::write(&golden, &rendered).unwrap();
@@ -128,7 +126,7 @@ fn rendered_reports_match_their_golden_files() {
 #[test]
 fn golden_reports_are_readable_as_plain_text() {
     for (stem, _, _) in CASES {
-        let path = fixtures().join(format!("{stem}.report.md"));
+        let path = fixtures_dir().join(format!("{stem}.report.md"));
         let Ok(md) = fs::read_to_string(&path) else {
             continue; // covered by the test above
         };
@@ -173,7 +171,7 @@ fn golden_reports_are_readable_as_plain_text() {
 /// `start < hi && end > lo` at face value.
 #[test]
 fn anomalies_are_scoped_to_the_interval() {
-    let md = fs::read_to_string(fixtures().join("Session_Report_Anomalies.report.md")).unwrap();
+    let md = fs::read_to_string(fixtures_dir().join("Session_Report_Anomalies.report.md")).unwrap();
     assert!(
         !md.contains("FARSPIKE"),
         "a session a day outside the interval was reported:\n{md}"
@@ -193,7 +191,7 @@ fn anomalies_are_scoped_to_the_interval() {
 /// against a 6.7 kW breaker.
 #[test]
 fn an_excessive_average_power_is_reported_with_its_figure() {
-    let md = fs::read_to_string(fixtures().join("Session_Report_Anomalies.report.md")).unwrap();
+    let md = fs::read_to_string(fixtures_dir().join("Session_Report_Anomalies.report.md")).unwrap();
     assert!(
         md.contains("| ExcessiveAvgKw(6.900) |"),
         "the figure is missing from the cell:\n{md}"
@@ -210,7 +208,7 @@ fn an_excessive_average_power_is_reported_with_its_figure() {
 #[test]
 fn golden_report_tables_are_padded_evenly() {
     for (stem, _, _) in CASES {
-        let path = fixtures().join(format!("{stem}.report.md"));
+        let path = fixtures_dir().join(format!("{stem}.report.md"));
         let Ok(md) = fs::read_to_string(&path) else {
             continue;
         };
@@ -241,7 +239,7 @@ fn golden_report_tables_are_padded_evenly() {
 #[test]
 fn the_site_load_table_matches_its_golden_file() {
     let rendered = site_load_report();
-    let golden = fixtures().join("site_load.report.txt");
+    let golden = fixtures_dir().join("site_load.report.txt");
 
     if std::env::var_os("UPDATE_REPORT_GOLDEN").is_some() {
         fs::write(&golden, &rendered).unwrap();

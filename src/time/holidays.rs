@@ -178,7 +178,7 @@ fn easter_sunday(year: i16) -> Date {
     date(year, month as i8, day as i8)
 }
 
-// cargo test --package green-button --lib -- holidays::test --nocapture
+// cargo test --lib -- time::holidays::test --nocapture
 #[cfg(test)]
 mod test {
     use super::*;

@@ -89,7 +89,7 @@ fn previous_month(year: i16, month: i8) -> (i16, i8) {
     }
 }
 
-// cargo test --package green-button --lib -- billing::test --nocapture
+// cargo test --lib -- green_button::billing::test --nocapture
 #[cfg(test)]
 mod test {
     use super::*;

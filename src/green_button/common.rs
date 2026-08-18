@@ -140,7 +140,7 @@ pub(crate) fn excel_serial_date(d: Date) -> f64 {
     naive_serial(d.at(0, 0, 0, 0))
 }
 
-// cargo test --package green-button --lib -- common::test --nocapture
+// cargo test --lib -- green_button::common::test --nocapture
 #[cfg(test)]
 mod test {
     use super::*;

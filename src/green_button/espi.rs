@@ -131,7 +131,15 @@ pub fn parse(xml: &str) -> Result<Feed, Box<dyn Error>> {
     }
 
     // Pass 3: the readings themselves.
-    let mut series: HashMap<&str, Series> = HashMap::new();
+    //
+    // Keyed on uom, and `take` below removes exactly one `Series` per unit, so the whole module
+    // assumes one series per unit. Nothing in ESPI guarantees that: a second meter, a second
+    // UsagePoint, or two ReadingTypes for the same unit are all legal, and folding them together
+    // here would merge two meters' readings into one series and fix `power_of_ten` from whichever
+    // IntervalBlock happened to be visited first -- putting the other out by a power of ten with
+    // no error and no anomaly. The ReadingType href is the identity to compare, not the mere
+    // presence of an entry: many IntervalBlocks legitimately share one ReadingType.
+    let mut series: HashMap<&str, (Series, &str)> = HashMap::new();
     for entry in &entries {
         let Some(block) = content_of(*entry, "IntervalBlock") else {
             continue;
@@ -142,10 +150,25 @@ pub fn parse(xml: &str) -> Result<Feed, Box<dyn Error>> {
         let reading_type = meter_readings[meter_reading];
         let (uom, power_of_ten) = reading_types[reading_type];
 
-        let entry_series = series.entry(uom).or_insert_with(|| Series {
-            values: BTreeMap::new(),
-            power_of_ten,
-            duplicates: BTreeSet::new(),
+        if let Some((_, seen)) = series.get(uom)
+            && *seen != reading_type
+        {
+            return Err(format!(
+                "ReadingTypes {seen} and {reading_type} both carry uom {uom}; this tool assumes \
+                 one series per unit"
+            )
+            .into());
+        }
+
+        let (entry_series, _) = series.entry(uom).or_insert_with(|| {
+            (
+                Series {
+                    values: BTreeMap::new(),
+                    power_of_ten,
+                    duplicates: BTreeSet::new(),
+                },
+                reading_type,
+            )
         });
 
         for reading in espi_children(block, "IntervalReading") {
@@ -174,7 +197,7 @@ pub fn parse(xml: &str) -> Result<Feed, Box<dyn Error>> {
     }
 
     let mut take = |uom: &str, name: &str| -> Result<Series, Box<dyn Error>> {
-        series.remove(uom).ok_or_else(|| {
+        series.remove(uom).map(|(s, _)| s).ok_or_else(|| {
             format!("the feed carries no {name} series (uom {uom}); all three are required").into()
         })
     };
@@ -301,7 +324,7 @@ fn related_hrefs<'a>(entry: Node<'a, 'a>) -> impl Iterator<Item = &'a str> {
         .filter_map(|c| c.attribute("href"))
 }
 
-// cargo test --package green-button --lib -- espi::test --nocapture
+// cargo test --lib -- green_button::espi::test --nocapture
 #[cfg(test)]
 mod test {
     use super::*;
@@ -425,6 +448,58 @@ mod test {
         assert!(readings.rows[1].is_empty());
         assert!(readings.rows[2].is_empty());
         assert!(readings.anomalies[&hole].contains(&Anomaly::MissingInterval));
+    }
+
+    /// A second meter, or a second ReadingType for a unit already seen, is rejected rather than
+    /// folded into the first one's series.
+    ///
+    /// Folding is what the code did before: `power_of_ten` came from whichever block was visited
+    /// first, so a second ReadingType declaring a different multiplier put one meter's readings
+    /// out by a power of ten with no error and no anomaly.
+    #[test]
+    fn a_second_reading_type_for_one_unit_is_rejected() {
+        let extra = r#"
+  <entry>
+    <content><espi:ReadingType xmlns:espi="http://naesb.org/espi">
+      <espi:intervalLength>3600</espi:intervalLength>
+      <espi:powerOfTenMultiplier>0</espi:powerOfTenMultiplier>
+      <espi:uom>72</espi:uom>
+    </espi:ReadingType></content>
+    <link rel="self" href="rt/kwh2"/>
+  </entry>
+  <entry><content><espi:MeterReading xmlns:espi="http://naesb.org/espi"/></content>
+    <link rel="self" href="mr/kwh2"/><link rel="related" href="rt/kwh2"/></entry>
+  <entry><content><espi:IntervalBlock xmlns:espi="http://naesb.org/espi">
+      <espi:IntervalReading>
+        <espi:timePeriod><espi:duration>3600</espi:duration><espi:start>1732345200</espi:start></espi:timePeriod>
+        <espi:value>300</espi:value>
+      </espi:IntervalReading>
+    </espi:IntervalBlock></content>
+    <link rel="self" href="ib/kwh2/1"/><link rel="related" href="mr/kwh2"/></entry>
+</feed>"#;
+        let xml = feed_xml("3600", "3600").replace("</feed>", extra);
+        let err = parse(&xml).unwrap_err().to_string();
+        assert!(err.contains("both carry uom 72"), "{err}");
+        assert!(err.contains("rt/kwh"), "{err}");
+    }
+
+    /// The guard above compares ReadingType hrefs, not the mere presence of a series: many
+    /// IntervalBlocks legitimately share one ReadingType, and the real export is exactly that.
+    #[test]
+    fn many_blocks_may_share_one_reading_type() {
+        let extra = r#"
+  <entry><content><espi:IntervalBlock xmlns:espi="http://naesb.org/espi">
+      <espi:IntervalReading>
+        <espi:timePeriod><espi:duration>3600</espi:duration><espi:start>1732345200</espi:start></espi:timePeriod>
+        <espi:value>300</espi:value>
+      </espi:IntervalReading>
+    </espi:IntervalBlock></content>
+    <link rel="self" href="ib/kwh/2"/><link rel="related" href="mr/kwh"/></entry>
+</feed>"#;
+        let xml = feed_xml("3600", "3600").replace("</feed>", extra);
+        let feed = parse(&xml).unwrap();
+        assert_eq!(feed.kwh.values.len(), 3);
+        assert_eq!(feed.kwh.power_of_ten, -3);
     }
 
     /// A timestamp present in one series and not another is reported rather than zero-filled.

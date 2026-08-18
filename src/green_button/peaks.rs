@@ -128,7 +128,7 @@ fn peak(
     best
 }
 
-// cargo test --package green-button --lib -- peaks::test --nocapture
+// cargo test --lib -- green_button::peaks::test --nocapture
 #[cfg(test)]
 mod test {
     use super::*;

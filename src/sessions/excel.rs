@@ -957,7 +957,7 @@ fn duration_of(days: f64) -> Duration {
 }
 
 #[cfg(test)]
-// cargo test --package ev-peak-contrib --lib --all-features -- excel::test --nocapture
+// cargo test --lib -- sessions::excel::test --nocapture
 mod test {
     use super::*;
     use std::fs;

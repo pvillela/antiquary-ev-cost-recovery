@@ -575,7 +575,7 @@ fn column_letters(mut index: u32) -> String {
     letters
 }
 
-// cargo test --package green-button --lib -- excel::test --nocapture
+// cargo test --lib -- green_button::excel::test --nocapture
 #[cfg(test)]
 mod test {
     use super::*;
