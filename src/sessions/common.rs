@@ -1,4 +1,4 @@
-use crate::time::{Interval, TIME_GRID_STEP, duration, time_zone, truncate_to_time_grid};
+use crate::time::{Interval, duration, time_zone, truncate_to};
 
 use super::site_load::{Load, ev_load, ev_real_power_kw, transformer_load};
 use jiff::{Timestamp, Zoned};
@@ -10,6 +10,31 @@ use std::{
     rc::Rc,
     time::Duration,
 };
+
+/// Resolution this software works session boundaries to.
+///
+/// **Ours, not Evolute's.** Evolute currently reports `Conn_DateTime_Start` and `Conn_DateTime_End`
+/// truncated to whole minutes, and this is set to match; but the two are different quantities, and
+/// the document that derives everything built on this calls them `EV_STEP` and `OUR_STEP` for that
+/// reason. See `docs/sessions/time-reporting-uncertainty.md`.
+///
+/// The distinction decides what to do if Evolute ever reports seconds. **This constant does not
+/// follow them down to 1 second**, because it must keep dividing [`SEGMENT_DURATION`] — otherwise
+/// the [`Segment`]s tiling an interval of interest no longer land on the grid, and
+/// [`LEGAL_START_MINUTES`](super::LEGAL_START_MINUTES) no longer agrees with it. Finer reporting
+/// makes the allowances below unnecessary; it does not make the grid finer.
+///
+/// Every allowance the software makes for the reporting's truncation is this one value:
+///
+/// - Added to the reported session end to give `adj_conn_end`, the session's exclusive end.
+/// - The width of the window a sound record's `Conn_start + Conn_Duration` must land in — one step
+///   early, one step and a second late. See [`duration_is_consistent`].
+///
+/// `Conn_Duration` and `Active_Charge_Time` are *not* truncated; they carry seconds. That asymmetry
+/// is what makes the DST fold inference possible, and it is why the window above has a width at all.
+///
+/// See README.md, "Boundaries and the time grid".
+pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
 
 /// The width of the [`Segment`]s an interval of interest is partitioned into.
 ///
@@ -39,7 +64,7 @@ pub const BREAKER_RATING_KW: f64 = ev_real_power_kw();
 /// `adj_start` of the document: the reported start truncated to the time grid, so the true start
 /// lies in `[adj_conn_start, adj_conn_start + TIME_GRID_STEP)`.
 pub(crate) fn adj_conn_start_of(conn_start: Timestamp) -> Timestamp {
-    truncate_to_time_grid(conn_start)
+    truncate_to(conn_start, TIME_GRID_STEP)
 }
 
 /// `adj_end` of the document: `our_truncate(rep_end + 1s) + OUR_STEP`.
@@ -49,7 +74,7 @@ pub(crate) fn adj_conn_start_of(conn_start: Timestamp) -> Timestamp {
 /// minute the report names. Dropping it makes the bound too tight by up to one whole step for any
 /// `conn_end` carrying seconds; they agree only while every reported end lands on the minute.
 pub(crate) fn adj_conn_end_of(conn_end: Timestamp) -> Timestamp {
-    truncate_to_time_grid(conn_end + Duration::from_secs(1)) + TIME_GRID_STEP
+    truncate_to(conn_end + Duration::from_secs(1), TIME_GRID_STEP) + TIME_GRID_STEP
 }
 
 /// Whether a record's reported start, end and duration can all be true at once.
@@ -357,10 +382,9 @@ impl DedupedSessions {
         let merged = merged_ids
             .into_iter()
             .map(|id| {
-                let s = id_map
+                id_map
                     .remove(&id)
-                    .unwrap_or_else(|| panic!("session id {id} should be in merged_ids"));
-                s
+                    .unwrap_or_else(|| panic!("session id {id} should be in merged_ids"))
             })
             .collect::<Vec<_>>();
 
@@ -708,8 +732,8 @@ impl fmt::Display for AnomalyKind {
                  session is worth reviewing individually"
             }
             Self::InconsistentDuration => {
-                "Conn_start + Conn_Duration misses Conn_DateTime_End by a minute or more; start, \
-                 end and duration are inconsistent"
+                "reported start, end and duration contradict each other by more than truncation \
+                 to the minute can explain; the session is excluded from every estimate"
             }
             Self::DstAmbiguousDuplicated => "ambiguous DST fold; record duplicated as EDT and EST",
             Self::DstGapShifted => "local time falls in the DST gap; resolved forward",

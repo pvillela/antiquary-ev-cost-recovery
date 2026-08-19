@@ -9,7 +9,11 @@
 //! and reports what is wrong with it, the other offers only choices that are right — so what is
 //! shared here is the rules themselves, not their presentation.
 
-use crate::time::{Interval, time_zone};
+use crate::time::{Interval, TZ_OFFSETS, time_zone};
+// Named only by the doc links below, which is enough to make them resolve and is why the import is
+// here at all. Those three links were dead while `TIME_ZONE_NAME` was private.
+#[allow(unused_imports)]
+use crate::time::TIME_ZONE_NAME;
 use jiff::{
     SignedDuration, Timestamp, civil,
     tz::{Offset, TimeZone},
@@ -17,10 +21,6 @@ use jiff::{
 
 /// The four legal start minutes. See README.md, "Interval of interest boundaries".
 pub const LEGAL_START_MINUTES: [i8; 4] = [0, 15, 30, 45];
-
-/// The offsets [`TIME_ZONE_NAME`] uses, under the names a reader of a Toronto Hydro bill will
-/// recognise. Naming one resolves a wall time that occurs twice.
-pub const TZ_OFFSETS: [(&str, i8); 2] = [("EST", -5), ("EDT", -4)];
 
 /// The two lengths an interval of interest may have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +80,11 @@ pub enum TzLocalMapping {
 }
 
 /// Maps a local wall time to the instant or instants it names.
+///
+/// This reports the ambiguity rather than resolving it, because at this point there is nothing to
+/// resolve it *with*: a user has named a wall time and that is all. The session reader faces the
+/// same ambiguity with more evidence — an untruncated `Conn_Duration` — and settles it. See
+/// `CsvSession::resolve` for why the two are deliberately separate.
 pub fn map_local(dt: civil::DateTime) -> TzLocalMapping {
     let tz = time_zone();
     let candidates: Vec<(&'static str, Timestamp)> = TZ_OFFSETS

@@ -76,8 +76,9 @@ interval - appears only, because a record whose own fields contradict each
 other cannot be trusted to say where it belongs. It reads the same doubtful
 times, so no row was dropped on its say-so.
 
-- InconsistentDuration - Conn_start + Conn_Duration misses Conn_DateTime_End
-  by a minute or more; start, end and duration are inconsistent.
+- InconsistentDuration - reported start, end and duration contradict each
+  other by more than truncation to the minute can explain; the session is
+  excluded from every estimate.
 
 
 Anomalies

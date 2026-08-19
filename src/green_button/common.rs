@@ -1,5 +1,7 @@
-//! Domain types shared across the crate, and the Excel serial-date arithmetic every sheet writer
-//! needs.
+//! Domain types shared across the `green_button` module.
+//!
+//! The Excel serial-date arithmetic that used to live here is in [`crate::time::excel`], which both
+//! sheet writers now share.
 //!
 //! The readings carry raw source integers rather than kilowatt figures. Green Button reports each
 //! value as an integer with a `powerOfTenMultiplier`, and every sum and maximum here runs on those
@@ -7,16 +9,17 @@
 //! spreadsheet is reconciled against a utility invoice to three decimal places, and accumulating
 //! 744 floating-point divisions before summing them loses that agreement.
 
-use jiff::{Timestamp, civil::Date, civil::DateTime, tz::TimeZone};
-use std::fmt;
+use jiff::Timestamp;
+use std::{fmt, time::Duration};
 
-use crate::time::local_datetime;
-
-/// Excel's day zero for the 1900 date system, as a Unix timestamp: 1899-12-30T00:00:00Z.
-/// Verified by [`test::excel_epoch_matches_jiff`].
-const EXCEL_EPOCH_UNIX_SECS: i64 = -2_209_161_600;
-
-const SECS_PER_DAY: f64 = 86_400.0;
+/// One hour, the interval every reading in a Toronto Hydro export covers.
+///
+/// The whole design downstream depends on it: the interval count that drives the red completeness
+/// highlight, and the guarantee that an aligned interval cannot straddle a TOU boundary, since
+/// Ontario's price-period boundaries all fall on the hour. So it is **checked rather than
+/// assumed** — the feed states it per `ReadingType` and again per `IntervalReading`, and
+/// `green_button::parse` rejects any other value.
+pub const METER_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// One hour of metered data, keyed on the instant the hour starts.
 ///
@@ -47,7 +50,7 @@ impl Reading {
     /// aligned hour cannot straddle two. Ontario's UTC offsets are whole hours in both seasons, so
     /// a whole hour in UTC is a whole hour locally.
     pub fn is_aligned(&self) -> bool {
-        self.start.as_second().rem_euclid(3600) == 0
+        crate::time::is_on_grid(self.start, METER_INTERVAL)
     }
 }
 
@@ -112,64 +115,10 @@ impl fmt::Display for Anomaly {
     }
 }
 
-/// An Excel serial date for an instant, in whichever offset the caller has already applied.
-///
-/// Excel has no concept of a time zone, so a local-time column and a UTC column differ only by
-/// which instant was handed to this function. Both are written as plain serials and told apart by
-/// their number format.
-pub fn excel_serial(ts: Timestamp) -> f64 {
-    (ts.as_second() - EXCEL_EPOCH_UNIX_SECS) as f64 / SECS_PER_DAY
-}
-
-/// The serial for a civil date-time read exactly as written, with no offset applied.
-fn naive_serial(dt: DateTime) -> f64 {
-    excel_serial(
-        dt.to_zoned(TimeZone::UTC)
-            .expect("a civil date-time is never ambiguous in UTC")
-            .timestamp(),
-    )
-}
-
-/// The serial showing an instant's **local** wall clock, for the local-time columns.
-pub(crate) fn excel_serial_local(ts: Timestamp) -> f64 {
-    naive_serial(local_datetime(ts))
-}
-
-/// The serial for a bare date, for the billing-period column.
-pub(crate) fn excel_serial_date(d: Date) -> f64 {
-    naive_serial(d.at(0, 0, 0, 0))
-}
-
 // cargo test --lib -- green_button::common::test --nocapture
 #[cfg(test)]
 mod test {
     use super::*;
-    use jiff::civil::date;
-    use jiff::tz::TimeZone;
-
-    /// Pins [`EXCEL_EPOCH_UNIX_SECS`] to the date it claims to be, so the constant cannot drift
-    /// from its comment.
-    #[test]
-    fn excel_epoch_matches_jiff() {
-        let epoch = date(1899, 12, 30)
-            .at(0, 0, 0, 0)
-            .to_zoned(TimeZone::UTC)
-            .unwrap()
-            .timestamp();
-        assert_eq!(epoch.as_second(), EXCEL_EPOCH_UNIX_SECS);
-    }
-
-    /// Excel's own serial for 2026-06-23 is 46196; this checks the arithmetic against a value that
-    /// can be reproduced by typing the date into a spreadsheet.
-    #[test]
-    fn a_known_date_converts_to_its_excel_serial() {
-        let ts = date(2026, 6, 23)
-            .at(0, 0, 0, 0)
-            .to_zoned(TimeZone::UTC)
-            .unwrap()
-            .timestamp();
-        assert_eq!(excel_serial(ts), 46196.0);
-    }
 
     #[test]
     fn every_anomaly_token_round_trips() {

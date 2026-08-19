@@ -4,13 +4,10 @@
 //! kVA happens once, in the sheet writer. The June 2026 invoice agrees with these figures to the
 //! digit, and it would not survive accumulating 744 floating-point divisions before summing them.
 
-use crate::green_button::{Anomaly, BillingPeriod, Reading, Readings};
+use crate::green_button::{Anomaly, BillingPeriod, METER_INTERVAL, Reading, Readings};
 use crate::time::{Interval, Tou, is_off_peak, tou_of};
 use jiff::Timestamp;
 use std::collections::BTreeMap;
-use std::time::Duration;
-
-const HOUR: Duration = Duration::from_secs(3600);
 
 /// A reported maximum, and the state of the interval it was found in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,7 +103,7 @@ fn peak(
             continue;
         }
         let Some(v) = value(reading) else { continue };
-        let interval = Interval::new(reading.start, HOUR);
+        let interval = Interval::new(reading.start, METER_INTERVAL);
         if demand_window_only && is_off_peak(interval) {
             continue;
         }
@@ -141,7 +138,10 @@ mod test {
             .iter()
             .enumerate()
             .map(|(i, &(kwh, kw, kva))| Reading {
-                start: Timestamp::from_second(start.as_second() + i as i64 * 3600).unwrap(),
+                start: Timestamp::from_second(
+                    start.as_second() + i as i64 * METER_INTERVAL.as_secs() as i64,
+                )
+                .unwrap(),
                 kwh: Some(kwh),
                 kw: Some(kw),
                 kva: Some(kva),

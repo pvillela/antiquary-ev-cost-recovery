@@ -5,10 +5,9 @@
 //! its period as `MAY 23 2026 TO JUN 23 2026` over `31` days, which is the same span read from the
 //! meter-reading instants rather than the calendar days.
 
+use crate::green_button::METER_INTERVAL;
 use crate::time::{local_date, local_midnight};
 use jiff::{Timestamp, civil::Date, civil::date};
-
-const SECS_PER_HOUR: i64 = 3600;
 
 /// One billing period, as an instant range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -54,7 +53,7 @@ impl BillingPeriod {
     /// 2025-11-23 spans 745 because they went back. Both are complete periods, and a day-count
     /// rule would flag them as short or long.
     pub fn expected_intervals(&self) -> i64 {
-        (self.end.as_second() - self.start.as_second()) / SECS_PER_HOUR
+        (self.end.as_second() - self.start.as_second()) / METER_INTERVAL.as_secs() as i64
     }
 
     pub fn contains(&self, at: Timestamp) -> bool {
@@ -143,7 +142,7 @@ mod test {
             for month in 1..=12 {
                 let p = BillingPeriod::ending_on(date(year, month, 23));
                 let secs = p.end.as_second() - p.start.as_second();
-                assert_eq!(secs % SECS_PER_HOUR, 0, "{p:?}");
+                assert_eq!(secs % METER_INTERVAL.as_secs() as i64, 0, "{p:?}");
                 let hours = p.expected_intervals();
                 assert!(
                     (671..=745).contains(&hours),

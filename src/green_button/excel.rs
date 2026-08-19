@@ -35,10 +35,8 @@ use umya_spreadsheet::{
     Worksheet, writer,
 };
 
-use crate::green_button::{
-    Anomaly, Feed, Peak, PeriodValues, Reading, excel_serial, excel_serial_date,
-    excel_serial_local, period_values,
-};
+use crate::green_button::{Anomaly, Feed, Peak, PeriodValues, Reading, period_values};
+use crate::time::{serial_of_date, serial_of_instant, serial_of_local};
 
 const GENERAL_FORMAT: &str = "General";
 const DATE_FORMAT: &str = "yyyy/mm/dd";
@@ -487,7 +485,7 @@ fn freeze_panes(sheet: &mut Worksheet) {
 
 fn peak_row(v: &PeriodValues, feed: &Feed) -> Vec<Out> {
     let mut row = Vec::with_capacity(PEAK_COLUMNS.len());
-    row.push(Out::num(excel_serial_date(v.period.ending)));
+    row.push(Out::num(serial_of_date(v.period.ending)));
     row.push(Out {
         cell: Cell::Num(v.interval_count as f64),
         fill: !v.is_complete(),
@@ -520,8 +518,8 @@ fn push_peak(row: &mut Vec<Out>, peak: Option<&Peak>, value_divisor: f64, compan
     match peak {
         Some(p) => {
             row.push(Out::num(p.value as f64 / value_divisor));
-            row.push(Out::num(excel_serial_local(p.at)));
-            row.push(Out::num(excel_serial(p.at)));
+            row.push(Out::num(serial_of_local(p.at)));
+            row.push(Out::num(serial_of_instant(p.at)));
             row.push(match p.companion {
                 Some(c) => Out::num(c as f64 / companion_divisor),
                 None => Out::blank(),
@@ -543,8 +541,8 @@ fn interval_row(r: &Reading, anomalies: Option<&BTreeSet<Anomaly>>, feed: &Feed)
         .map(|a| a.iter().map(Anomaly::as_str).collect::<Vec<_>>().join(","))
         .unwrap_or_default();
     vec![
-        Out::num(excel_serial_local(r.start)),
-        Out::num(excel_serial(r.start)),
+        Out::num(serial_of_local(r.start)),
+        Out::num(serial_of_instant(r.start)),
         value(r.kwh, feed.kwh.divisor()),
         value(r.kw, feed.kw.divisor()),
         value(r.kva, feed.kva.divisor()),

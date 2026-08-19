@@ -1,25 +1,21 @@
-use crate::time::time_zone;
-
-use super::{
-    Anomaly, AnomalyKind, BREAKER_RATING_KW, Session, adj_conn_end_of, adj_conn_start_of,
-    duration_is_consistent,
+use crate::time::{
+    duration_of_serial, instant_of_serial, is_on_grid, local_datetime, serial_of_civil,
+    serial_of_duration, serial_of_instant, time_zone, wall_clock_instant,
 };
-use crate::time::TIME_GRID_STEP;
+
+use super::TIME_GRID_STEP;
+use super::{Anomaly, AnomalyKind, BREAKER_RATING_KW, RunLog, Session, duration_is_consistent};
 use jiff::{
     SignedDuration, Timestamp, civil,
     tz::{AmbiguousOffset, TimeZone},
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     error::Error,
     path::{Path, PathBuf},
     time::Duration,
 };
 use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
-
-/// Excel's day-zero for the 1900 date system, as a Unix timestamp.
-/// 1899-12-30T00:00:00Z; verified by [`test::excel_epoch_constant_matches_jiff`].
-const EXCEL_EPOCH_UNIX_SECS: i64 = -2_209_161_600;
 
 /// The window `Conn_start + Conn_Duration` may land in, stated as an offset from the reported end.
 ///
@@ -48,6 +44,9 @@ pub struct ConversionReport {
     pub output_path: PathBuf,
     /// Rows that needed a judgement call. Empty for a clean conversion.
     pub anomalies: Vec<Anomaly>,
+    /// Where the run log was written. It always exists, and says either that nothing was found or
+    /// what was.
+    pub log_path: PathBuf,
 }
 
 /// How an output column is populated.
@@ -65,9 +64,11 @@ enum Source {
     ConnStartUtc,
     ConnEndLocal,
     ConnEndUtc,
+    AdjConnStartLocal,
+    AdjConnStartUtc,
     AdjConnEndLocal,
     AdjConnEndUtc,
-    /// Formula: `adj_conn_end_utc - conn_start_utc`.
+    /// Formula: `adj_conn_end_utc - adj_conn_start_utc`.
     AdjConnDuration,
     /// Formula: `Energy_Use / Active_Charge_Time`, in kW.
     AvgKw,
@@ -92,22 +93,27 @@ const COLUMNS: &[(&str, Source)] = &[
     ("Charge_Session_ID", Source::SessionId),
     ("User_ID", Source::Text("User_ID")),
     ("Conn_DateTime_Start", Source::ConnStartLocal),
-    ("conn_start_utc", Source::ConnStartUtc),
     ("Conn_DateTime_End", Source::ConnEndLocal),
-    ("conn_end_utc", Source::ConnEndUtc),
-    ("adj_conn_end", Source::AdjConnEndLocal),
-    ("adj_conn_end_utc", Source::AdjConnEndUtc),
     ("Conn_Duration", Source::Duration("Conn_Duration")),
-    ("adj_conn_duration", Source::AdjConnDuration),
     ("Charge_Duration", Source::Duration("Charge_Duration")),
     ("Active_Charge_Time", Source::Duration("Active_Charge_Time")),
     ("Charging_Level", Source::Text("Charging_Level")),
     ("Energy_Use", Source::Number("Energy_Use")),
-    ("avg_kw", Source::AvgKw),
     ("Total_Fee", Source::Number("Total_Fee")),
     ("Vehicle_Make", Source::Text("Vehicle_Make")),
     ("Vehicle_Model", Source::Text("Vehicle_Model")),
     ("Vehicle_Year", Source::Number("Vehicle_Year")),
+    // Everything from here on is this software's, not Evolute's. Grouped at the right end so the
+    // left of the sheet is the session report as received and a reader can tell at a glance which
+    // is which.
+    ("adj_conn_start", Source::AdjConnStartLocal),
+    ("adj_conn_end", Source::AdjConnEndLocal),
+    ("conn_start_utc", Source::ConnStartUtc),
+    ("conn_end_utc", Source::ConnEndUtc),
+    ("adj_conn_start_utc", Source::AdjConnStartUtc),
+    ("adj_conn_end_utc", Source::AdjConnEndUtc),
+    ("adj_conn_duration", Source::AdjConnDuration),
+    ("avg_kw", Source::AvgKw),
     ("anomalies", Source::Anomalies),
 ];
 
@@ -175,9 +181,9 @@ pub fn session_csv_to_xlsx(path: &Path) -> Result<ConversionReport, Box<dyn Erro
         // DST fold occupies two workbook rows, so from there on the two counts diverge.
         let excel_row = rows.len() + 2;
         for (offset, row) in session.resolve(&tz, csv_row)?.into_iter().enumerate() {
-            anomalies.extend(row.anomalies.iter().map(|&kind| Anomaly {
+            anomalies.extend(row.session.anomalies.iter().map(|&kind| Anomaly {
                 row: excel_row + offset,
-                session_id: row.id.clone(),
+                session_id: row.session.id.clone(),
                 kind,
             }));
             rows.push(row);
@@ -189,10 +195,60 @@ pub fn session_csv_to_xlsx(path: &Path) -> Result<ConversionReport, Box<dyn Erro
     write_sheet(&mut book, &output_path, &headers, &records, &rows)?;
 
     umya_spreadsheet::writer::xlsx::write(&book, &output_path)?;
+
+    // Anomalies only: the write side has nothing to compare against, since it is what produces the
+    // values in the first place. See `sessions::log` for why discrepancies are a separate channel.
+    let mut log = RunLog::new();
+    note_off_grid_rows(&rows, &mut log);
+    for anomaly in &anomalies {
+        log.note(anomaly.to_string());
+    }
+    let log_path = log.write_beside(&output_path, "convert", "Converted from session report")?;
+
     Ok(ConversionReport {
         output_path,
         anomalies,
+        log_path,
     })
+}
+
+/// Warns once per file when reported boundaries do not land on [`TIME_GRID_STEP`].
+///
+/// Every allowance this software makes for the reporting's truncation assumes the reported times
+/// are truncated to that step. If Evolute starts reporting seconds, they no longer are, and the
+/// allowances become too wide rather than wrong — sessions get a padded end they do not need, and
+/// the consistency window admits records it should reject. Nothing crashes and no figure looks
+/// odd, which is exactly why it needs saying out loud.
+///
+/// Once per file with a count and the first three rows, not once per row: on a report that has
+/// switched resolution every row qualifies, and a log with 238 identical lines is a log nobody
+/// reads.
+fn note_off_grid_rows(rows: &[Row], log: &mut RunLog) {
+    let offenders: Vec<&Row> = rows
+        .iter()
+        .filter(|r| {
+            !is_on_grid(r.session.conn_start, TIME_GRID_STEP)
+                || !is_on_grid(r.session.conn_end, TIME_GRID_STEP)
+        })
+        .collect();
+    if offenders.is_empty() {
+        return;
+    }
+    let examples: Vec<String> = offenders
+        .iter()
+        .take(3)
+        .map(|r| format!("row {} ({})", r.session.row, r.session.id))
+        .collect();
+    log.note(format!(
+        "{} of {} rows report a start or end that is not a whole multiple of {:?}: {}. The \
+         session report's resolution has become finer than this software's time grid. Nothing is \
+         wrong with these rows, but the padding and the consistency window are now wider than the \
+         data needs — see docs/maintenance-manual.md, \"Boundaries and the time grid\".",
+        offenders.len(),
+        rows.len(),
+        TIME_GRID_STEP,
+        examples.join(", ")
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +300,12 @@ fn parse_local(s: &str, row: usize, column: &str) -> Result<civil::DateTime, Box
 }
 
 /// `H:MM:SS`, with hours unbounded so a session longer than a day still parses.
-fn parse_duration(s: &str, row: usize, column: &str) -> Result<SignedDuration, Box<dyn Error>> {
+///
+/// Returns an unsigned [`Duration`], matching [`Session`]'s own fields. The sign is rejected here
+/// rather than carried: `Conn_Duration` and `Active_Charge_Time` are elapsed times, and a negative
+/// one is a malformed cell, not a value to propagate. Only the DST-fold comparison in
+/// [`CsvSession::reproduces_reported_end`] genuinely needs a sign, and it makes its own.
+fn parse_duration(s: &str, row: usize, column: &str) -> Result<Duration, Box<dyn Error>> {
     let bad = || -> Box<dyn Error> {
         format!("row {row}, column `{column}`: cannot parse duration {s:?}").into()
     };
@@ -254,13 +315,13 @@ fn parse_duration(s: &str, row: usize, column: &str) -> Result<SignedDuration, B
     else {
         return Err(bad());
     };
-    let h: i64 = h.trim().parse().map_err(|_| bad())?;
-    let m: i64 = m.trim().parse().map_err(|_| bad())?;
-    let sec: i64 = sec.trim().parse().map_err(|_| bad())?;
+    let h: u64 = h.trim().parse().map_err(|_| bad())?;
+    let m: u64 = m.trim().parse().map_err(|_| bad())?;
+    let sec: u64 = sec.trim().parse().map_err(|_| bad())?;
     if !(0..60).contains(&m) || !(0..60).contains(&sec) {
         return Err(bad());
     }
-    Ok(SignedDuration::from_secs(h * 3600 + m * 60 + sec))
+    Ok(Duration::from_secs(h * 3600 + m * 60 + sec))
 }
 
 /// The parsed fields of one CSV record that participate in the time calculations. Named apart
@@ -270,8 +331,8 @@ struct CsvSession {
     id: String,
     start_local: civil::DateTime,
     end_local: civil::DateTime,
-    conn_duration: SignedDuration,
-    active_charge_time: SignedDuration,
+    conn_duration: Duration,
+    active_charge_time: Duration,
     /// Kept for its parse: a non-numeric `Energy_Use` invalidates the row, and that is caught in
     /// [`CsvSession::parse`]. The value itself is consumed on the reading side.
     #[allow(dead_code)]
@@ -279,21 +340,32 @@ struct CsvSession {
 }
 
 /// One output row. A session normally yields one; an unresolvable DST fold yields two.
+///
+/// Carries a whole [`Session`] rather than loose timestamps, so that every derived column is
+/// computed by the same methods the estimating logic uses. When they were separate fields the
+/// write path had its own `adj_conn_end`, and it was wrong.
+///
+/// `record` remains, because the CSV pass-through columns are not part of a `Session` and never
+/// should be: a `Session` is what the arithmetic needs, not a copy of the source row.
 struct Row {
     /// Index into the original `records`, for the pass-through columns.
     record: usize,
-    id: String,
+    session: Session,
+    /// The two reported wall times, kept as written. `Session` holds instants, and the local
+    /// columns must show what the report said rather than a re-derivation of it — those differ in
+    /// the DST gap, where the reported wall time never occurred.
     start_local: civil::DateTime,
     end_local: civil::DateTime,
-    start_utc: Timestamp,
-    end_utc: Timestamp,
-    adj_start_utc: Timestamp,
-    adj_end_utc: Timestamp,
-    adj_start_local: civil::DateTime,
-    adj_end_local: civil::DateTime,
-    /// Everything about this row that needs review. Rendered into the `anomalies` column and,
-    /// stamped with the row's workbook number, into [`ConversionReport::anomalies`].
-    anomalies: Vec<AnomalyKind>,
+}
+
+impl Row {
+    fn adj_start_local(&self) -> civil::DateTime {
+        local_datetime(self.session.adj_conn_start())
+    }
+
+    fn adj_end_local(&self) -> civil::DateTime {
+        local_datetime(self.session.adj_conn_end())
+    }
 }
 
 impl CsvSession {
@@ -336,6 +408,23 @@ impl CsvSession {
     /// Returns one row normally, or two when the start falls in the DST fold and the reported end
     /// cannot tell the two offsets apart — see README.md, "Time zone", for why duplication is the
     /// policy and why the copies get distinct ids.
+    ///
+    /// # Not the same problem as [`crate::sessions::map_local`]
+    ///
+    /// Both resolve an ambiguous local time, and the two must **not** be merged. They are asked
+    /// different questions and are right to answer differently:
+    ///
+    /// - `map_local` is asked *"what could this wall time mean?"* by a user picking an interval of
+    ///   interest. It has nothing but the wall time, so it returns every candidate and makes the
+    ///   caller choose, or say `EST`/`EDT`.
+    /// - This is asked *"which offset was this session actually at?"* and has evidence the other
+    ///   lacks: `Conn_Duration`, which is untruncated elapsed time. Testing each candidate against
+    ///   `start + Conn_Duration` usually settles it, and duplication is the fallback for when it
+    ///   does not.
+    ///
+    /// Their tie-breaks differ for the same reason. Giving this one `map_local`'s behaviour would
+    /// throw away the duration evidence; giving `map_local` this one's would have it invent
+    /// evidence it does not have.
     fn resolve(&self, tz: &TimeZone, row: usize) -> Result<Vec<Row>, Box<dyn Error>> {
         // Kinds known before the DST branch runs. They describe the record itself, so on
         // duplication both copies inherit them.
@@ -395,37 +484,31 @@ impl CsvSession {
             .into_iter()
             .map(|(start_utc, suffix)| {
                 let end_utc = self.resolve_end(tz, start_utc)?;
-                // Through the shared functions, not recomputed here: the write path and the
-                // estimating logic must agree on where a session sits. See README.md,
-                // "Excel workbook".
-                let adj_start_utc = adj_conn_start_of(start_utc);
-                let adj_end_utc = adj_conn_end_of(end_utc);
-
                 let mut anomalies = common.clone();
-                // A negative `Conn_Duration` fails the conversion and so is inconsistent by
-                // definition: no reported start and end can be reconciled with it. Phase 3 moves
-                // this conversion to the parse boundary, where it belongs.
-                let consistent = Duration::try_from(self.conn_duration)
-                    .is_ok_and(|d| duration_is_consistent(start_utc, end_utc, d));
-                if !consistent {
+                if !duration_is_consistent(start_utc, end_utc, self.conn_duration) {
                     anomalies.push(AnomalyKind::InconsistentDuration);
                 }
 
                 Ok(Row {
                     record: row - 1,
-                    id: match suffix {
-                        Some(s) => format!("{}-{s}", self.id),
-                        None => self.id.clone(),
+                    session: Session {
+                        id: match suffix {
+                            Some(s) => format!("{}-{s}", self.id),
+                            None => self.id.clone(),
+                        },
+                        // The workbook row, which is the CSV row plus the header. A duplicated
+                        // record occupies two workbook rows, so this diverges from `record` from
+                        // the second copy on; `write_workbook` restamps it as it writes.
+                        row,
+                        conn_start: start_utc,
+                        conn_end: end_utc,
+                        conn_duration: self.conn_duration,
+                        charge_time: self.active_charge_time,
+                        energy_use: self.energy_use,
+                        anomalies,
                     },
                     start_local: self.start_local,
                     end_local: self.end_local,
-                    start_utc,
-                    end_utc,
-                    adj_start_utc,
-                    adj_end_utc,
-                    adj_start_local: adj_start_utc.to_zoned(tz.clone()).datetime(),
-                    adj_end_local: adj_end_utc.to_zoned(tz.clone()).datetime(),
-                    anomalies,
                 })
             })
             .collect()
@@ -443,13 +526,8 @@ impl CsvSession {
     /// otherwise: they lie a full hour apart.
     fn reproduces_reported_end(&self, tz: &TimeZone, start: Timestamp) -> bool {
         let end = (start + self.conn_duration).to_zoned(tz.clone()).datetime();
-        match (wall_clock_instant(end), wall_clock_instant(self.end_local)) {
-            (Ok(implied), Ok(reported)) => {
-                let offset = implied.duration_since(reported);
-                SLACK_EARLY < offset && offset < SLACK_LATE
-            }
-            _ => false,
-        }
+        let offset = wall_clock_instant(end).duration_since(wall_clock_instant(self.end_local));
+        SLACK_EARLY < offset && offset < SLACK_LATE
     }
 
     /// Resolves the reported end to UTC. When the end itself falls in the fold, the candidate
@@ -481,28 +559,6 @@ impl CsvSession {
 // ---------------------------------------------------------------------------
 // Excel output
 // ---------------------------------------------------------------------------
-
-/// Reads a local wall time as though it were UTC, so that two of them can be subtracted to give the
-/// wall-clock distance between them. Not a time-zone conversion: the point is to compare wall times
-/// as written, without a DST offset moving either one.
-fn wall_clock_instant(dt: civil::DateTime) -> Result<Timestamp, jiff::Error> {
-    Ok(dt.to_zoned(TimeZone::UTC)?.timestamp())
-}
-
-/// Days since Excel's day-zero, as used by the 1900 date system.
-fn excel_serial(dt: civil::DateTime) -> Result<f64, Box<dyn Error>> {
-    let secs = dt.to_zoned(TimeZone::UTC)?.timestamp().as_second();
-    Ok((secs - EXCEL_EPOCH_UNIX_SECS) as f64 / 86_400.0)
-}
-
-fn excel_serial_utc(ts: Timestamp) -> Result<f64, Box<dyn Error>> {
-    excel_serial(ts.to_zoned(TimeZone::UTC).datetime())
-}
-
-/// Excel stores a duration as a fraction of a day.
-fn excel_duration(d: SignedDuration) -> f64 {
-    d.as_secs() as f64 / 86_400.0
-}
 
 /// 1-based column index to its Excel letters (1 -> A, 27 -> AA).
 fn column_letters(mut index: usize) -> String {
@@ -540,7 +596,7 @@ fn write_sheet(
         sheet.style_mut((col, 1)).font_mut().set_bold(true);
     }
 
-    let start_utc_col = column_letters(column_index(Source::ConnStartUtc));
+    let adj_start_utc_col = column_letters(column_index(Source::AdjConnStartUtc));
     let adj_end_utc_col = column_letters(column_index(Source::AdjConnEndUtc));
     let energy_col = column_letters(column_index(Source::Number("Energy_Use")));
     let active_col = column_letters(column_index(Source::Duration("Active_Charge_Time")));
@@ -582,38 +638,71 @@ fn write_sheet(
                         let d = parse_duration(raw, row.record + 1, name)?;
                         sheet
                             .cell_mut((col, excel_row))
-                            .set_value_number(excel_duration(d));
+                            .set_value_number(serial_of_duration(d));
                         set_duration_style(sheet, col, excel_row);
                     }
                 }
                 Source::SessionId => {
                     sheet
                         .cell_mut((col, excel_row))
-                        .set_value_string(row.id.as_str());
+                        .set_value_string(row.session.id.as_str());
                 }
                 Source::ConnStartLocal => {
-                    write_datetime(sheet, col, excel_row, excel_serial(row.start_local)?);
+                    write_datetime(sheet, col, excel_row, serial_of_civil(row.start_local));
                 }
                 Source::ConnEndLocal => {
-                    write_datetime(sheet, col, excel_row, excel_serial(row.end_local)?);
+                    write_datetime(sheet, col, excel_row, serial_of_civil(row.end_local));
+                }
+                Source::AdjConnStartLocal => {
+                    write_datetime(
+                        sheet,
+                        col,
+                        excel_row,
+                        serial_of_civil(row.adj_start_local()),
+                    );
                 }
                 Source::AdjConnEndLocal => {
-                    write_datetime(sheet, col, excel_row, excel_serial(row.adj_end_local)?);
+                    write_datetime(sheet, col, excel_row, serial_of_civil(row.adj_end_local()));
                 }
                 Source::ConnStartUtc => {
-                    write_datetime(sheet, col, excel_row, excel_serial_utc(row.start_utc)?);
+                    write_datetime(
+                        sheet,
+                        col,
+                        excel_row,
+                        serial_of_instant(row.session.conn_start),
+                    );
                 }
                 Source::ConnEndUtc => {
-                    write_datetime(sheet, col, excel_row, excel_serial_utc(row.end_utc)?);
+                    write_datetime(
+                        sheet,
+                        col,
+                        excel_row,
+                        serial_of_instant(row.session.conn_end),
+                    );
+                }
+                Source::AdjConnStartUtc => {
+                    write_datetime(
+                        sheet,
+                        col,
+                        excel_row,
+                        serial_of_instant(row.session.adj_conn_start()),
+                    );
                 }
                 Source::AdjConnEndUtc => {
-                    write_datetime(sheet, col, excel_row, excel_serial_utc(row.adj_end_utc)?);
+                    write_datetime(
+                        sheet,
+                        col,
+                        excel_row,
+                        serial_of_instant(row.session.adj_conn_end()),
+                    );
                 }
                 Source::AdjConnDuration => {
                     // Subtracting the UTC columns, not the local ones: local arithmetic is wrong by
-                    // an hour for a session spanning the DST fold.
+                    // an hour for a session spanning the DST fold. Both ends are the adjusted ones,
+                    // so the cell equals `Session::adj_duration` — the span the estimating logic
+                    // places the session on, which is the point of showing it.
                     sheet.cell_mut((col, excel_row)).set_formula(format!(
-                        "{adj_end_utc_col}{excel_row}-{start_utc_col}{excel_row}"
+                        "{adj_end_utc_col}{excel_row}-{adj_start_utc_col}{excel_row}"
                     ));
                     set_duration_style(sheet, col, excel_row);
                 }
@@ -627,9 +716,13 @@ fn write_sheet(
                     set_format(sheet, col, excel_row, AVG_KW_FORMAT);
                 }
                 Source::Anomalies => {
-                    if !row.anomalies.is_empty() {
-                        let tokens: Vec<&str> =
-                            row.anomalies.iter().map(AnomalyKind::as_str).collect();
+                    if !row.session.anomalies.is_empty() {
+                        let tokens: Vec<&str> = row
+                            .session
+                            .anomalies
+                            .iter()
+                            .map(AnomalyKind::as_str)
+                            .collect();
                         sheet
                             .cell_mut((col, excel_row))
                             .set_value_string(tokens.join(","));
@@ -797,6 +890,9 @@ pub struct SessionReport {
     /// contradict each other, so they cannot be placed on a timeline at all. Excluded from the
     /// estimates and returned only for review. See README.md, "Other".
     pub excluded: Vec<Session>,
+    /// Where the run log was written. It always exists, and says either that nothing was found or
+    /// which stored columns disagreed with the recomputed values.
+    pub log_path: PathBuf,
 }
 
 /// Sheet columns that make a workbook a session report. The reading-side counterpart of
@@ -855,6 +951,10 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
     let sheet = book.sheet(0)?;
     let headers = sheet_headers(sheet, path)?;
 
+    let mut log = RunLog::new();
+    // Counted rather than logged per row. Every formula column of a freshly written workbook is
+    // unevaluated, so a line each would bury the real discrepancies under one per row per column.
+    let mut unevaluated: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut sessions = Vec::new();
     let mut spikes = Vec::new();
     let mut excluded = Vec::new();
@@ -868,19 +968,20 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
         }
 
         let energy_use = number(sheet, &headers, "Energy_Use", row)?;
-        let charge_time = duration_of(number(sheet, &headers, "Active_Charge_Time", row)?);
+        let charge_time = duration_of_serial(number(sheet, &headers, "Active_Charge_Time", row)?);
         let anomalies = anomaly_kinds(sheet, &headers, row, path)?;
         let session = Session {
             id,
             row: row as usize,
-            conn_start: timestamp_of(number(sheet, &headers, "conn_start_utc", row)?)?,
-            conn_end: timestamp_of(number(sheet, &headers, "conn_end_utc", row)?)?,
-            // adj_conn_end: timestamp_of(number(sheet, &headers, "adj_conn_end_utc", row)?)?,
-            conn_duration: duration_of(number(sheet, &headers, "Conn_Duration", row)?),
+            conn_start: instant_of_serial(number(sheet, &headers, "conn_start_utc", row)?)?,
+            conn_end: instant_of_serial(number(sheet, &headers, "conn_end_utc", row)?)?,
+            conn_duration: duration_of_serial(number(sheet, &headers, "Conn_Duration", row)?),
             charge_time,
             energy_use,
             anomalies,
         };
+
+        check_stored_columns(sheet, &headers, row, &session, &mut log, &mut unevaluated);
 
         if session
             .anomalies
@@ -894,11 +995,106 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
         }
     }
 
+    for (name, count) in &unevaluated {
+        log.note(format!(
+            "{name}: {count} row(s) hold a formula with no stored value, so there was nothing to \
+             check. Normal for a workbook this software wrote — it writes formulas and Excel \
+             computes them, so values appear only once Excel has opened and saved the file. The \
+             recomputed figures are used throughout either way."
+        ));
+    }
+    let log_path = log.write_beside(path, "read", "Read back from workbook")?;
+
     Ok(SessionReport {
         sessions,
         spikes,
         excluded,
+        log_path,
     })
+}
+
+/// Compares the workbook's stored derived columns against what the [`Session`] methods recompute,
+/// noting any disagreement in the run log.
+///
+/// **The recomputed value always wins.** Nothing here changes a `Session`, and nothing here raises
+/// an [`AnomalyKind`]. A disagreement means the sheet is stale or was edited by hand, which is a
+/// fact about the file and not about the session — and letting it feed the estimates would make an
+/// edited cell silently change which sessions count. See `sessions::log`.
+///
+/// `adj_conn_duration` and `avg_kw` hold formulas. This crate writes the formula and no cached
+/// value, so Excel has to have opened and saved the workbook for one to be there. A missing cached
+/// value is therefore the normal state of a freshly written workbook, not a fault — it is counted
+/// into `unevaluated` and summarised once per column, rather than logged per row. Per row it would
+/// be two lines for every session, which is a log nobody reads and real discrepancies buried in
+/// it.
+fn check_stored_columns(
+    sheet: &Worksheet,
+    headers: &SheetHeaders,
+    row: u32,
+    session: &Session,
+    log: &mut RunLog,
+    unevaluated: &mut BTreeMap<&'static str, usize>,
+) {
+    let id = &session.id;
+
+    let mut check_instant = |name: &str, expected: Timestamp| {
+        let Some(&col) = headers.get(name) else {
+            return; // not a required header; absence is not a discrepancy
+        };
+        match sheet.value((col, row)).trim().parse::<f64>() {
+            Ok(serial) => match instant_of_serial(serial) {
+                Ok(stored) if stored != expected => log.note(format!(
+                    "row {row} ({id}): stored {name} is {stored}, recomputed {expected}; \
+                     using the recomputed value"
+                )),
+                Ok(_) => {}
+                Err(e) => log.note(format!(
+                    "row {row} ({id}): {name} is not a valid instant: {e}"
+                )),
+            },
+            Err(_) => log.note(format!(
+                "row {row} ({id}): {name} does not hold a number; using the recomputed value"
+            )),
+        }
+    };
+    check_instant("adj_conn_start_utc", session.adj_conn_start());
+    check_instant("adj_conn_end_utc", session.adj_conn_end());
+
+    // `adj_duration` subtracts one adjusted bound from the other and panics if they are inverted.
+    // This runs before the exclusion sort, so an `InconsistentDuration` row reaches here — and the
+    // whole point of check 1 is that such a row exists. Skip the column rather than compute it: a
+    // stored duration for a session that has no duration is not a discrepancy worth a line.
+    let adj_duration = (session.adj_conn_start() <= session.adj_conn_end())
+        .then(|| serial_of_duration(session.adj_duration()));
+    let expected_values: Vec<(&str, f64)> = adj_duration
+        .map(|d| ("adj_conn_duration", d))
+        .into_iter()
+        .chain([("avg_kw", session.avg_kw())])
+        .collect();
+
+    for (name, expected) in expected_values {
+        let Some(&col) = headers.get(name) else {
+            continue;
+        };
+        let raw = sheet.value((col, row));
+        let raw = raw.trim();
+        if raw.is_empty() {
+            *unevaluated.entry(name).or_default() += 1;
+            continue;
+        }
+        match raw.parse::<f64>() {
+            // Serials and kilowatts both come back through floating point, so compare to the
+            // resolution the sheet actually shows rather than for equality.
+            Ok(stored) if (stored - expected).abs() > 1e-6 => log.note(format!(
+                "row {row} ({id}): stored {name} is {stored}, recomputed {expected}; \
+                 using the recomputed value"
+            )),
+            Ok(_) => {}
+            Err(_) => log.note(format!(
+                "row {row} ({id}): {name} does not hold a number; using the recomputed value"
+            )),
+        }
+    }
 }
 
 /// Parses the `anomalies` cell. An unrecognised token is an error rather than a shrug: it means the
@@ -958,19 +1154,6 @@ fn number(
         let found = sheet.value((col, row));
         format!("row {row}, column `{name}`: expected a number, found {found:?}").into()
     })
-}
-
-/// Inverse of [`excel_serial_utc`]. Rounds to the nearest second: the writer stores whole seconds,
-/// and truncating what comes back would turn `20:22:00` into `20:21:59`.
-fn timestamp_of(serial: f64) -> Result<Timestamp, Box<dyn Error>> {
-    Ok(Timestamp::from_second(
-        (serial * 86_400.0).round() as i64 + EXCEL_EPOCH_UNIX_SECS,
-    )?)
-}
-
-/// Inverse of [`excel_duration`], rounded to the nearest second for the same reason.
-fn duration_of(days: f64) -> Duration {
-    Duration::from_secs((days * 86_400.0).round().max(0.0) as u64)
 }
 
 #[cfg(test)]
@@ -1048,34 +1231,14 @@ mod test {
     }
 
     #[test]
-    fn excel_epoch_constant_matches_jiff() {
-        let computed = civil::date(1899, 12, 30)
-            .at(0, 0, 0, 0)
-            .to_zoned(TimeZone::UTC)
-            .unwrap()
-            .timestamp()
-            .as_second();
-        assert_eq!(computed, EXCEL_EPOCH_UNIX_SECS);
-    }
-
-    #[test]
-    fn excel_serial_matches_known_values() {
-        // 1900-01-01 is serial 2 in the 1900 date system.
-        assert_eq!(excel_serial(dt("1900-01-01 00:00")).unwrap(), 2.0);
-        // Sample row 1: 2026-06-01 21:29:59 local.
-        let serial = excel_serial(civil::date(2026, 6, 1).at(21, 29, 59, 0)).unwrap();
-        assert!((serial - 46_174.895_821_759_3).abs() < 1e-9, "{serial}");
-    }
-
-    #[test]
     fn durations_parse_including_over_24_hours() {
         assert_eq!(
             parse_duration("5:07:53", 1, "d").unwrap(),
-            SignedDuration::from_secs(5 * 3600 + 7 * 60 + 53)
+            Duration::from_secs(5 * 3600 + 7 * 60 + 53)
         );
         assert_eq!(
             parse_duration("30:00:00", 1, "d").unwrap(),
-            SignedDuration::from_secs(30 * 3600)
+            Duration::from_secs(30 * 3600)
         );
         assert!(parse_duration("5:70:00", 1, "d").is_err());
         assert!(parse_duration("5:07", 1, "d").is_err());
@@ -1101,32 +1264,11 @@ mod test {
     }
 
     #[test]
-    fn excel_serial_round_trips_to_the_second() {
-        for local in [
-            civil::date(2026, 6, 1).at(20, 22, 0, 0),
-            civil::date(2026, 6, 7).at(23, 41, 28, 0),
-            civil::date(2026, 11, 1).at(5, 30, 0, 0),
-            civil::date(1900, 1, 1).at(0, 0, 1, 0),
-        ] {
-            let ts = local.to_zoned(TimeZone::UTC).unwrap().timestamp();
-            assert_eq!(timestamp_of(excel_serial_utc(ts).unwrap()).unwrap(), ts);
-        }
-    }
-
-    #[test]
-    fn excel_duration_round_trips_to_the_second() {
-        for secs in [0, 1, 59, 3600, 5 * 3600 + 7 * 60 + 53, 30 * 3600] {
-            let days = excel_duration(SignedDuration::from_secs(secs));
-            assert_eq!(duration_of(days), Duration::from_secs(secs as u64));
-        }
-    }
-
-    #[test]
     fn column_letters_span_past_z() {
         assert_eq!(column_letters(1), "A");
         assert_eq!(column_letters(26), "Z");
         assert_eq!(column_letters(27), "AA");
-        assert_eq!(column_letters(COLUMNS.len()), "AB");
+        assert_eq!(column_letters(COLUMNS.len()), "AD");
     }
 
     /// `adj_conn_end` is the reported end padded past the end of its minute — the exclusive end of
@@ -1139,19 +1281,19 @@ mod test {
             .resolve(&time_zone(), 1)
             .unwrap();
         assert_eq!(
-            local_of(rows[0].adj_end_utc),
+            local_of(rows[0].session.adj_conn_end()),
             civil::date(2026, 6, 1).at(21, 30, 0, 0)
         );
-        assert!(timing_anomalies(&rows[0].anomalies).is_empty());
+        assert!(timing_anomalies(&rows[0].session.anomalies).is_empty());
 
         let rows = session("2026-06-07 16:42", "2026-06-07 23:41", "6:58:29")
             .resolve(&time_zone(), 1)
             .unwrap();
         assert_eq!(
-            local_of(rows[0].adj_end_utc),
+            local_of(rows[0].session.adj_conn_end()),
             civil::date(2026, 6, 7).at(23, 42, 0, 0)
         );
-        assert!(timing_anomalies(&rows[0].anomalies).is_empty());
+        assert!(timing_anomalies(&rows[0].session.anomalies).is_empty());
     }
 
     /// Both invariants the rule exists to guarantee, on the whole-minute durations that are the
@@ -1169,17 +1311,21 @@ mod test {
             let rows = s.resolve(&time_zone(), 1).unwrap();
             let row = &rows[0];
             assert!(
-                row.adj_end_utc >= row.end_utc,
+                row.session.adj_conn_end() >= row.session.conn_end,
                 "{start}: adjusted end precedes reported end"
             );
             assert!(
-                row.adj_end_utc.duration_since(row.start_utc) >= s.conn_duration,
+                row.session
+                    .adj_conn_end()
+                    .duration_since(row.session.conn_start)
+                    .unsigned_abs()
+                    >= s.conn_duration,
                 "{start}: adjusted duration shorter than Conn_Duration"
             );
             assert!(
-                timing_anomalies(&row.anomalies).is_empty(),
+                timing_anomalies(&row.session.anomalies).is_empty(),
                 "{start}: unexpected {:?}",
-                row.anomalies
+                row.session.anomalies
             );
         }
     }
@@ -1190,7 +1336,11 @@ mod test {
             .resolve(&time_zone(), 1)
             .unwrap();
         assert_eq!(
-            rows[0].start_utc.to_zoned(TimeZone::UTC).datetime(),
+            rows[0]
+                .session
+                .conn_start
+                .to_zoned(TimeZone::UTC)
+                .datetime(),
             civil::date(2026, 6, 1).at(20, 22, 0, 0)
         );
     }
@@ -1204,10 +1354,14 @@ mod test {
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(
-            rows[0].start_utc.to_zoned(TimeZone::UTC).datetime(),
+            rows[0]
+                .session
+                .conn_start
+                .to_zoned(TimeZone::UTC)
+                .datetime(),
             civil::date(2026, 11, 1).at(5, 30, 0, 0), // EDT is UTC-4
         );
-        assert!(timing_anomalies(&rows[0].anomalies).is_empty());
+        assert!(timing_anomalies(&rows[0].session.anomalies).is_empty());
     }
 
     /// The mirror of the test above, and the case a one-sided `start + duration <= adj_conn_end`
@@ -1220,12 +1374,21 @@ mod test {
         let rows = session("2026-11-01 01:30", "2026-11-01 04:30", "3:00:00")
             .resolve(&time_zone(), 1)
             .unwrap();
-        assert_eq!(rows.len(), 1, "should not duplicate: {:?}", rows[0].id);
         assert_eq!(
-            rows[0].start_utc.to_zoned(TimeZone::UTC).datetime(),
+            rows.len(),
+            1,
+            "should not duplicate: {:?}",
+            rows[0].session.id
+        );
+        assert_eq!(
+            rows[0]
+                .session
+                .conn_start
+                .to_zoned(TimeZone::UTC)
+                .datetime(),
             civil::date(2026, 11, 1).at(6, 30, 0, 0), // EST is UTC-5
         );
-        assert!(timing_anomalies(&rows[0].anomalies).is_empty());
+        assert!(timing_anomalies(&rows[0].session.anomalies).is_empty());
     }
 
     /// Reported times are truncated to the minute while `Conn_Duration` carries seconds, so a
@@ -1242,12 +1405,19 @@ mod test {
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert!(
-            !rows[0].anomalies.contains(&AnomalyKind::DstUnresolvable),
+            !rows[0]
+                .session
+                .anomalies
+                .contains(&AnomalyKind::DstUnresolvable),
             "spurious DstUnresolvable: {:?}",
-            rows[0].anomalies
+            rows[0].session.anomalies
         );
         assert_eq!(
-            rows[0].start_utc.to_zoned(TimeZone::UTC).datetime(),
+            rows[0]
+                .session
+                .conn_start
+                .to_zoned(TimeZone::UTC)
+                .datetime(),
             civil::date(2026, 11, 1).at(5, 30, 0, 0), // EDT is UTC-4
         );
     }
@@ -1260,17 +1430,20 @@ mod test {
             .resolve(&time_zone(), 1)
             .unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].id, "S1-EDT");
-        assert_eq!(rows[1].id, "S1-EST");
+        assert_eq!(rows[0].session.id, "S1-EDT");
+        assert_eq!(rows[1].session.id, "S1-EST");
         // The copies are an hour apart in real time, which is the whole point.
         assert_eq!(
-            rows[1].start_utc.duration_since(rows[0].start_utc),
+            rows[1]
+                .session
+                .conn_start
+                .duration_since(rows[0].session.conn_start),
             SignedDuration::from_hours(1)
         );
         // Both copies carry the flag, so each workbook row says why it is there.
         for row in &rows {
             assert_eq!(
-                timing_anomalies(&row.anomalies),
+                timing_anomalies(&row.session.anomalies),
                 vec![AnomalyKind::DstAmbiguousDuplicated]
             );
         }
@@ -1283,9 +1456,9 @@ mod test {
             .resolve(&time_zone(), 1)
             .unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(local_of(rows[0].start_utc), dt("2026-03-08 03:30"));
+        assert_eq!(local_of(rows[0].session.conn_start), dt("2026-03-08 03:30"));
         assert_eq!(
-            timing_anomalies(&rows[0].anomalies),
+            timing_anomalies(&rows[0].session.anomalies),
             vec![AnomalyKind::DstGapShifted]
         );
     }
@@ -1298,14 +1471,16 @@ mod test {
             .resolve(&time_zone(), 1)
             .unwrap();
         let row = &rows[0];
-        let elapsed = row.adj_end_utc.duration_since(row.start_utc);
+        let elapsed = row
+            .session
+            .adj_conn_end()
+            .duration_since(row.session.conn_start);
         assert!(
             elapsed >= SignedDuration::from_hours(3),
             "elapsed {elapsed:?} lost the repeated hour"
         );
         // The same subtraction done on local wall times loses the repeated hour.
-        let wall_secs =
-            excel_serial(row.adj_end_local).unwrap() - excel_serial(row.start_local).unwrap();
+        let wall_secs = serial_of_civil(row.adj_end_local()) - serial_of_civil(row.start_local);
         assert!(
             wall_secs * 86_400.0 < elapsed.as_secs() as f64,
             "local subtraction should undercount here"
@@ -1321,7 +1496,7 @@ mod test {
             s.energy_use = energy;
             let rows = s.resolve(&time_zone(), 7).unwrap();
             assert_eq!(
-                timing_anomalies(&rows[0].anomalies),
+                timing_anomalies(&rows[0].session.anomalies),
                 vec![AnomalyKind::ZeroActiveChargeTime],
                 "energy {energy}"
             );
@@ -1345,6 +1520,7 @@ mod test {
                 .resolve(&time_zone(), 1)
                 .unwrap()
                 .swap_remove(0)
+                .session
                 .anomalies;
             timing_anomalies(&all)
         };
@@ -1432,17 +1608,30 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
             .unwrap();
         assert!((adj - 46_174.895_833_333_3).abs() < 1e-9, "{adj}");
 
-        // Formulas, not cached values.
+        // Formulas, not cached values. Both operands are the *adjusted* UTC columns, so the cell
+        // equals `Session::adj_duration` rather than a span starting at the reported start.
+        let expect_formula = format!(
+            "{}2-{}2",
+            column_letters(column_index(Source::AdjConnEndUtc)),
+            column_letters(column_index(Source::AdjConnStartUtc))
+        );
         assert_eq!(
             sheet
                 .cell((col(Source::AdjConnDuration), 2))
                 .unwrap()
                 .formula(),
-            "P2-L2"
+            expect_formula
         );
+        let avg_kw_formula = |r: u32| {
+            format!(
+                "{}{r}/({}{r}*24)",
+                column_letters(column_index(Source::Number("Energy_Use"))),
+                column_letters(column_index(Source::Duration("Active_Charge_Time")))
+            )
+        };
         assert_eq!(
             sheet.cell((col(Source::AvgKw), 2)).unwrap().formula(),
-            "V2/(T2*24)"
+            avg_kw_formula(2)
         );
 
         // Sheet name is the output file's name, minus the .xlsx suffix and the report prefix.
@@ -1533,7 +1722,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S13577,,2026-06-02 08:00,2026-06-0
         // divide by zero shows #DIV/0! rather than nothing at all.
         assert_eq!(
             sheet.cell((col(Source::AvgKw), 3)).unwrap().formula(),
-            "V3/(T3*24)"
+            avg_kw_formula(3)
         );
 
         // Neither fixture row has anything wrong with its times, so the Anomalies column carries
@@ -1685,6 +1874,66 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
         let csv_path = dir.join("Session_Report_Test.csv");
         fs::write(&csv_path, csv).unwrap();
         session_csv_to_xlsx(&csv_path).unwrap().output_path
+    }
+
+    /// A stale `adj_conn_end_utc` is logged and **ignored**, not obeyed.
+    ///
+    /// The property the whole discrepancy channel exists for: editing a cell in a workbook must
+    /// not change which sessions feed an estimate. Here the cell is moved an hour forward, which
+    /// under the old read-back would have moved the session an hour forward with it. The
+    /// recomputed value wins and the disagreement goes to the log.
+    #[test]
+    fn a_stale_stored_column_is_logged_and_overruled() {
+        let xlsx = convert("stale_column", FIXTURE);
+
+        // Move adj_conn_end_utc on row 2 an hour later than it should be.
+        let mut book = umya_spreadsheet::reader::xlsx::read(&xlsx).unwrap();
+        let expected = {
+            let sheet = book.sheet(0).unwrap();
+            let headers = sheet_headers(sheet, &xlsx).unwrap();
+            let col = headers["adj_conn_end_utc"];
+            let stored: f64 = sheet.value((col, 2)).parse().unwrap();
+            let moved = stored + 1.0 / 24.0;
+            (col, instant_of_serial(stored).unwrap(), moved)
+        };
+        let (col, correct, moved) = expected;
+        book.sheet_mut(0)
+            .unwrap()
+            .cell_mut((col, 2))
+            .set_value_number(moved);
+        umya_spreadsheet::writer::xlsx::write(&book, &xlsx).unwrap();
+
+        let report = session_list(&xlsx).unwrap();
+        let session = &report.sessions[0];
+
+        // Recomputed, not read: the edited cell had no effect on the session at all.
+        assert_eq!(
+            session.adj_conn_end(),
+            correct,
+            "the stored value overruled the recomputed one"
+        );
+
+        let log = fs::read_to_string(&report.log_path).unwrap();
+        assert!(
+            log.contains("adj_conn_end_utc"),
+            "the discrepancy was not logged:\n{log}"
+        );
+        assert!(
+            log.contains("using the recomputed value"),
+            "the log does not say what was done:\n{log}"
+        );
+        // A discrepancy is not an anomaly. Nothing about the session changed classification.
+        assert!(
+            !session
+                .anomalies
+                .contains(&AnomalyKind::InconsistentDuration),
+            "a stale cell raised an anomaly: {:?}",
+            session.anomalies
+        );
+        assert!(
+            report.excluded.is_empty(),
+            "a stale cell excluded a session"
+        );
     }
 
     #[test]

@@ -7,10 +7,10 @@
 
 use ev_cost_recovery::{
     sessions::{
-        ConversionReport, HourEntry, IntervalEstimates, IoiLength, SessionReport, TZ_OFFSETS,
-        checked_interval, hours_of, interval_estimates, session_csv_to_xlsx, session_list,
+        ConversionReport, HourEntry, IntervalEstimates, IoiLength, SessionReport, checked_interval,
+        hours_of, interval_estimates, session_csv_to_xlsx, session_list,
     },
-    time::{Interval, time_zone},
+    time::{Interval, TZ_OFFSETS, time_zone},
 };
 use jiff::civil;
 use std::path::{Path, PathBuf};
@@ -114,6 +114,7 @@ impl ConvertState {
             Ok(ConversionReport {
                 output_path,
                 anomalies,
+                log_path: _,
             }) => {
                 self.handoff = Some(output_path.clone());
                 self.outcome = Some(ConvertOutcome {

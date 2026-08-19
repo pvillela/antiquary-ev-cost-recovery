@@ -1,3 +1,4 @@
+mod consistency_band;
 mod report_rendering;
 mod segment_tiling;
 

@@ -78,6 +78,7 @@ pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimate
         sessions,
         spikes,
         excluded,
+        log_path: _,
     } = session_report;
 
     // Spikes take part in the estimates on the same footing as any other session. A spike's raw
@@ -227,7 +228,7 @@ fn collect_session_anomalies(interval: &Interval, rsessions: &[RSession]) -> Vec
 
 #[cfg(test)]
 mod test {
-    use crate::time::TIME_GRID_STEP;
+    use crate::sessions::TIME_GRID_STEP;
 
     use super::super::{
         SEGMENT_DURATION,

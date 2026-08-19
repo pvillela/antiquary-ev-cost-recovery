@@ -23,7 +23,11 @@ use std::error::Error;
 use jiff::Timestamp;
 use roxmltree::{Document, Node};
 
-use crate::green_button::{Anomaly, Reading};
+use crate::green_button::{Anomaly, METER_INTERVAL, Reading};
+use crate::time::is_on_grid;
+
+/// [`METER_INTERVAL`] in seconds, which is the form the feed states it in.
+const METER_INTERVAL_SECS: i64 = METER_INTERVAL.as_secs() as i64;
 
 const ATOM_NS: &str = "http://www.w3.org/2005/Atom";
 const ESPI_NS: &str = "http://naesb.org/espi";
@@ -32,11 +36,6 @@ const ESPI_NS: &str = "http://naesb.org/espi";
 const UOM_KWH: &str = "72";
 const UOM_KW: &str = "38";
 const UOM_KVA: &str = "61";
-
-/// Every reading in this feed covers one hour, and the whole design downstream depends on it —
-/// the interval count that drives the red highlight, and the guarantee that an interval cannot
-/// straddle a TOU boundary. So it is checked rather than assumed.
-const INTERVAL_SECS: i64 = 3600;
 
 /// One measurement series, in raw source integers.
 ///
@@ -106,7 +105,7 @@ pub fn parse(xml: &str) -> Result<Feed, Box<dyn Error>> {
         let interval_length: i64 = espi_text(rt, "intervalLength")
             .ok_or("a ReadingType has no intervalLength")?
             .parse()?;
-        if interval_length != INTERVAL_SECS {
+        if interval_length != METER_INTERVAL_SECS {
             return Err(format!(
                 "ReadingType {href} declares {interval_length}s intervals; this tool assumes \
                  hourly data throughout"
@@ -177,7 +176,7 @@ pub fn parse(xml: &str) -> Result<Feed, Box<dyn Error>> {
             let duration: i64 = espi_text(period, "duration")
                 .ok_or("an IntervalReading has no timePeriod/duration")?
                 .parse()?;
-            if duration != INTERVAL_SECS {
+            if duration != METER_INTERVAL_SECS {
                 return Err(format!(
                     "an IntervalReading covers {duration}s; this tool assumes hourly data"
                 )
@@ -238,7 +237,7 @@ impl Feed {
         for at in starts {
             // Fill the hours between the last row and this one, if the feed skipped any.
             if let Some(prev) = previous {
-                let mut gap = prev.as_second() + INTERVAL_SECS;
+                let mut gap = prev.as_second() + METER_INTERVAL_SECS;
                 while gap < at.as_second() {
                     let missing = Timestamp::from_second(gap).expect("inside the feed's own span");
                     note(missing, Anomaly::MissingInterval);
@@ -248,12 +247,12 @@ impl Feed {
                         kw: None,
                         kva: None,
                     });
-                    gap += INTERVAL_SECS;
+                    gap += METER_INTERVAL_SECS;
                 }
             }
             previous = Some(at);
 
-            if at.as_second().rem_euclid(INTERVAL_SECS) != 0 {
+            if !is_on_grid(at, METER_INTERVAL) {
                 note(at, Anomaly::MisalignedInterval);
             }
             let reading = Reading {

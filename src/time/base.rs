@@ -10,7 +10,16 @@ use std::{sync::LazyLock, time::Duration};
 // ---------------------------------------------------------------------------
 
 /// Time zone the session report's timestamps are stated in. See README.md, "Time zone".
-const TIME_ZONE_NAME: &str = "America/Toronto";
+///
+/// Public because both binaries and several doc comments name it, and a reader who finds
+/// "in local time" in a message needs somewhere to learn which zone that is.
+pub const TIME_ZONE_NAME: &str = "America/Toronto";
+
+/// The offsets [`TIME_ZONE_NAME`] uses, under the names a reader of a Toronto Hydro bill will
+/// recognise. Naming one resolves a wall time that occurs twice.
+///
+/// Here rather than in `sessions` because it is a property of the zone, and the zone is shared.
+pub const TZ_OFFSETS: [(&str, i8); 2] = [("EST", -5), ("EDT", -4)];
 
 static TIME_ZONE: LazyLock<TimeZone> = LazyLock::new(|| {
     TimeZone::get(TIME_ZONE_NAME).expect("America/Toronto should be a valid time-zone name")
@@ -56,39 +65,165 @@ pub(crate) fn local_midnight(d: Date) -> Timestamp {
 }
 
 // ---------------------------------------------------------------------------
-// Time grid
+// Time grids
 // ---------------------------------------------------------------------------
+//
+// A grid is a step, and these two functions are everything the crate does with one. The step
+// itself belongs to whichever module has a reason for its value: `sessions::TIME_GRID_STEP` is
+// the resolution session boundaries are reported at, `green_button::METER_INTERVAL` the interval
+// the meter records. Neither is a property of time.
 
-/// Resolution the session report states session boundaries at.
+/// Rounds a `Timestamp` down to the nearest multiple of `step`, counting from the Unix epoch.
 ///
-/// Currently, `Conn_DateTime_Start` and `Conn_DateTime_End` are truncated to whole minutes,
-/// but it could change to whole seconds in the future. In the latter case, this value
-/// should be changed to 1 second.
+/// The defining property, which [`test::truncation_brackets_its_input`] states and everything
+/// built on this relies on:
 ///
-/// `Conn_Duration` and `Active_Charge_Time` are *not* truncated — they carry seconds.
+/// ```text
+/// truncate_to(ts, step) <= ts < truncate_to(ts, step) + step
+/// ```
 ///
-/// Every allowance the software makes for that truncation is this one value, so all of them move
-/// together should Evolute ever report seconds:
+/// That is the `Givens` line of `docs/sessions/time-reporting-uncertainty.md`, and it is what
+/// makes `adj_conn_start <= real_start` true.
 ///
-/// - Added to the reported session end to give `adj_conn_end`, the session's exclusive end.
-/// - The half-width of the band a sound record's `Conn_start + Conn_Duration` must land in.
+/// # Panics
 ///
-/// This constant defines the step of the time grid on which this software relies.
-///
-/// Must divide [`SEGMENT_DURATION`] without leaving a remainder. Otherwise, [`Segment`]s
-/// partitioning the interval of interest will not be on the time grid.
-///
-/// See README.md, "Boundaries and the time grid".
-pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
+/// If `step` is zero, or so large that the truncated instant falls outside the representable
+/// range. Neither is reachable from any caller in this crate.
+pub fn truncate_to(ts: Timestamp, step: Duration) -> Timestamp {
+    let step_secs = step.as_secs() as i64;
+    assert!(
+        step_secs > 0,
+        "a time grid step must be positive, got {step:?}"
+    );
+    let secs = ts.as_second();
+    // `rem_euclid`, not `%`: the remainder must be non-negative so that a pre-epoch instant
+    // truncates backwards like every other one. With `%` a negative timestamp would round towards
+    // zero, i.e. forwards, and break the bracket above.
+    let truncated = secs - secs.rem_euclid(step_secs);
+    Timestamp::from_second(truncated)
+        .unwrap_or_else(|_| panic!("truncating {ts:?} to step {step:?} left the valid range"))
+}
 
-/// Rounds down a `Timestamp` to align with the time grid.
-pub fn truncate_to_time_grid(ts: Timestamp) -> Timestamp {
-    let step = TIME_GRID_STEP;
-    let ts_nanos = ts.as_second();
-    let rd_ts_secs = ts_nanos - ts_nanos.rem_euclid(step.as_secs() as i64);
-    Timestamp::from_second(rd_ts_secs).unwrap_or_else(|_| {
-        panic!("rounding down Timestamp {ts:?} by step {step:?} that is too large")
-    })
+/// Whether an instant lies exactly on the grid `step` defines.
+///
+/// The companion of [`truncate_to`]: `is_on_grid(ts, step)` is true exactly when
+/// `truncate_to(ts, step) == ts`. Callers use it to ask whether truncation *would* move an
+/// instant, so the two must agree.
+pub fn is_on_grid(ts: Timestamp, step: Duration) -> bool {
+    let step_secs = step.as_secs() as i64;
+    assert!(
+        step_secs > 0,
+        "a time grid step must be positive, got {step:?}"
+    );
+    ts.as_second().rem_euclid(step_secs) == 0
+}
+
+// cargo test --lib -- time::base::test --nocapture
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    const MINUTE: Duration = Duration::from_secs(60);
+
+    fn ts(s: &str) -> Timestamp {
+        s.parse().unwrap()
+    }
+
+    /// An instant already on the grid does not move, so truncation is idempotent.
+    #[test]
+    fn truncation_leaves_an_aligned_instant_alone() {
+        for s in ["2026-06-15T20:00:00Z", "1970-01-01T00:00:00Z"] {
+            let t = ts(s);
+            assert_eq!(truncate_to(t, MINUTE), t, "{s}");
+            assert_eq!(truncate_to(truncate_to(t, MINUTE), MINUTE), t, "{s} twice");
+        }
+    }
+
+    /// Seconds are dropped, never rounded: the result is the step at or below the input.
+    #[test]
+    fn truncation_moves_backwards_never_forwards() {
+        for (input, expected) in [
+            ("2026-06-15T20:00:01Z", "2026-06-15T20:00:00Z"),
+            ("2026-06-15T20:00:59Z", "2026-06-15T20:00:00Z"),
+            ("2026-06-15T20:01:00Z", "2026-06-15T20:01:00Z"),
+        ] {
+            assert_eq!(truncate_to(ts(input), MINUTE), ts(expected), "{input}");
+        }
+    }
+
+    /// The property everything else rests on, checked over every second of a minute rather than at
+    /// a few chosen points.
+    #[test]
+    fn truncation_brackets_its_input() {
+        let base = ts("2026-06-15T20:00:00Z");
+        for offset in 0..600 {
+            let t = base + Duration::from_secs(offset);
+            let truncated = truncate_to(t, MINUTE);
+            assert!(
+                truncated <= t,
+                "{t} truncated to {truncated}, which is later"
+            );
+            assert!(
+                t < truncated + MINUTE,
+                "{t} is not below {truncated} + step"
+            );
+        }
+    }
+
+    /// The two functions must agree, since callers use one to predict the other.
+    #[test]
+    fn is_on_grid_agrees_with_truncate_to() {
+        let base = ts("2026-06-15T20:00:00Z");
+        for offset in 0..300 {
+            let t = base + Duration::from_secs(offset);
+            assert_eq!(
+                is_on_grid(t, MINUTE),
+                truncate_to(t, MINUTE) == t,
+                "disagreement at {t}"
+            );
+            // Whatever went in, what comes out is on the grid.
+            assert!(is_on_grid(truncate_to(t, MINUTE), MINUTE), "{t}");
+        }
+    }
+
+    /// A pre-epoch instant truncates backwards like any other.
+    ///
+    /// This is why the implementation uses `rem_euclid` rather than `%`. With `%` the remainder
+    /// would be negative here and the instant would move *forwards*, breaking the bracket above
+    /// for every timestamp before 1970. No caller reaches these dates today; the Excel epoch
+    /// (1899-12-30) is one, and a corrupt feed is another.
+    #[test]
+    fn truncation_is_correct_before_the_unix_epoch() {
+        assert_eq!(
+            truncate_to(ts("1899-12-30T00:00:30Z"), MINUTE),
+            ts("1899-12-30T00:00:00Z")
+        );
+        // The revealing case: `%` would give 1969-12-31T23:59:00Z, which is later than the input.
+        let t = ts("1969-12-31T23:58:30Z");
+        let truncated = truncate_to(t, MINUTE);
+        assert_eq!(truncated, ts("1969-12-31T23:58:00Z"));
+        assert!(truncated <= t);
+    }
+
+    /// The step is a parameter, and the callers do pass more than one.
+    #[test]
+    fn other_steps_work_the_same_way() {
+        let t = ts("2026-06-15T20:37:42Z");
+        assert_eq!(truncate_to(t, Duration::from_secs(1)), t);
+        assert_eq!(
+            truncate_to(t, Duration::from_secs(900)),
+            ts("2026-06-15T20:30:00Z")
+        );
+        assert_eq!(
+            truncate_to(t, Duration::from_secs(3600)),
+            ts("2026-06-15T20:00:00Z")
+        );
+        assert!(is_on_grid(
+            ts("2026-06-15T20:00:00Z"),
+            Duration::from_secs(3600)
+        ));
+        assert!(!is_on_grid(t, Duration::from_secs(3600)));
+    }
 }
 
 // ---------------------------------------------------------------------------

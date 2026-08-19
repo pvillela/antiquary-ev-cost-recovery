@@ -8,6 +8,9 @@ pub use energy::*;
 mod excel;
 pub use excel::*;
 
+mod log;
+pub use log::RunLog;
+
 mod ioi;
 pub use ioi::*;
 
