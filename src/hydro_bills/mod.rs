@@ -5,11 +5,22 @@
 //! which quarter-hour the site peaked in. Neither answers *what it cost*, and the project exists
 //! to work out how much of a bill EV charging is responsible for. That last step needs the bill:
 //! the rate schedule, the delivery and regulatory lines, the loss factor, and the way a demand
-//! charge is levied on a monthly peak rather than on consumption. [`hydro_bill::HydroBill`] is
-//! that bill, read straight out of the PDF Toronto Hydro issues.
+//! charge is levied on a monthly peak rather than on consumption. [`HydroBill`] is that bill, and
+//! [`hydro_bill_from_pdf`] reads one straight out of the PDF Toronto Hydro issues.
+//!
+//! Behind those two names the source is a stack, each file knowing less than the one above it:
+//! `hydro_bill.rs` is the figures alone, `bill_pdf.rs` is everything that knows what a Toronto
+//! Hydro bill looks like, and [`pdf_text`] is positioned text out of any PDF at all. Only the
+//! last is a module of its own here, because reading a PDF is a job in its own right and its
+//! `Line` and `Fragment` read better with it named.
 //!
 //! Plural because a run reconciles a series of them — a billing period at a time, the way
 //! `green_button::BillingPeriod` already divides the meter data.
 
-pub mod hydro_bill;
+mod bill_pdf;
+pub use bill_pdf::*;
+
+mod hydro_bill;
+pub use hydro_bill::*;
+
 pub mod pdf_text;

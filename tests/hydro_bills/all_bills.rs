@@ -12,7 +12,7 @@
 //! dropped because a rate change printed it twice, still parses -- it just gives a total that no
 //! longer equals its parts.
 
-use ev_cost_recovery::hydro_bills::hydro_bill::HydroBill;
+use ev_cost_recovery::hydro_bills::hydro_bill_from_pdf;
 use ev_cost_recovery::hydro_bills::pdf_text::{self, Line};
 use std::path::PathBuf;
 
@@ -44,7 +44,7 @@ fn every_bill_parses_and_its_figures_agree_with_each_other() {
     for path in &paths {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         // The error names the bill itself, so it needs no prefix here.
-        let bill = HydroBill::from_pdf(path).unwrap_or_else(|e| panic!("{e}"));
+        let bill = hydro_bill_from_pdf(path).unwrap_or_else(|e| panic!("{e}"));
         println!("{name}: {bill:?}");
 
         let charges = bill.on_peak_cost
