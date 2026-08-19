@@ -502,9 +502,35 @@ test to run — deliberately. The shared subset only shrinks as the Rust version
 from the Python-era sheet, so a standing test would weaken over time while looking like it still
 meant something.
 
-The `docs/reference/` workbook stays as provenance: it is the artefact whose figures were
-reconciled against real invoices, and whose June 2026 period ties out to one to the milli-kWh.
-Nothing in the test suite reads it, and its **formatting is not the current standard** — see §7.
+### Re-run, 2026-08-19
+
+The gate was run again after the merger review, at commit `184f467`, against the same reference and
+the same input. Two changes to method, both widening it:
+
+- `Interval_values` was compared as well as `Peak_values`. The original gate covered only the peak
+  sheet, and the interval sheet is where every figure the peaks are drawn from lives.
+- Every shared cell was compared, not the grid: the count below is lower than 399 because 8 cells
+  are **blank in both** workbooks, one billing period having no non-peak maxima. Agreement includes
+  the blanks.
+
+| | |
+|---|---|
+| Code | commit `184f467` |
+| `Peak_values` | 21 periods × 19 shared columns, 391 non-blank cells |
+| `Interval_values` | 13,896 rows × 5 shared columns, 69,480 cells |
+| Total compared | **69,871 cells** |
+| Result | **0 mismatches** |
+| Largest absolute difference | 1.0e-10 on `Peak_values`, 3.6e-11 on `Interval_values` — float text formatting, not arithmetic |
+
+So everything from the merger through the four review phases left the figures where the Python put
+them. That is a stronger statement than baseline parity, which only says this work changed nothing:
+this says the numbers agree with an implementation outside the crate, whose own figures were
+reconciled against real invoices.
+
+The `docs/green_button/reference/` workbook stays as provenance: it is the artefact whose figures
+were reconciled against real invoices, and whose June 2026 period ties out to one to the milli-kWh.
+Nothing in the test suite reads it, and its **formatting is not the current standard** — see
+"Row heights: three, and only three".
 
 Three workbooks, three jobs, no overlap:
 

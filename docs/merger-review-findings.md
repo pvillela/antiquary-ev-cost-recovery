@@ -21,7 +21,7 @@ this document is the record and the work list.
 The dedicated `green_button` read and the baseline content diff are both complete and folded in
 (findings 11 and 12).
 
-**All four phases are complete.** `cargo test` is green: **158 passed, 0 failed, 1 ignored**.
+**All four phases are complete, and every verification item is closed.** `cargo test` is green: **158 passed, 0 failed, 1 ignored**.
 `cargo clippy --all-targets` and `cargo fmt --check` are both clean — the first time either has
 been.
 
@@ -961,12 +961,16 @@ After Phase 3 the workbook cannot be byte-identical to the baseline's, so the ga
    reports **no discrepancies**, only that the two formula columns hold no stored value — which is
    the normal state of a workbook Excel has not opened.
 6. Run `gb_peak_values` on `data/TH_Electric_Usage_23-11-2024_to_24-06-2026.XML` and reconcile
-   against `docs/green_button/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx`. **Still
-   not done — the one verification item left open.** Parity with `af8ffea` shows the merger and this
-   work changed nothing; it does not show either is right. Only this compares against a figure
-   produced outside the crate. Note the maintenance manual records that this reconciliation *was*
-   performed once, at port time, over 21 billing periods and every shared column with no
-   differences — so this is a re-check, not a first check.
+   against `docs/green_button/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx`. **Done.
+   69,871 cells compared, 0 mismatches** — `Peak_values` 21 periods × 19 shared columns, and
+   `Interval_values` 13,896 rows × 5 shared columns, which the original port gate did not cover.
+   Largest absolute difference 1.0e-10, which is float text formatting rather than arithmetic.
+   Recorded in `docs/maintenance-manual.md` under the port gate, as a re-run rather than a first
+   check.
+
+   This is the strongest statement available about the figures. Baseline parity says this work
+   changed nothing; this says the numbers agree with an implementation outside the crate, whose own
+   output was reconciled against real Toronto Hydro invoices.
 7. Every path in the consolidated manual's fixture-regeneration procedure resolves. **Done, and the
    procedure was run rather than read.** It reproduces the committed `civic_holiday.XML` byte for
    byte and matches the checksum recorded beside it. It could not have before: it named an example
