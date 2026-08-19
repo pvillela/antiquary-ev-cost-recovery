@@ -21,14 +21,15 @@ this document is the record and the work list.
 The dedicated `green_button` read and the baseline content diff are both complete and folded in
 (findings 11 and 12).
 
-**Phases 1, 2 and 3 are complete.** `cargo test` is green: **158 passed, 0 failed, 1 ignored**.
+**All four phases are complete.** `cargo test` is green: **158 passed, 0 failed, 1 ignored**.
 `cargo clippy --all-targets` and `cargo fmt --check` are both clean — the first time either has
 been.
 
 Phase 3 held the baseline-parity gate in the shape set for it in advance: the only new columns are
 the two named, 23 of 25 shared columns are identical in all 238 rows, the other two are formula
 text whose operands were resolved and checked, and all 240 estimate reports are identical.
-`green_button` output is byte-identical.
+`green_button` output is byte-identical. Phase 4 changed no behaviour at all — the workbook it
+produces is identical to the pre-Phase-4 one, cell for cell.
 
 **Measured effect of the Phase 2 fix, on the real report.** Converting
 `data/Session_Report_June_1_2026-June_30_2026.csv`, 238 sessions, through three builds:
@@ -264,7 +265,8 @@ one uncertainty model is how the drift in finding 1 happened.
 
 ## 6. Every `See README.md, "<section>"` citation is broken
 
-**OPEN — Phase 4.**
+**RESOLVED — Phase 4.** All 21 gone: doc comments carry explicit paths, user-facing strings
+state the rule inline.
 
 ~33 of them. Before the merger each project had one README, at its root, holding the cited sections.
 The root README now holds licence text only; the sections live in `docs/sessions/README.md`.
@@ -279,7 +281,8 @@ run-in label at `docs/sessions/README.md:11`.
 
 ## 7. Stale paths throughout the documentation
 
-**OPEN — Phase 4.**
+**RESOLVED — Phase 4.** Verified by walking the tree: every path in a live document resolves,
+every markdown link resolves, and every section citation names a heading that exists.
 
 Worst first:
 
@@ -336,7 +339,7 @@ truncation, one `METER_INTERVAL`, `TIME_ZONE_NAME` public and `TZ_OFFSETS` moved
 
 ## 10. Smaller items
 
-**PART DONE — Phases 2 and 3.** Only the prompt typos remain, in Phase 4.
+**RESOLVED — Phases 2, 3 and 4.**
 
 - `src/sessions/energy.rs` — `TouKkh` is a typo for `TouKwh`; division by `adj_duration()` is
   unguarded when that is zero.
@@ -462,7 +465,8 @@ code.
 ## 12. `green_button` defects
 
 **PART DONE — Phase 1** closed the `espi.rs:145` series-keying defect and added the first two
-`ReadingType` error-path tests. Everything else is **open** and needs the scope call below.
+`ReadingType` error-path tests. Everything else is **open**, and is now the only substantive work
+left in this review — see the scope decision below.
 
 The merger changed nothing but `use` paths in all five library files, the binary and the example.
 These are pre-existing, found by the dedicated read.
@@ -830,7 +834,7 @@ Convert at the parse boundary so `parse_duration`, `CsvSession` and `excel_durat
 
 Keep the plural name; give the empty `mod.rs` a doc comment stating its intended scope.
 
-## Phase 4 — Documentation
+## Phase 4 — Documentation — **DONE**
 
 Last, because Phases 2 and 3 change what it must describe.
 
@@ -935,10 +939,17 @@ After Phase 3 the workbook cannot be byte-identical to the baseline's, so the ga
    reports **no discrepancies**, only that the two formula columns hold no stored value — which is
    the normal state of a workbook Excel has not opened.
 6. Run `gb_peak_values` on `data/TH_Electric_Usage_23-11-2024_to_24-06-2026.XML` and reconcile
-   against `docs/green_button/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx`. **Not
-   done.** Parity with `af8ffea` shows the merger changed nothing, not that either is right; only
-   this compares against a figure produced outside the crate.
-7. Every path in the consolidated manual's fixture-regeneration procedure resolves. **Phase 4.**
+   against `docs/green_button/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx`. **Still
+   not done — the one verification item left open.** Parity with `af8ffea` shows the merger and this
+   work changed nothing; it does not show either is right. Only this compares against a figure
+   produced outside the crate. Note the maintenance manual records that this reconciliation *was*
+   performed once, at port time, over 21 billing periods and every shared column with no
+   differences — so this is a re-check, not a first check.
+7. Every path in the consolidated manual's fixture-regeneration procedure resolves. **Done, and the
+   procedure was run rather than read.** It reproduces the committed `civic_holiday.XML` byte for
+   byte and matches the checksum recorded beside it. It could not have before: it named an example
+   binary that does not exist and wrote to the wrong directory, so run as written it produced four
+   files in the wrong place and left the fixtures untouched.
 
 ## Still unguarded
 
