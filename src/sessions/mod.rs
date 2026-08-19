@@ -5,8 +5,10 @@ mod energy;
 #[allow(unused)]
 pub use energy::*;
 
-mod excel;
-pub use excel::*;
+pub mod csv;
+
+pub mod excel;
+pub use excel::ConversionReport;
 
 mod log;
 pub use log::RunLog;
@@ -21,3 +23,6 @@ mod report;
 pub use report::site_load_report;
 
 pub mod site_load;
+
+#[cfg(test)]
+mod test_support;

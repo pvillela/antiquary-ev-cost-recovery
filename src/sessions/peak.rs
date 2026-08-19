@@ -1,6 +1,6 @@
+use super::excel::session_list;
 use super::{
     Anomaly, Bracket, RSegment, RSession, SEGMENT_DURATION, Segment, Session, SessionReport,
-    session_list,
 };
 use crate::time::Interval;
 use std::{

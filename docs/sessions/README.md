@@ -210,7 +210,7 @@ Evolute's own description of how the installation behaves when several vehicles 
 - Excluded sessions get a section of their own in the report, listing **every** one in the workbook rather than only those near the interval of interest, with an `In interval` column saying whether each *appears* to fall in that interval. Appears only: a record whose own fields contradict each other cannot be trusted to say where it belongs, so filtering on that judgement could hide exactly the session a reader most needs to see. Such a record may even report an end before its start, and the column answers for it.
 - Sessions with zero `Energy_Use` and non-zero `Active_Charge_Time` do not contribute to `energy_based_kw` and `energy_based_kva` but they do contribute to `count_based_kw` and `count_based_kva`.
 - A session with zero `Active_Charge_Time` delivered energy in no time at all, so its average power is unbounded or undefined.
-  - The Excel `avg_kw` cell shows `#DIV/0!` so the fault is visible in the sheet. Function `session_list` returns the session as a *spike*, held apart from the normal sessions fed to the peak logic.
+  - The Excel `avg_kw` cell shows `#DIV/0!` so the fault is visible in the sheet. Both `session_list` functions return the session as a *spike*, held apart from the normal sessions fed to the peak logic.
   - Spikes are worth reviewing individually for their effect on the building's demand charge.
   - The power estimating logic treats spikes as follows:
     - If `Energy_Use == 0`, set `avg_kw` to 0. These sessions do not contribute to `energy_based_kw` and `energy_based_kva` but they do contribute to `count_based_kw` and `count_based_kva`.

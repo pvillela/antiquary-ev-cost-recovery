@@ -7,6 +7,7 @@ use std::{
     fmt::{self, Debug},
     iter::Sum,
     ops::{Add, Div, Mul},
+    path::PathBuf,
     rc::Rc,
     time::Duration,
 };
@@ -181,7 +182,7 @@ impl Session {
     /// If `adj_conn_end` precedes `conn_start`. That is a precondition, not a defensive check: a
     /// session whose span is inverted has fields that contradict each other, is flagged
     /// [`AnomalyKind::InconsistentDuration`] on conversion, and is sorted into
-    /// [`crate::SessionReport::excluded`] — so it never reaches the estimating logic at all.
+    /// [`SessionReport::excluded`] — so it never reaches the estimating logic at all.
     ///
     /// What establishes that is check 1 of [`duration_is_consistent`], `conn_start <= conn_end`,
     /// which is there for this reason. It is not implied by the other two: a one-minute inversion
@@ -720,7 +721,7 @@ impl AnomalyKind {
 
 /// A single row that needs review. Never fatal: the conversion still writes the row, and the
 /// estimating logic still produces a figure. Used by both sides — see
-/// [`crate::ConversionReport`] and [`crate::IntervalEstimates`].
+/// [`crate::sessions::ConversionReport`] and [`crate::sessions::IntervalEstimates`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anomaly {
     /// Excel row number.
@@ -763,5 +764,83 @@ impl fmt::Display for AnomalyKind {
 impl fmt::Display for Anomaly {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "row {} ({}): {}", self.row, self.session_id, self.kind)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session reports
+// ---------------------------------------------------------------------------
+
+/// The sessions one session report describes, grouped by how the peak power contribution logic
+/// must treat them.
+///
+/// Returned by both readers — [`crate::sessions::csv::session_list`] from the CSV and
+/// [`crate::sessions::excel::session_list`] from a workbook written from it — because the grouping
+/// is a property of the sessions, not of the file they were read out of. The writing direction
+/// returns a [`crate::sessions::ConversionReport`] instead.
+#[derive(Debug)]
+pub struct SessionReport {
+    /// Sessions with a finite average power. This is what the peak power contribution logic
+    /// consumes unaltered. A session with zero `Energy_Use` belongs here — its `avg_kw` is
+    /// legitimately zero, and it still occupies a breaker.
+    pub sessions: Vec<Session>,
+    /// Sessions with zero `Active_Charge_Time`, so [`Session::charge_time`] is zero and energy
+    /// over charge time is infinite or `NaN`. Kept out of `sessions` because those values would
+    /// swamp or poison any segment they entered.
+    ///
+    /// Surfaced rather than dropped because such a row is almost certainly a **reporting fault**
+    /// and someone should see it. That is a correction: the reason given here used to be that
+    /// energy delivered in no time at all is what a demand charge bills on, which read the field
+    /// as a real measurement of charging. Evolute has since stated that the three duration fields
+    /// track the same thing to within about a second and are not measured separately, so a zero
+    /// beside a non-zero `Energy_Use` is a contradiction in the report rather than an event. See
+    /// `Questions_for_Evolute.md`, "Answers received". [`Session::avg_kw`] substitutes a finite
+    /// figure so the row can still be listed. See docs/sessions/README.md, "Other".
+    pub spikes: Vec<Session>,
+    /// Sessions flagged [`AnomalyKind::InconsistentDuration`]: their reported start, end and
+    /// duration contradict each other, so they cannot be placed on a timeline at all. Excluded
+    /// from the estimates and returned only for review. See docs/sessions/README.md, "Other".
+    pub excluded: Vec<Session>,
+    /// Where the run log was written. It always exists, and says either that nothing was found or
+    /// what was. Its contents depend on which reader produced this report — see their docs.
+    pub log_path: PathBuf,
+}
+
+impl SessionReport {
+    /// Sorts `sessions` into the three buckets.
+    ///
+    /// Kept here, and out of both readers, so that a session read from a CSV and the same session
+    /// read back from the workbook written from it cannot land in different buckets.
+    ///
+    /// The tests are applied in this order, strongest first:
+    ///
+    /// 1. Flagged [`AnomalyKind::InconsistentDuration`] — [`SessionReport::excluded`]. Such a
+    ///    session takes no part in the estimates whatever its charge time, and letting one through
+    ///    would put an inverted session in front of the segmenting logic, whose endpoints would
+    ///    then arrive out of order.
+    /// 2. Zero `Active_Charge_Time` — [`SessionReport::spikes`].
+    /// 3. Everything else — [`SessionReport::sessions`].
+    ///
+    /// Order within each bucket is the order given, which for both readers is report order.
+    pub(crate) fn new(sessions: Vec<Session>, log_path: PathBuf) -> Self {
+        let mut report = Self {
+            sessions: Vec::new(),
+            spikes: Vec::new(),
+            excluded: Vec::new(),
+            log_path,
+        };
+        for session in sessions {
+            if session
+                .anomalies
+                .contains(&AnomalyKind::InconsistentDuration)
+            {
+                report.excluded.push(session);
+            } else if session.charge_time.is_zero() {
+                report.spikes.push(session);
+            } else {
+                report.sessions.push(session);
+            }
+        }
+        report
     }
 }

@@ -29,7 +29,8 @@
 
 use ev_cost_recovery::{
     sessions::{
-        AnomalyKind, BREAKER_RATING_KW, IntervalEstimates, interval_estimates, session_csv_to_xlsx,
+        AnomalyKind, BREAKER_RATING_KW, IntervalEstimates, excel::session_csv_to_xlsx,
+        interval_estimates,
     },
     time::Interval,
 };

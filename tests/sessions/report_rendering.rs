@@ -27,7 +27,7 @@
 //! ```
 
 use ev_cost_recovery::{
-    sessions::{interval_estimates, session_csv_to_xlsx, site_load_report},
+    sessions::{excel::session_csv_to_xlsx, interval_estimates, site_load_report},
     time::Interval,
 };
 use jiff::Timestamp;

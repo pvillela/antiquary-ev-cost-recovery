@@ -25,7 +25,11 @@
 //! `ZeroActiveChargeTime` — the two travel together by arithmetic, not coincidence.
 
 use ev_cost_recovery::{
-    sessions::{AnomalyKind, interval_estimates, session_csv_to_xlsx, session_list},
+    sessions::{
+        AnomalyKind,
+        excel::{session_csv_to_xlsx, session_list},
+        interval_estimates,
+    },
     time::Interval,
 };
 use jiff::Timestamp;

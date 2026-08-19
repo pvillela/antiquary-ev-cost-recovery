@@ -143,7 +143,7 @@ different questions:
 - **`map_local`** (`sessions::ioi`) is asked *what could this wall time mean?* by a user choosing an
   interval of interest. It has nothing but the wall time, so it reports every candidate and lets the
   caller choose, or name `EST`/`EDT`.
-- **`CsvSession::resolve`** (`sessions::excel`) is asked *which offset was this session actually
+- **`CsvSession::resolve`** (`sessions::csv`) is asked *which offset was this session actually
   at?* and has evidence the other lacks: `Conn_Duration`, untruncated elapsed time. That usually
   settles it; duplication is the fallback when it does not.
 

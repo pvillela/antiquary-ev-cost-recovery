@@ -153,8 +153,9 @@ break by accident:
 - **Fixture energy figures.** A CSV fixture states `Energy_Use` and `Active_Charge_Time` as fixed
   text, so whether the average power they imply clears `BREAKER_RATING_KW` depends on
   `BREAKER_RATING_A`. Lower the breaker rating and every fixture session starts picking up an
-  `ExcessiveAvgKw` flag. This is why the timestamp tests in `src/sessions/excel.rs` filter their anomaly
-  lists through `timing_anomalies` rather than asserting on them whole. If you add a test there
+  `ExcessiveAvgKw` flag. This is why the timestamp tests in `src/sessions/csv.rs` and
+  `src/sessions/excel.rs` filter their anomaly lists through `timing_anomalies`
+  (`src/sessions/test_support.rs`) rather than asserting on them whole. If you add a test in either
   that reads a whole anomaly list, filter it the same way.
 - **Two constants read against each other.** `full_occupancy_stays_within_nameplate` does this on
   purpose: it asserts that `BREAKER_COUNT` vehicles do not exceed `XFMR_RATING_KVA`. That is a
@@ -210,7 +211,9 @@ this software makes for truncated reporting is that one value: the padding that 
 Should Evolute begin reporting seconds, the allowances become wider than the data needs — sessions
 get a padded end they no longer require, and the consistency window admits records it could now
 reject. Nothing crashes and no figure looks wrong, which is why the conversion says so out loud:
-`<stem>.convert.log` carries one line naming the count and the first three offending rows.
+the run log carries one line naming the count and the first three offending rows —
+`<stem>.convert.log` when the CSV is converted to a workbook, `<stem>.csv.read.log` when it is read
+straight to sessions. Both come from the same parse, so both say it.
 
 The fix is **not** to set `TIME_GRID_STEP` to one second. Not because one second is an illegal
 grid — it divides 15 minutes and `LEGAL_START_MINUTES` still lands on it — but because this
@@ -260,7 +263,7 @@ glossary is generated from `Display`, so there is one wording to maintain rather
 in `report.rs`.
 
 **Whether it excludes.** `InconsistentDuration` is the only kind that removes a session from the
-estimates, and it does so where the buckets are sorted in `session_list`. Everything else is
+estimates, and it does so where the buckets are sorted, in `SessionReport::new`. Everything else is
 informational: the session still counts towards every figure. If a new kind should exclude, that is
 a decision to make explicitly and to record in README's "Other" section — not something that
 follows from adding the variant.

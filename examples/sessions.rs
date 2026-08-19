@@ -1,4 +1,4 @@
-use ev_cost_recovery::sessions::{Session, session_list};
+use ev_cost_recovery::sessions::{Session, excel::session_list};
 use std::{path::PathBuf, process::ExitCode};
 
 const USAGE: &str = "\
@@ -13,7 +13,7 @@ SPIKES; those are worth reviewing for their effect on the building's demand char
 reported start, end and duration contradict each other is listed under EXCLUDED and takes no part
 in any estimate.
 
-A .read.log is written beside the workbook, listing any column whose stored value disagreed with
+A .xlsx.read.log is written beside the workbook, listing any column whose stored value disagreed with
 the recomputed one. The recomputed value is always the one used.";
 
 /// Printed above the spike listing, because the figure in that listing is the one thing about a

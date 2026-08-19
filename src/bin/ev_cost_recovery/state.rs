@@ -8,7 +8,8 @@
 use ev_cost_recovery::{
     sessions::{
         ConversionReport, HourEntry, IntervalEstimates, IoiLength, SessionReport, checked_interval,
-        hours_of, interval_estimates, session_csv_to_xlsx, session_list,
+        excel::{session_csv_to_xlsx, session_list},
+        hours_of, interval_estimates,
     },
     time::{Interval, TZ_OFFSETS, time_zone},
 };

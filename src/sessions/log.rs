@@ -1,9 +1,10 @@
 //! Plain-text run logs written beside each output file.
 //!
 //! One per operation, overwritten each run: `<stem>.convert.log` for CSV to Excel,
-//! `<stem>.read.log` for Excel back to sessions. A log always says one of two things — that
-//! everything was fine, or what was found — so an empty-looking run is distinguishable from one
-//! that was never made.
+//! `<stem>.csv.read.log` for CSV straight to sessions, and `<stem>.xlsx.read.log` for Excel back
+//! to sessions. Three suffixes because all three files share a stem, so a shared one would have
+//! each run overwrite the last. A log always says one of two things — that everything was fine, or
+//! what was found — so an empty-looking run is distinguishable from one that was never made.
 //!
 //! # Why discrepancies are not anomalies
 //!
@@ -131,8 +132,14 @@ mod test {
             Path::new("/data/Session_Report_June.convert.log")
         );
         assert_eq!(
-            log_path(Path::new("/data/Session_Report_June.xlsx"), "read"),
-            Path::new("/data/Session_Report_June.read.log")
+            log_path(Path::new("/data/Session_Report_June.xlsx"), "xlsx.read"),
+            Path::new("/data/Session_Report_June.xlsx.read.log")
+        );
+        // Beside the CSV rather than the workbook, and under its own suffix, so the three logs of
+        // one session report cannot overwrite each other.
+        assert_eq!(
+            log_path(Path::new("/data/Session_Report_June.csv"), "csv.read"),
+            Path::new("/data/Session_Report_June.csv.read.log")
         );
     }
 }
