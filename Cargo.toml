@@ -10,6 +10,11 @@ csv = "1.4.0"
 eframe = "0.36.1"
 egui_extras = { version = "0.36.1", features = ["datepicker"] }
 jiff = "0.2.35"
+# Object-level PDF access rather than a text extractor: a Toronto Hydro bill is a form whose
+# labels and values are separately positioned runs of text, so reading it needs where each run
+# sits, which plain-text extraction discards. Also carries the ToUnicode CMap decoding the bills
+# need -- their fonts are subset Identity-H, where a glyph code means nothing without it.
+lopdf = { version = "0.44.0", default-features = false }
 rfd = "0.17.2"
 # Whole-document tree rather than a streaming reader: the ESPI join needs random access, since an
 # IntervalBlock resolves to its ReadingType only through a MeterReading entry that may appear
