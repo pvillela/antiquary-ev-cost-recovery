@@ -406,7 +406,7 @@ impl CsvSession {
     /// Resolves this session's local timestamps to UTC and derives `adj_conn_end`.
     ///
     /// Returns one row normally, or two when the start falls in the DST fold and the reported end
-    /// cannot tell the two offsets apart — see docs/time/docs/time/README.md, "Time zone", for why duplication is the
+    /// cannot tell the two offsets apart — see docs/time/README.md, "Time zone", for why duplication is the
     /// policy and why the copies get distinct ids.
     ///
     /// # Not the same problem as [`crate::sessions::map_local`]
@@ -900,11 +900,11 @@ pub struct SessionReport {
     /// track the same thing to within about a second and are not measured separately, so a zero
     /// beside a non-zero `Energy_Use` is a contradiction in the report rather than an event. See
     /// `Questions_for_Evolute.md`, "Answers received". [`Session::avg_kw`] substitutes a finite
-    /// figure so the row can still be listed. See docs/sessions/docs/sessions/README.md, "Other".
+    /// figure so the row can still be listed. See docs/sessions/README.md, "Other".
     pub spikes: Vec<Session>,
     /// Sessions flagged [`AnomalyKind::InconsistentDuration`]: their reported start, end and duration
     /// contradict each other, so they cannot be placed on a timeline at all. Excluded from the
-    /// estimates and returned only for review. See docs/sessions/docs/sessions/README.md, "Other".
+    /// estimates and returned only for review. See docs/sessions/README.md, "Other".
     pub excluded: Vec<Session>,
     /// Where the run log was written. It always exists, and says either that nothing was found or
     /// which stored columns disagreed with the recomputed values.
@@ -1958,7 +1958,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
         let report = session_list(&xlsx).unwrap();
 
         // A zero-Energy_Use session with a real charge time is an ordinary session: its average
-        // power is legitimately zero and it still occupies a breaker. See docs/sessions/docs/sessions/README.md, "Other".
+        // power is legitimately zero and it still occupies a breaker. See docs/sessions/README.md, "Other".
         assert!(report.spikes.is_empty());
         assert!(report.excluded.is_empty());
         assert_eq!(report.sessions.len(), 2);

@@ -212,11 +212,17 @@ get a padded end they no longer require, and the consistency window admits recor
 reject. Nothing crashes and no figure looks wrong, which is why the conversion says so out loud:
 `<stem>.convert.log` carries one line naming the count and the first three offending rows.
 
-The fix is **not** to set `TIME_GRID_STEP` to one second. It must keep dividing `SEGMENT_DURATION`
-without remainder, and `LEGAL_START_MINUTES` must keep agreeing with it. The change to make is to
-narrow the allowances that no longer apply, which means revisiting
-`docs/sessions/time-reporting-uncertainty.md` first — its `EV_STEP` is the reporting resolution and
-its `OUR_STEP` is this constant, and the whole point of separating them is this case.
+The fix is **not** to set `TIME_GRID_STEP` to one second. Not because one second is an illegal
+grid — it divides 15 minutes and `LEGAL_START_MINUTES` still lands on it — but because this
+constant is global while the reporting resolution belongs to a report. During the changeover,
+minute-resolution and second-resolution reports are processed together, and no single global value
+is right for both; it has to stay at the coarsest resolution in scope. Once every report in scope
+reports seconds, that constraint lifts and moving the grid becomes a real option.
+
+If you do move it to one second, update `docs/sessions/README.md`, "Boundaries and the time grid".
+That section describes the padding in terms of whole minutes — a session reported to end at `16:34`
+ending somewhere in `[16:34:00, 16:35:00)` — and states the divisibility rule against 15 minutes.
+Both go stale the moment `R` changes.
 
 ## A generated workbook is not byte-reproducible
 

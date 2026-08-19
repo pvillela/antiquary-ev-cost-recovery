@@ -18,11 +18,17 @@ use std::{
 /// the document that derives everything built on this calls them `EV_STEP` and `OUR_STEP` for that
 /// reason. See `docs/sessions/time-reporting-uncertainty.md`.
 ///
-/// The distinction decides what to do if Evolute ever reports seconds. **This constant does not
-/// follow them down to 1 second**, because it must keep dividing [`SEGMENT_DURATION`] — otherwise
-/// the [`Segment`]s tiling an interval of interest no longer land on the grid, and
-/// [`LEGAL_START_MINUTES`](super::LEGAL_START_MINUTES) no longer agrees with it. Finer reporting
-/// makes the allowances below unnecessary; it does not make the grid finer.
+/// The distinction decides what to do if Evolute ever reports seconds. **Do not follow them down
+/// to 1 second while reports of both resolutions are still processed together.** This constant is
+/// global; `EV_STEP` belongs to a report. A calculation spanning a minute-resolution report and a
+/// second-resolution one has no single right value for it, so it has to sit at the coarsest
+/// resolution still in scope. Finer reporting is a reason to narrow the allowances below, not to
+/// move the grid.
+///
+/// The constraint lifts once every report in scope reports seconds. 1 second is a legal grid — it
+/// divides [`SEGMENT_DURATION`], and [`LEGAL_START_MINUTES`](super::LEGAL_START_MINUTES) still
+/// lands on it — so from then on the change is available, though it moves every figure in the
+/// golden files.
 ///
 /// Every allowance the software makes for the reporting's truncation is this one value:
 ///
@@ -33,7 +39,7 @@ use std::{
 /// `Conn_Duration` and `Active_Charge_Time` are *not* truncated; they carry seconds. That asymmetry
 /// is what makes the DST fold inference possible, and it is why the window above has a width at all.
 ///
-/// See docs/sessions/docs/sessions/README.md, "Boundaries and the time grid".
+/// See docs/sessions/README.md, "Boundaries and the time grid".
 pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
 
 /// The width of the [`Segment`]s an interval of interest is partitioned into.
@@ -131,7 +137,7 @@ pub struct Session {
     /// bound that actually contains the session.
     pub conn_end: Timestamp,
     /// `Conn_Duration` from `session report`: the physical elapsed time of the connection, which is
-    /// what makes the DST fold inference possible. See docs/time/docs/time/README.md, "Time zone".
+    /// what makes the DST fold inference possible. See docs/time/README.md, "Time zone".
     pub conn_duration: Duration,
     /// Active charge time from `session report`.
     ///
@@ -163,7 +169,7 @@ impl Session {
     ///
     /// This is the end the estimating logic uses throughout, so that
     /// `[adj_conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the
-    /// real connection. See docs/sessions/docs/sessions/README.md, "Sessions and segments".
+    /// real connection. See docs/sessions/README.md, "Sessions and segments".
     pub fn adj_conn_end(&self) -> Timestamp {
         adj_conn_end_of(self.conn_end)
     }
@@ -631,7 +637,7 @@ pub enum AnomalyKind {
     /// See `docs/sessions/time-reporting-uncertainty.md` and docs/sessions/README.md, "Other".
     InconsistentDuration,
     /// The start fell in the DST fold and both offsets reproduce the reported end,
-    /// so the record was duplicated. See docs/time/docs/time/README.md, "Time zone".
+    /// so the record was duplicated. See docs/time/README.md, "Time zone".
     DstAmbiguousDuplicated,
     /// The start fell in the DST gap, i.e. a wall time that never occurred.
     /// Resolved forward to the instant just after the gap.
@@ -653,7 +659,7 @@ pub enum AnomalyKind {
     /// UTC timestamps may be an hour early.
     ///
     /// Only fold starts are checked this way; the same inconsistency on any other date is caught,
-    /// if at all, by [`AnomalyKind::InconsistentDuration`]. See docs/time/docs/time/README.md, "Time zone".
+    /// if at all, by [`AnomalyKind::InconsistentDuration`]. See docs/time/README.md, "Time zone".
     DstUnresolvable,
     /// The session's average power exceeds [`BREAKER_RATING_KW`], which the hardware is
     /// supposed to make impossible.
