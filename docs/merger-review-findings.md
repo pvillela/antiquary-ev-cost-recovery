@@ -21,9 +21,14 @@ this document is the record and the work list.
 The dedicated `green_button` read and the baseline content diff are both complete and folded in
 (findings 11 and 12).
 
-**Phases 1 and 2 are complete.** `cargo test` is green: **144 passed, 0 failed, 1 ignored** across
-all targets. `cargo clippy --all-targets` reports two warnings, both pre-existing and both owned by
-Phase 3.
+**Phases 1, 2 and 3 are complete.** `cargo test` is green: **158 passed, 0 failed, 1 ignored**.
+`cargo clippy --all-targets` and `cargo fmt --check` are both clean — the first time either has
+been.
+
+Phase 3 held the baseline-parity gate in the shape set for it in advance: the only new columns are
+the two named, 23 of 25 shared columns are identical in all 238 rows, the other two are formula
+text whose operands were resolved and checked, and all 240 estimate reports are identical.
+`green_button` output is byte-identical.
 
 **Measured effect of the Phase 2 fix, on the real report.** Converting
 `data/Session_Report_June_1_2026-June_30_2026.csv`, 238 sessions, through three builds:
@@ -232,8 +237,9 @@ binary was renamed to `ev_cost_recovery` in `046d4ba`. The workflow fails at "St
 
 ## 4. Two definitions of `adj_conn_end`
 
-**RESOLVED — Phase 2.** One definition now, `adj_conn_end_of` in `sessions/common.rs`. The unread
-`adj_conn_end_utc` column remains; Phase 3 restores the read-back.
+**RESOLVED — Phases 2 and 3.** One definition, `adj_conn_end_of` in `sessions/common.rs`. Phase 3
+restored the read-back of `adj_conn_end_utc` as a discrepancy check, so the column is no longer
+decorative — a disagreement between it and the recomputed bound is now logged.
 
 ```
 src/sessions/common.rs:82  (method)      truncate_to_time_grid(conn_end + 1s) + TIME_GRID_STEP
@@ -296,7 +302,8 @@ decision: they are historical records.
 
 ## 8. Duplicated date/time logic
 
-**OPEN — Phase 3.**
+**RESOLVED — Phase 3.** One `src/time/excel.rs` for the serial arithmetic, one parameterised
+truncation, one `METER_INTERVAL`, `TIME_ZONE_NAME` public and `TZ_OFFSETS` moved to `time`.
 
 - **Excel serial dates, verbatim.** Same epoch constant, same value, same intent, and duplicate
   pinning tests: `green_button/common.rs:17,120,125,134,139,153` against
@@ -312,8 +319,8 @@ decision: they are historical records.
 
 ## 9. Doc comments that contradict known facts
 
-**PART DONE — Phase 2** closed the `common.rs` `charge_time` comment and the `excel.rs` `spikes`
-justification. The `TIME_GRID_STEP` doc comment is **open**, in Phase 3.
+**RESOLVED — Phases 2 and 3.** The `TIME_GRID_STEP` comment was rewritten with the move to
+`sessions`.
 
 - `src/sessions/common.rs:56` gives *"a car that stays connected without drawing power"* as a reason
   the duration fields differ. Evolute stated otherwise on **22 Jul 2026**: *"All 3 will show as
@@ -329,8 +336,7 @@ justification. The `TIME_GRID_STEP` doc comment is **open**, in Phase 3.
 
 ## 10. Smaller items
 
-**PART DONE — Phase 2** closed `TouKwh`, the zero-division guard, `truncaged` and `multiles`.
-`hydro_bills` and `SignedDuration` are **open** in Phase 3; the prompt typos in Phase 4.
+**PART DONE — Phases 2 and 3.** Only the prompt typos remain, in Phase 4.
 
 - `src/sessions/energy.rs` — `TouKkh` is a typo for `TouKwh`; division by `adj_duration()` is
   unguarded when that is zero.
@@ -696,7 +702,7 @@ time grid and so a session the software cannot produce. Every adjusted end is tr
 15-minute segment can only be covered in whole minutes and **half is not a reachable fraction**.
 Both moved to five minutes of fifteen, and the first test was renamed accordingly.
 
-## Phase 3 — Restructure
+## Phase 3 — Restructure — **DONE**
 
 ### `Row` embeds `Session`
 
@@ -876,12 +882,23 @@ the reference; merged `main` never was. Build each in a worktree — `history-gr
 sibling `history-ev-peak-contrib` worktree, its `Cargo.toml` takes it as a path dependency — and
 compare full output on the real inputs, not anomaly counts.
 
-**Established after Phase 2, and the number to hold:**
+**After Phase 2:**
 
 | Path | Baseline | Result |
 | --- | --- | --- |
 | sessions | `d4da113` | workbook sheets byte-identical; 240 estimate reports identical; `sessions` listing identical; `site_load_report` identical |
 | green_button | `af8ffea` | `gb_peak_values` stdout identical; workbook sheets byte-identical |
+
+**After Phase 3**, which changed the workbook's shape on purpose:
+
+| Check | Result |
+| --- | --- |
+| Columns added | `adj_conn_start`, `adj_conn_start_utc` — the two named in the plan, and no others |
+| Columns removed | none |
+| Shared columns, all 238 rows | **23 of 25 identical** |
+| The other two | Formula text, since both reference moved columns. Operands resolved and compared: `avg_kw` is the same two operands; `adj_conn_duration`'s new operand, `adj_conn_start_utc`, equals the old `conn_start_utc` on **every row**, so no value moved. |
+| 240 estimate reports | **identical** |
+| `gb_peak_values` stdout and workbook | **identical / byte-identical** |
 
 Compare **sheets, never files** — see finding 14.
 
@@ -899,21 +916,24 @@ After Phase 3 the workbook cannot be byte-identical to the baseline's, so the ga
 
 ## Per-phase checks
 
-1. `cargo test` passes. **Green since Phase 1**: 144 passed, 0 failed, 1 ignored.
-2. `cargo clippy --all-targets` clean — two pre-existing warnings remain, both closed by Phase 3.
-   `cargo fmt --check` clean — fails only on the 0-byte `src/hydro_bills/mod.rs`, which Phase 3
-   fills in.
+1. `cargo test` passes. **Green since Phase 1**: 158 passed, 0 failed, 1 ignored after Phase 3.
+2. `cargo clippy --all-targets` and `cargo fmt --check` **both clean after Phase 3**, the first
+   time either has been. The two standing clippy warnings and the one `fmt` failure are gone.
 3. ~~Golden files change once, in Phase 2~~ — **they did not change at all.** Neither session
    fixture carries a record the band change reclassifies, which is why the suite never caught
    finding 1 and cannot guard it. The two rewritten tests in `excel.rs` are what pin the band, and
-   they are unit tests, not goldens. See **Still unguarded** below. Goldens *will* change in
-   Phase 3, from the column reorder.
-4. `cargo run --example sessions`, `--example site_load_report`, `--example gb_trim_fixture`. First
-   two done; `gb_trim_fixture` not yet run.
+   they are unit tests, not goldens. Phase 3 added the end-to-end fixture; see **Still unguarded**.
+   Phase 3's own golden change was one glossary line — the `InconsistentDuration` description, whose
+   old text described the rule Phase 2 replaced. **No figure moved**, and the column reorder changed
+   no golden at all, the reports being built from values rather than from sheet layout.
+4. `cargo run --example sessions`, `--example site_load_report`, `--example gb_trim_fixture`. **All
+   three run.** The first and third exit 1 with no arguments because they print usage, which is
+   correct; `gb_trim_fixture` was also run against the real export and produced a trimmed feed.
 5. Convert `data/Session_Report_June_1_2026-June_30_2026.csv`, then read the workbook back. Both
    logs appear, and the read log reports no discrepancies for a workbook this crate just wrote.
-   **Phase 3** — the logs do not exist yet. The round trip itself is already exercised: all 238
-   sessions read back, none excluded.
+   **Done.** `r.convert.log` lists the 70 `ExcessiveAvgKw` rows and nothing else; `r.read.log`
+   reports **no discrepancies**, only that the two formula columns hold no stored value — which is
+   the normal state of a workbook Excel has not opened.
 6. Run `gb_peak_values` on `data/TH_Electric_Usage_23-11-2024_to_24-06-2026.XML` and reconcile
    against `docs/green_button/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx`. **Not
    done.** Parity with `af8ffea` shows the merger changed nothing, not that either is right; only
@@ -922,10 +942,16 @@ After Phase 3 the workbook cannot be byte-identical to the baseline's, so the ga
 
 ## Still unguarded
 
-**Scheduled.** `truncate_to_time_grid` has no direct test — now in Phase 3 scope, written against
-the parameterised `truncate_to` / `is_on_grid` it becomes.
+**Both done in Phase 3.**
 
-**Scheduled.** No fixture exercises the `InconsistentDuration` band end to end — now in Phase 3
-scope as `Session_Report_Band.csv`, asserted against `excluded_sessions` rather than a golden.
+- `truncate_to` and `is_on_grid` have direct tests, including the bracket the uncertainty document
+  rests on, checked over every second of ten minutes, and a pre-epoch instant — the case that makes
+  `rem_euclid` rather than `%` necessary.
+- `Session_Report_Band.csv` and `tests/sessions/consistency_band.rs` pin the band end to end,
+  against `excluded_sessions` rather than a golden.
+
+One further gap closed unplanned: the discrepancy channel is only worth having if it fires, so
+`a_stale_stored_column_is_logged_and_overruled` moves `adj_conn_end_utc` an hour forward in a
+written workbook and asserts the session does not move with it.
 
 Nothing else is knowingly unguarded.
