@@ -66,7 +66,7 @@ fn run(input: &Path, lines_only: bool) -> Result<(), Box<dyn std::error::Error>>
         };
     }
     let bill = hydro_bill_from_pdf(input).map_err(with_advice)?;
-    println!("{bill:#?}");
+    println!("{}", bill.print());
     Ok(())
 }
 

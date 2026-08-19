@@ -73,10 +73,6 @@ fn from_lines(lines: &[Line]) -> Result<HydroBill, Problem> {
     let rebate = money(value_after(lines, "Ontario Electricity Rebate")?)?;
 
     Ok(HydroBill {
-        // The bill states no period end of its own. The meter reading period is that period:
-        // it runs from the 23rd of one month to the 23rd of the next, which is the same
-        // division, and the same label, that `green_button::BillingPeriod` uses.
-        period_end_date: usage.reading_period_to,
         statement_date: date(value_after(lines, "Statement Date")?)?,
 
         on_peak_kwh: charges.on_peak_kwh,
@@ -99,11 +95,6 @@ fn from_lines(lines: &[Line]) -> Result<HydroBill, Problem> {
 
         hst,
         ontario_electricity_rebate: rebate,
-
-        // Worked out rather than read off the bill. `Amount Due` is this sum plus any balance
-        // still owed from the bill before, and there is no line stating the period's own
-        // total once a balance forward has been folded into it.
-        bill_total_amount: charges.total + hst - rebate,
 
         meter_reading_period_from: usage.reading_period_from,
         meter_reading_period_to: usage.reading_period_to,

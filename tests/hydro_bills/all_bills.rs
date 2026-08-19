@@ -75,7 +75,7 @@ fn every_bill_parses_and_its_figures_agree_with_each_other() {
         close(
             &name,
             "this period's total plus the balance forward vs. the printed Amount Due",
-            bill.bill_total_amount + printed(&lines, "Balance Forward"),
+            bill.bill_total_amount() + printed(&lines, "Balance Forward"),
             printed(&lines, "Amount Due"),
             CENT,
         );
@@ -104,10 +104,6 @@ fn every_bill_parses_and_its_figures_agree_with_each_other() {
                 .get_days(),
             i32::from(bill.number_of_days),
             "{name}: meter reading period length vs. number of days"
-        );
-        assert_eq!(
-            bill.period_end_date, bill.meter_reading_period_to,
-            "{name}: period end date"
         );
         assert!(
             bill.statement_date >= bill.meter_reading_period_to,
