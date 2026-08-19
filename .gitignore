@@ -222,3 +222,9 @@ Kanban*
 # Generated at release time by `cargo about`, embedded by build.rs, and shipped in the release
 # archive. Not committed: a copy in the tree goes stale the moment a dependency moves.
 THIRD-PARTY-NOTICES.md
+
+# Claude Code's per-machine settings, written by the tool as permissions and preferences are
+# chosen. Ignored here rather than in a global excludes file so that the container and the host
+# agree: only $HOME/.claude, .claude.json and .omp are bind-mounted in, so a host-side rule is
+# invisible inside the container. `.claude/allowed-branches` stays tracked — it is project policy.
+.claude/settings.local.json
