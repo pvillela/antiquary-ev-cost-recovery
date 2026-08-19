@@ -17,7 +17,8 @@
 //! These files are the one deliberate exception to the rule that no test may depend on the value of
 //! a freely-declared constant. They pin *rendering* — column widths, decimal places, wrapping — and
 //! no relational reformulation preserves any of that. Changing an electrical constant is therefore
-//! expected to fail exactly these tests and no others; see `docs/maintenance-manual.md`.
+//! expected to fail exactly these tests and no others; see `docs/maintenance-manual.md`,
+//! "Which constants are free, and which are derived".
 //!
 //! To regenerate after an intended change, having read the diff:
 //!

@@ -95,7 +95,8 @@ falls in off-peak, which is what a meter read taken a few minutes either side of
 would do.
 
 Output was also compared against the workbook the previous Python implementation produced, over all
-21 billing periods and every shared column: no differences. See `docs/maintenance-manual.md`.
+21 billing periods and every shared column: no differences. See `../maintenance-manual.md`,
+"The port gate — run once, recorded here, then removed".
 
 ## Building and testing
 
@@ -110,11 +111,12 @@ UPDATE_GOLDEN=1 cargo test --test fixtures_golden   # regenerate goldens, then r
 
 | | |
 |---|---|
-| `src/espi.rs` | reads the ESPI feed, following its links |
-| `src/holidays.rs`, `src/tou.rs` | the Ontario calendar and price periods |
-| `src/billing.rs`, `src/peaks.rs` | periods, expected interval counts, the four maxima |
-| `src/excel.rs` | the workbook, driven by two column tables |
-| `docs/maintenance-manual.md` | invariants, procedures, and what would force a re-check |
-| `tests/fixtures/billed_period.xlsx` | the current formatting standard — open this to see what the output should look like |
-| `docs/reference/` | the workbook this replaced, kept as provenance and never read by code |
-| `docs/archived/python/` | the previous implementation; `explore_model.py` is still current |
+| `src/green_button/espi.rs` | reads the ESPI feed, following its links |
+| `src/time/holidays.rs`, `src/time/tou.rs` | the Ontario calendar and price periods — shared with `sessions`, hence `time` |
+| `src/green_button/billing.rs`, `src/green_button/peaks.rs` | periods, expected interval counts, the four maxima |
+| `src/green_button/excel.rs` | the workbook, driven by two column tables |
+| `src/green_button/common.rs` | the domain types, and `METER_INTERVAL` |
+| `docs/maintenance-manual.md` | invariants, procedures, and what would force a re-check — one manual for the whole crate, with a Green Button part |
+| `tests/fixtures/green_button/billed_period.xlsx` | the current formatting standard — open this to see what the output should look like |
+| `docs/green_button/reference/` | the workbook this replaced, kept as provenance and never read by code |
+| `docs/green_button/archive/python/` | the previous implementation; `explore_model.py` is still current |

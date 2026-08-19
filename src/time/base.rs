@@ -9,7 +9,7 @@ use std::{sync::LazyLock, time::Duration};
 // Date/time
 // ---------------------------------------------------------------------------
 
-/// Time zone the session report's timestamps are stated in. See README.md, "Time zone".
+/// Time zone the session report's timestamps are stated in. See docs/time/docs/time/README.md, "Time zone".
 ///
 /// Public because both binaries and several doc comments name it, and a reader who finds
 /// "in local time" in a message needs somewhere to learn which zone that is.

@@ -8,7 +8,7 @@
 //! `docs/reference/Green_Button_Peak_Values-python-2026-07-16.xlsx`, but does not copy it
 //! slavishly: that workbook stamps a row height on all 13,924 of its rows because that is what
 //! LibreOffice writes, and only three of them were ever a decision. See
-//! `docs/maintenance-manual.md` §7. The current standard is `tests/fixtures/billed_period.xlsx`,
+//! `docs/maintenance-manual.md`, "Row heights: three, and only three". The current standard is `tests/fixtures/billed_period.xlsx`,
 //! regenerated with the goldens.
 //!
 //! `umya-spreadsheet` is used rather than `rust_xlsxwriter` because it stores row heights and

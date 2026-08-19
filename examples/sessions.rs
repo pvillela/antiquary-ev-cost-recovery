@@ -11,7 +11,10 @@ One line per session: id, connection start (UTC), energy use in kWh, average pow
 A session with zero Active_Charge_Time has no finite average power and is listed separately, under
 SPIKES; those are worth reviewing for their effect on the building's demand charge. A session whose
 reported start, end and duration contradict each other is listed under EXCLUDED and takes no part
-in any estimate. See README.md.";
+in any estimate.
+
+A .read.log is written beside the workbook, listing any column whose stored value disagreed with
+the recomputed one. The recomputed value is always the one used.";
 
 /// Printed above the spike listing, because the figure in that listing is the one thing about a
 /// spike that cannot be read at face value.
@@ -32,8 +35,7 @@ const SPIKE_RECAP: &str = "  These sessions report zero Active_Charge_Time, so t
 
   Worth reviewing one at a time. A real delivery of energy with a broken
   duration still moved the building's demand, and the substitute is a
-  floor on what it contributed, not an estimate of it. See README.md,
-  \"Other\".
+  floor on what it contributed, not an estimate of it.
 ";
 
 fn main() -> ExitCode {

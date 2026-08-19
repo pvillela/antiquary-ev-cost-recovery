@@ -35,7 +35,8 @@ Example:
     gb_peak_values data/TH_Electric_Usage_23-11-2024_to_24-06-2026.XML
     -> data/TH_Electric_Usage_23-11-2024_to_24-06-2026.xlsx
 
-See README.md.
+The feed must carry hourly readings for all three of kWh, kW and kVA. Anything else is an error
+naming what was missing, rather than a workbook with a hole in it.
 ";
 
 fn main() -> ExitCode {

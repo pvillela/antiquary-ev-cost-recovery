@@ -12,23 +12,24 @@ use std::{
 const USAGE: &str = "\
 Estimates the EV charging contribution to peak power demand over an interval of interest.
 
-Usage: ev_estimate_cli <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM [EST|EDT]> [15m|1h]
+Usage: ev_peak_cli <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM [EST|EDT]> [15m|1h]
 
 The interval start is given in local time (ET), because that is what Toronto Hydro's metering data
 is stated in. Length defaults to 1h when the start is on the hour and 15m otherwise.
 
-  ev_estimate_cli June.xlsx \"2026-06-01 16:00\" 1h
-  ev_estimate_cli June.xlsx \"2026-06-01 16:45\"
-  ev_estimate_cli Nov.xlsx  \"2026-11-01 01:30 EDT\" 15m
+  ev_peak_cli June.xlsx \"2026-06-01 16:00\" 1h
+  ev_peak_cli June.xlsx \"2026-06-01 16:45\"
+  ev_peak_cli Nov.xlsx  \"2026-11-01 01:30 EDT\" 15m
 
 On the night DST ends, one hour of wall time occurs twice; add EST or EDT to say which is meant.
 The designator is accepted at any time and checked against the date, so a wrong one is an error
 rather than a figure for the wrong hour. A time in the DST gap is rejected outright: it never
 occurred, so there is nothing to choose between.
 
-Per README.md the interval is constrained: it must start at HH:00, HH:15, HH:30 or HH:45, and may
-run for one hour only from HH:00. An interval breaking those rules is rejected rather than
-estimated, since the figures would be compared against a real bill.
+The interval is constrained: it must start at HH:00, HH:15, HH:30 or HH:45, and may run for one
+hour only from HH:00. A demand charge is billed on a 15-minute average, so an interval off those
+boundaries could not be compared to a bill. One breaking the rules is rejected rather than
+estimated.
 
 The report is written to stdout as markdown that also reads as plain text.";
 
@@ -177,7 +178,7 @@ mod test {
     /// The first argument is checked before the interval is, so omitting the workbook is reported as
     /// the missing workbook rather than as an unreadable timestamp.
     ///
-    /// `ev_estimate_cli "2026-06-01 16:00" 1h` is what prompted this: two arguments is a legal shape,
+    /// `ev_peak_cli "2026-06-01 16:00" 1h` is what prompted this: two arguments is a legal shape,
     /// since the length is optional, so the start was read as the path and `1h` as the start.
     #[test]
     fn a_first_argument_that_is_not_a_workbook_is_caught_before_the_interval() {

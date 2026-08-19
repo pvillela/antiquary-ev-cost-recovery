@@ -72,8 +72,8 @@ impl EstimateSet {
 pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimates, Box<dyn Error>> {
     let session_report = session_list(path)?;
     // `excluded` sessions contradict themselves and take no part in any estimate, but they are
-    // still reported: a caller judging an estimate needs to know what was left out. See README.md,
-    // "Other".
+    // still reported: a caller judging an estimate needs to know what was left out. See
+    // docs/sessions/README.md, "Other".
     let SessionReport {
         sessions,
         spikes,
@@ -84,7 +84,7 @@ pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimate
     // Spikes take part in the estimates on the same footing as any other session. A spike's raw
     // energy over charge time is infinite or NaN, either of which would swamp or poison any
     // segment it entered, and [`Session::avg_kw`] substitutes a finite figure for exactly that
-    // reason — so nothing has to be done to a spike here. See README.md, "Other".
+    // reason — so nothing has to be done to a spike here. See docs/sessions/docs/sessions/README.md, "Other".
     let rsessions: Vec<RSession> = sessions.into_iter().chain(spikes).map(Rc::new).collect();
     let segments = segments_for_ioi(ioi, &rsessions);
     let seg_estimates: Vec<(RSegment, EstimateSet)> = segments

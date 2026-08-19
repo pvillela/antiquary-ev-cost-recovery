@@ -133,14 +133,14 @@ const REQUIRED_HEADERS: &[&str] = &[
 ///
 /// The domain rules — the UTC conversion and its DST policy, the definitions of `adj_conn_end` and
 /// `adj_conn_duration`, and the treatment of zero-`Energy_Use` sessions — are specified in
-/// `README.md` under "Time zone", "Excel workbook" and "Other". They are shared with the peak power
-/// contribution logic and are not restated here.
+/// `docs/time/README.md` under "Time zone" and in `docs/sessions/README.md` under "Excel workbook"
+/// and "Other". They are shared with the peak power contribution logic and are not restated here.
 ///
 /// What this function adds on top of those rules:
 ///
-/// - Column order is given by the private `COLUMNS` table: each UTC column sits beside the local
-///   value it derives from, and `adj_conn_end`, `adj_conn_duration` and `avg_kw` are inserted
-///   as described in README.md.
+/// - Column order is given by the private `COLUMNS` table: the session report's own columns first,
+///   in the order it states them, then everything this software derives. See
+///   `docs/sessions/README.md`, "Excel workbook".
 /// - Timestamp columns are Excel date/time numbers formatted `yyyy-mm-dd hh:mm:ss ddd`, left-
 ///   justified; duration columns are Excel durations formatted `[h]:mm:ss`, which does not wrap
 ///   past 24 hours, and are centered.
@@ -406,7 +406,7 @@ impl CsvSession {
     /// Resolves this session's local timestamps to UTC and derives `adj_conn_end`.
     ///
     /// Returns one row normally, or two when the start falls in the DST fold and the reported end
-    /// cannot tell the two offsets apart — see README.md, "Time zone", for why duplication is the
+    /// cannot tell the two offsets apart — see docs/time/docs/time/README.md, "Time zone", for why duplication is the
     /// policy and why the copies get distinct ids.
     ///
     /// # Not the same problem as [`crate::sessions::map_local`]
@@ -802,19 +802,28 @@ fn sheet_name(output_path: &Path) -> String {
 fn add_comments(sheet: &mut Worksheet) {
     let notes = [
         (
+            Source::AdjConnStartLocal,
+            "Adjusted connection start: Conn_DateTime_Start rounded DOWN to the whole minute, and \
+             INCLUSIVE. The report states times only to the minute, so the true start is known \
+             only to fall somewhere in the minute named; this is the earliest instant it could \
+             have been. Together with adj_conn_end it gives the half-open span \
+             [adj_conn_start, adj_conn_end), the tightest window guaranteed to contain the whole \
+             connection.",
+        ),
+        (
             Source::AdjConnEndLocal,
-            "Adjusted connection end: Conn_DateTime_End + 60s, and EXCLUSIVE. The report's \
-             timestamps carry no seconds, so the true end is only known to fall somewhere in the \
-             reported minute; the session is recorded as the half-open span [Conn_DateTime_Start, \
-             adj_conn_end), which contains it wherever in that minute it fell. Because the end is \
-             excluded, a session starting at this exact time does NOT overlap this one. See \
-             README.md, \"Excel workbook\".",
+            "Adjusted connection end: the whole minute AFTER the one Conn_DateTime_End names, and \
+             EXCLUSIVE. The true end is known only to fall somewhere in the reported minute -- and \
+             it is not known whether that minute's last second is inside the session or outside \
+             it -- so this is the first instant the connection is certainly over. Because the end \
+             is excluded, a session starting at this exact time does NOT overlap this one.",
         ),
         (
             Source::AdjConnDuration,
-            "adj_conn_end_utc - conn_start_utc. Computed from the UTC columns so it is true \
-             elapsed time even for a session spanning the DST fold, where local arithmetic would \
-             be wrong by an hour.",
+            "adj_conn_end_utc - adj_conn_start_utc: the width of the window above, which is the \
+             span every estimate places this session on. Computed from the UTC columns so it is \
+             true elapsed time even for a session spanning the DST fold, where local arithmetic \
+             would be wrong by an hour.",
         ),
         (
             Source::AvgKw,
@@ -826,8 +835,10 @@ fn add_comments(sheet: &mut Worksheet) {
         (
             Source::Anomalies,
             "Comma-separated list of anomalies found for this row, named after the AnomalyKind \
-             variants. Empty means the row needed no judgement call. Read back by session_list, so \
-             editing this cell changes which sessions take part in the estimates. See README.md.",
+             variants. Empty means the row needed no judgement call. This cell IS read back, and \
+             InconsistentDuration is what removes a session from every estimate -- so editing it \
+             changes the figures. The adjusted columns are not read back: they are recomputed, and \
+             a disagreement is written to the .read.log rather than obeyed.",
         ),
     ];
     for (source, text) in notes {
@@ -884,11 +895,11 @@ pub struct SessionReport {
     /// track the same thing to within about a second and are not measured separately, so a zero
     /// beside a non-zero `Energy_Use` is a contradiction in the report rather than an event. See
     /// `Questions_for_Evolute.md`, "Answers received". [`Session::avg_kw`] substitutes a finite
-    /// figure so the row can still be listed. See README.md, "Other".
+    /// figure so the row can still be listed. See docs/sessions/docs/sessions/README.md, "Other".
     pub spikes: Vec<Session>,
     /// Sessions flagged [`AnomalyKind::InconsistentDuration`]: their reported start, end and duration
     /// contradict each other, so they cannot be placed on a timeline at all. Excluded from the
-    /// estimates and returned only for review. See README.md, "Other".
+    /// estimates and returned only for review. See docs/sessions/docs/sessions/README.md, "Other".
     pub excluded: Vec<Session>,
     /// Where the run log was written. It always exists, and says either that nothing was found or
     /// which stored columns disagreed with the recomputed values.
@@ -1942,7 +1953,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
         let report = session_list(&xlsx).unwrap();
 
         // A zero-Energy_Use session with a real charge time is an ordinary session: its average
-        // power is legitimately zero and it still occupies a breaker. See README.md, "Other".
+        // power is legitimately zero and it still occupies a breaker. See docs/sessions/docs/sessions/README.md, "Other".
         assert!(report.spikes.is_empty());
         assert!(report.excluded.is_empty());
         assert_eq!(report.sessions.len(), 2);

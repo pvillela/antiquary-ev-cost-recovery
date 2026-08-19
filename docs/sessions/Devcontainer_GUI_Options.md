@@ -1,6 +1,6 @@
 # Running GUI (eframe/egui) Apps in the Devcontainer
 
-Recommendations for enabling GUI examples such as `examples/google_eframe.rs` to run inside
+Recommendations for enabling GUI examples to run inside
 the devcontainer, including headless execution driven by an agent.
 
 Status: **verified working**. Every package and setting below was installed and exercised in a
@@ -161,13 +161,13 @@ With Option A (Xvfb):
 
 ```bash
 export DISPLAY=:99
-cargo run --example google_eframe
+cargo run --bin ev_cost_recovery
 ```
 
 For file dialogs to work, wrap in a DBus session (see Part 4):
 
 ```bash
-dbus-run-session -- cargo run --example google_eframe
+dbus-run-session -- cargo run --bin ev_cost_recovery
 ```
 
 Agent-style capture-and-drive loop:
@@ -215,7 +215,7 @@ This is easy to misdiagnose as an application bug.
 The packages in Part 1 fix it with no code change, provided the app runs under a DBus session:
 
 ```bash
-XDG_CURRENT_DESKTOP=GNOME dbus-run-session -- cargo run --example google_eframe
+XDG_CURRENT_DESKTOP=GNOME dbus-run-session -- cargo run --bin ev_cost_recovery
 ```
 
 Verified: the GTK file chooser opens with the `.xlsx/.xls/.xlsm` filter applied. A harmless

@@ -22,7 +22,8 @@
 //! the substitute weekday joins it. The holiday is not moved.
 //!
 //! Every date here is a rule, so the calendar needs no annual maintenance. It does assume the
-//! current schedule applies throughout: see `docs/maintenance-manual.md` for what would force a
+//! current schedule applies throughout: see `docs/maintenance-manual.md`, "The Ontario holiday calendar is not the ESA list", for what
+//! would force a
 //! re-check.
 
 use std::collections::BTreeSet;

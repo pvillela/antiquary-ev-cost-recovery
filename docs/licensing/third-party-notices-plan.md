@@ -10,7 +10,7 @@ the root, `license = "MIT OR Apache-2.0"` in `Cargo.toml`, License and
 Contribution sections in `README.md`. Nothing below revisits that.
 
 What remains is a real gap it exposed. `.github/workflows/release-build.yaml`
-ships standalone `ev_peak_gui` binaries that statically link **494 packages**,
+ships standalone `ev_cost_recovery` binaries that statically link **494 packages**,
 several with attribution obligations that survive into the executable:
 
 - ~105 crates under bare `MIT` — the notice must accompany "all copies or
@@ -151,7 +151,7 @@ change what a development build reports. `sha2` goes in `[build-dependencies]`;
 it is already in the graph transitively, so it compiles nothing new, and
 `ignore-build-dependencies` keeps it out of the notices it guards.
 
-### 4. `src/bin/ev_peak_gui/about.rs` (new) — the About modal
+### 4. `src/bin/ev_cost_recovery/about.rs` (new) — the About modal
 
 - `const NOTICES: &str = include_str!(concat!(env!("OUT_DIR"), "/third-party-notices.md"));`
   Reaching through `OUT_DIR` is what allows the source file to be absent.
@@ -165,7 +165,7 @@ Display it as plain monospace text, not rendered Markdown — rendering would me
 adding `egui_commonmark`, and the file's value here is legal completeness rather
 than typography. It stays `.md` so it reads well in the archive and on GitHub.
 
-### 5. `src/bin/ev_peak_gui/app.rs` + `main.rs` — wire it up
+### 5. `src/bin/ev_cost_recovery/app.rs` + `main.rs` — wire it up
 
 - `mod about;` in `main.rs` alongside the existing module list.
 - `App` gains `about_open: bool` (derives `Default`, so no constructor change).
@@ -206,7 +206,7 @@ directory on both. This also removes the current asymmetry, where the tarball
 exists only to carry the executable bit:
 
 - Linux: `mkdir -p dist`, copy the binary and the three text files in, then
-  `tar -czf ev_peak_gui-${{ matrix.target }}.tar.gz -C dist .`
+  `tar -czf ev_cost_recovery-${{ matrix.target }}.tar.gz -C dist .`
 - Windows: same staging in pwsh, then `upload-artifact` with `path: dist/*`.
 
 `upload-artifact@v4` roots the archive at the least common ancestor of its
@@ -214,7 +214,7 @@ inputs. Staging is what keeps that root at `dist/`; passing the `target/...` exe
 path and a root-level `LICENSE-MIT` together would nest everything under
 `target/x86_64-pc-windows-msvc/release/`.
 
-Both archives end up with `ev_peak_gui[.exe]`, `LICENSE-MIT`, `LICENSE-APACHE`,
+Both archives end up with `ev_cost_recovery[.exe]`, `LICENSE-MIT`, `LICENSE-APACHE`,
 `THIRD-PARTY-NOTICES.md`.
 
 ### 7. `README.md`
@@ -246,7 +246,7 @@ the repository, so a link would be broken on GitHub.
 3. Staleness: append a line to `about.toml` and build release → fails with "they
    are older than the dependency graph". Revert and it builds again. This is the
    case that a CI-only guard cannot catch.
-4. Run `target/release/ev_peak_gui` under `scripts/run-gui.sh`: click About,
+4. Run `target/release/ev_cost_recovery` under `scripts/run-gui.sh`: click About,
    confirm the window opens, the text scrolls, the version line is right, and
    that both Close and Escape dismiss it. Confirm the tabs still switch after.
 5. `cargo test` — no library code is touched.

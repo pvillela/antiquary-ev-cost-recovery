@@ -3,7 +3,7 @@
 //! The library core stays permissive on purpose: [`interval_estimates`](crate::interval_estimates)
 //! is happy with any interval, and exploratory callers and tests rely on that. What must not happen
 //! is a *bill* being argued from an off-spec window, so every front-end that produces a quotable
-//! figure comes through [`checked_interval`]. See README.md, "Interval of interest boundaries".
+//! figure comes through [`checked_interval`]. See docs/sessions/docs/sessions/README.md, "Interval of interest boundaries".
 //!
 //! The command line and the GUI ask the same questions in different orders — the one parses text
 //! and reports what is wrong with it, the other offers only choices that are right — so what is
@@ -19,7 +19,7 @@ use jiff::{
     tz::{Offset, TimeZone},
 };
 
-/// The four legal start minutes. See README.md, "Interval of interest boundaries".
+/// The four legal start minutes. See docs/sessions/docs/sessions/README.md, "Interval of interest boundaries".
 pub const LEGAL_START_MINUTES: [i8; 4] = [0, 15, 30, 45];
 
 /// The two lengths an interval of interest may have.
@@ -209,15 +209,17 @@ pub fn checked_interval(
     if !LEGAL_START_MINUTES.contains(&start.minute()) {
         return Err(format!(
             "interval start {start} is not on a 15-minute boundary; it must be HH:00, HH:15, \
-             HH:30 or HH:45. See README.md, \"Interval of interest boundaries\"."
+             HH:30 or HH:45. The peak a demand charge bills is a 15-minute average, so an \
+             interval that does not line up with those boundaries cannot be compared to a bill."
         ));
     }
 
     let length = length.unwrap_or_else(|| IoiLength::default_for(start.minute()));
     if !length.allowed_from(start.minute()) {
         return Err(format!(
-            "an interval of 1 hour must start at HH:00, but {start} starts at :{:02}. See \
-             README.md, \"Interval of interest boundaries\".",
+            "an interval of 1 hour must start at HH:00, but {start} starts at :{:02}. An hour \
+             is reported as the highest of the four 15-minute segments inside it, and those \
+             segments have to line up with the quarter hours a demand charge is billed on.",
             start.minute()
         ));
     }

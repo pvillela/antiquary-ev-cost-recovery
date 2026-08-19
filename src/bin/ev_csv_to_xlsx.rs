@@ -10,7 +10,10 @@ Each workbook is written beside its input with the extension replaced. Rows need
 call — an ambiguous DST fold, a wall time in the DST gap, a session with no charge time, one whose
 reported duration runs past its reported end — are reported on stderr and recorded in the
 workbook's Anomalies column; they do not stop the conversion. Row numbers are workbook rows, so a
-record duplicated to resolve a DST fold is reported twice, once per copy. See README.md.";
+record duplicated to resolve a DST fold is reported twice, once per copy.
+
+A .convert.log is written beside the workbook. It lists the same findings, or says there were
+none.";
 
 fn main() -> ExitCode {
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();

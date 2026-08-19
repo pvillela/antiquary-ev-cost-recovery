@@ -33,7 +33,7 @@ use std::{
 /// `Conn_Duration` and `Active_Charge_Time` are *not* truncated; they carry seconds. That asymmetry
 /// is what makes the DST fold inference possible, and it is why the window above has a width at all.
 ///
-/// See README.md, "Boundaries and the time grid".
+/// See docs/sessions/docs/sessions/README.md, "Boundaries and the time grid".
 pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
 
 /// The width of the [`Segment`]s an interval of interest is partitioned into.
@@ -131,7 +131,7 @@ pub struct Session {
     /// bound that actually contains the session.
     pub conn_end: Timestamp,
     /// `Conn_Duration` from `session report`: the physical elapsed time of the connection, which is
-    /// what makes the DST fold inference possible. See README.md, "Time zone".
+    /// what makes the DST fold inference possible. See docs/time/docs/time/README.md, "Time zone".
     pub conn_duration: Duration,
     /// Active charge time from `session report`.
     ///
@@ -163,7 +163,7 @@ impl Session {
     ///
     /// This is the end the estimating logic uses throughout, so that
     /// `[adj_conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the
-    /// real connection. See README.md, "Sessions and segments".
+    /// real connection. See docs/sessions/docs/sessions/README.md, "Sessions and segments".
     pub fn adj_conn_end(&self) -> Timestamp {
         adj_conn_end_of(self.conn_end)
     }
@@ -628,10 +628,10 @@ pub enum AnomalyKind {
     /// record's own fields disagree by more than the reporting can explain, neither its duration
     /// nor the span the estimating logic would place it on can be relied on.
     ///
-    /// See `docs/sessions/time-reporting-uncertainty.md` and README.md, "Other".
+    /// See `docs/sessions/time-reporting-uncertainty.md` and docs/sessions/README.md, "Other".
     InconsistentDuration,
     /// The start fell in the DST fold and both offsets reproduce the reported end,
-    /// so the record was duplicated. See README.md, "Time zone".
+    /// so the record was duplicated. See docs/time/docs/time/README.md, "Time zone".
     DstAmbiguousDuplicated,
     /// The start fell in the DST gap, i.e. a wall time that never occurred.
     /// Resolved forward to the instant just after the gap.
@@ -653,7 +653,7 @@ pub enum AnomalyKind {
     /// UTC timestamps may be an hour early.
     ///
     /// Only fold starts are checked this way; the same inconsistency on any other date is caught,
-    /// if at all, by [`AnomalyKind::InconsistentDuration`]. See README.md, "Time zone".
+    /// if at all, by [`AnomalyKind::InconsistentDuration`]. See docs/time/docs/time/README.md, "Time zone".
     DstUnresolvable,
     /// The session's average power exceeds [`BREAKER_RATING_KW`], which the hardware is
     /// supposed to make impossible.
@@ -664,7 +664,7 @@ pub enum AnomalyKind {
     ///
     /// It matters because the count-based figures are an aggregate session count times a single
     /// rating, so a session drawing more than that rating breaks the assumption they rest on — see
-    /// README.md, "Assumptions". A reader ordinarily finds the energy-based figures at or below the
+    /// docs/sessions/README.md, "Assumptions". A reader ordinarily finds the energy-based figures at or below the
     /// count-based ones, and that ordering inverts exactly when a segment's `agg_kw` exceeds its
     /// `agg_count` times the rating.
     ///

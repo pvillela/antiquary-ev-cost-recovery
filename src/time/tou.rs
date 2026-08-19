@@ -26,7 +26,8 @@
 //! Note also what these periods are *not*. Toronto Hydro's `Peak kW 7-7` demand window is a
 //! distribution-charge measurement window, not a pricing period; it happens to be exactly the
 //! complement of the weekday off-peak block, which is why [`is_off_peak`] can serve both. See
-//! `docs/maintenance-manual.md` for what would drive them apart.
+//! `docs/maintenance-manual.md`, "What would force a re-check of the TOU rules", for what would
+//! drive them apart.
 
 use super::{holidays, local_date, local_hour, local_midnight};
 use crate::time::Interval;

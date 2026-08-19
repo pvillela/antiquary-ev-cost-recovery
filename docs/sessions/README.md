@@ -8,7 +8,9 @@ For a given billing period, we can identify the time intervals in which the peak
 
 Given a time interval of interest, this software estimates the peak kW and kVA demand associated with EV charging activity during the interval. The data source for EV power demand is the Evolute monthly session report.
 
-**Interval of interest boundaries** are constrained as follows:
+### Interval of interest boundaries
+
+They are constrained as follows:
 
 - The left and right end-points are always of the form HH:00:00 or HH:15:00 or HH:30:00 or HH:45:00.
 - The difference between the right end-point and the left end-point can be either:
@@ -34,7 +36,7 @@ The same work is available two ways: a desktop app covering the whole workflow, 
 
 ### Desktop app
 
-`ev_peak_gui` is a single self-contained binary — no installer, no runtime to put on the machine first. It opens on a choice of the two jobs, and neither is entered until it is asked for:
+`ev_cost_recovery` is a single self-contained binary — no installer, no runtime to put on the machine first. It opens on a choice of the two jobs, and neither is entered until it is asked for:
 
 - **Convert** — pick an Evolute session report CSV; the workbook is written beside it, and the rows that needed a judgement call are listed. Converting over an existing workbook asks first.
 - **Estimate** — pick a workbook, choose the interval of interest, read the figures. The report is shown in full, and can be copied or saved.
@@ -43,23 +45,23 @@ The interval is chosen from controls rather than typed, and they offer only inte
 
 The two DST transitions appear where they matter and nowhere else. On the night the clocks go forward, the skipped hour is simply absent from the hour list. On the night they go back, choosing the repeated hour asks which of the two is meant, and Estimate stays disabled until that is answered.
 
-**Running it.** On Windows, double-click `ev_peak_gui.exe`. It is not code-signed, so the first run shows SmartScreen's "Windows protected your PC" — choose *More info* then *Run anyway*; later runs are silent. On Linux, mark it executable once (`chmod +x ev_peak_gui`) and run it.
+**Running it.** On Windows, double-click `ev_cost_recovery.exe`. It is not code-signed, so the first run shows SmartScreen's "Windows protected your PC" — choose *More info* then *Run anyway*; later runs are silent. On Linux, mark it executable once (`chmod +x ev_cost_recovery`) and run it.
 
 ### Command line
 
 | Command                                                      | Purpose                                                      |
 | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | `ev_csv_to_xlsx <SESSION_REPORT.csv>...`                     | Converts a session report to a workbook, computing the derived columns and flagging rows that need review. Takes several files at once; the app takes one. |
-| `ev_estimate_cli <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM [EST\|EDT]> [15m\|1h]` | Prints the peak estimate report for one interval of interest. |
+| `ev_peak_cli <SESSION_REPORT.xlsx> <YYYY-MM-DD HH:MM [EST\|EDT]> [15m\|1h]` | Prints the peak estimate report for one interval of interest. |
 
-`ev_estimate_cli` takes the interval start in **local time (ET)**. The length defaults to `1h` when the start is on the hour and `15m` otherwise. An interval breaking the boundary rules described earlier is rejected rather than estimated.
+`ev_peak_cli` takes the interval start in **local time (ET)**. The length defaults to `1h` when the start is on the hour and `15m` otherwise. An interval breaking the boundary rules described earlier is rejected rather than estimated.
 
 The two DST transitions are treated differently, because they are different problems.
 
-- On the night DST **ends**, an hour of wall time occurs twice. That is a question the caller can answer, so `ev_estimate_cli` asks it: a bare `"2026-11-01 01:30"` is refused, and `"2026-11-01 01:30 EST"` or `"... EDT"` resolves it. The designator is accepted on any date and **checked against it** — `"2026-06-01 16:00 EST"` is an error, not a silently ignored hint — so naming the wrong one cannot produce a figure for the wrong hour.
+- On the night DST **ends**, an hour of wall time occurs twice. That is a question the caller can answer, so `ev_peak_cli` asks it: a bare `"2026-11-01 01:30"` is refused, and `"2026-11-01 01:30 EST"` or `"... EDT"` resolves it. The designator is accepted on any date and **checked against it** — `"2026-06-01 16:00 EST"` is an error, not a silently ignored hint — so naming the wrong one cannot produce a figure for the wrong hour.
 - On the night DST **begins**, an hour of wall time never happens. There is nothing to choose between, so such a start is refused outright and no designator helps.
 
-These rules live in one place, `src/interval.rs`, and both front-ends come through it, so the app and the command line cannot disagree about what interval a bill may be argued from.
+These rules live in one place, `src/sessions/ioi.rs`, and both front-ends come through it, so the app and the command line cannot disagree about what interval a bill may be argued from.
 
 ## Excel workbook
 
@@ -135,66 +137,9 @@ In such cases, the EV charging infrastructure still impacts the overall building
 
 ### Time zone
 
-- The session report's timestamps are stated in local time, i.e., ET. We need to convert them to UTC.
-  The time zone is `America/Toronto`.
-- The conversion to UTC is straightforward for almost every point in time, except for the repeated hour on the day that DST ends (move from EDT 02:00 to EST 01:00). 
-  - Based on the `Conn_DateTime_Start`, `Conn_DateTime_End`, and `Conn_Duration` fields in the Evolute session report, the corresponding UTC values can be inferred, except for sessions with duration of less than 1 hour that fall between the ambiguous 01:00:00-01:59:59 interval.
-  - For the above-mentioned short sessions in the ambiguous interval, we need to make an assumption. For now, our policy will be to duplicate those session records, with one copy in the 01:00:00-01:59:59 EDT interval and the other copy in the 01:00:00-01:59:59 EST interval. This should be recorded in the CSV to Excel transformation function's result.
-
-#### The inference, in detail
-
-**The assumption it rests on.** `Conn_Duration` is *physical elapsed time*, so it spans the true
-start and the true end of the connection. This is what makes the inference possible. Were
-`Conn_Duration` instead a naive subtraction of local clock values, a session spanning the fold would
-under-report by exactly the repeated hour, and the reported end could not distinguish the two
-candidate offsets from each other.
-
-Note the assumption holds of the *true* instants, not of the reported ones. Because the report
-truncates start and end to whole minutes, `conn_start_utc + Conn_Duration` does not land on
-`conn_end_utc` — it misses by strictly less than one `TIME_GRID_STEP`, in either
-direction, on a perfectly sound record.
-Every test below is stated as a tolerance for that reason, and the exact size of the discrepancy is
-derived in step 2.
-
-**The procedure**, applied to `Conn_DateTime_Start`:
-
-1. If the local time maps to exactly one instant, use it. This is every timestamp except during the
-   two transitions each year.
-2. If it falls in the **fold** — the repeated 01:00:00-01:59:59 hour — there are two candidate
-   instants, one at the EDT offset (UTC-4) and one at the EST offset (UTC-5). Take each candidate
-   in turn, add `Conn_Duration`, convert back to local time, and check whether the result matches
-   the reported `Conn_DateTime_End`. **A candidate matches when the two are less than 60 seconds
-   apart**, not when they are equal. Both reported timestamps are truncated to the whole minute
-   while `Conn_Duration` carries seconds, so for a consistent record `Conn_start + Conn_Duration`
-   lands within a minute of the reported end *on either side*: writing the true start as
-   `S + α` and the true end as `E + β` with `α, β ∈ [0, 60)`, the implied end is `E + (β − α)`.
-   Demanding equal minutes therefore rejects every record with `β < α` — roughly half of them, and
-   116 of the 238 rows in this project's `data` directory. The tolerance cannot blur the two
-   candidates together: they lie a full hour apart.
-
-   The comparison is made on *local wall time*, which is what lets both candidates match a session
-   short enough to fit inside the repeated hour — the very ambiguity being tested for. It must also
-   stay two-sided: a one-sided test would accept a candidate landing an hour *early* and duplicate a
-   session that is not ambiguous at all.
-   - *Exactly one candidate matches* — that offset is the session's; the ambiguity is resolved.
-   - *Both candidates match* — the reported end cannot discriminate, so the record is duplicated
-     per the policy above. This is precisely the "duration of less than 1 hour" case: both
-     candidates agree exactly when the session is short enough to end inside the repeated hour.
-     Note it is *derived* from the test rather than applied as a hardcoded 1-hour threshold.
-   - *Neither candidate matches* — the record is internally inconsistent. The earlier (EDT) offset
-     is assumed and the row is reported.
-3. If it falls in the **gap** — the 02:00:00-02:59:59 hour skipped when DST begins, a wall time that
-   never occurred — the instant is resolved forward to just after the gap, and the row is reported.
-   Such a timestamp indicates a fault upstream; it is surfaced rather than silently accepted.
-
-`Conn_DateTime_End` is resolved the same way, except that a fold is settled by taking whichever
-candidate is nearer to `conn_start_utc + Conn_Duration`, which is by then already known.
-
-**Duplicated records** are given distinct ids — `<id>-EDT` and `<id>-EST` — because the peak power
-contribution logic keys `Session` on its id alone and holds sessions in a `BTreeSet`. With identical
-ids the second copy would be silently discarded on insertion, defeating the purpose of duplicating
-it. Note also that **both copies carry the full `Energy_Use`**, so a duplicated session contributes
-to the peak in both candidate hours.
+Moved to [`docs/time/README.md`](../time/README.md). The zone, the DST fold and the inference that
+resolves it are used by both modules, so they are documented with the shared `time` module rather
+than here.
 
 ### Boundaries and the time grid
 
@@ -209,7 +154,7 @@ The padding is a full `R` rather than one tick less for the same reason. A sessi
 The two formulas above — a per-EV kW rating and a division by a power factor — are a fair
 description of the *shape* of the estimates, and a defensible approximation of their values. They
 are not what the software computes. Both figures come out of a small electrical model of the site,
-described in [Power Factor and kVA Allocation — Level 2 EV Chargers on a 75 kVA, 600–208 V Transformer](docs/ev-charger-power-factor-and-kva-allocation.md), and implemented in `src/site_load.rs`. It is worth knowing where the model and the shorthand part company.
+described in [Power Factor and kVA Allocation — Level 2 EV Chargers on a 75 kVA, 600–208 V Transformer](ev-charger-power-factor-and-kva-allocation.md), and implemented in `src/sessions/site_load.rs`. It is worth knowing where the model and the shorthand part company.
 
 **The per-EV kW figure is an average, not a constant.** A charging station is current-limited rather than
 power-limited: the pilot signal caps it at 32 A, so it draws about 6.59 kW whatever else is
@@ -235,10 +180,10 @@ At one vehicle the site power factor is about 0.94; by five it is 0.98, and it p
 above that. With no vehicle charging at all it is far lower still, because the standing block is
 then the whole of the load.
 
-**Where the model is written down.** The above-mentioned [electrotechnical document](docs/ev-charger-power-factor-and-kva-allocation.md) derives
+**Where the model is written down.** The above-mentioned [electrotechnical document](ev-charger-power-factor-and-kva-allocation.md) derives
 every constant and every formula, and tabulates the result for each vehicle count from 0 to 10;
 `cargo run --example site_load_report` prints that same table from the code, and
-`tests/fixtures/site_load.report.txt` pins it. `docs/Evolute-Simultaneous_Charging.pdf` is
+`tests/fixtures/sessions/site_load.report.txt` pins it. `docs/Evolute-Simultaneous_Charging.pdf` is
 Evolute's own description of how the installation behaves when several vehicles charge at once.
 
 ### Assumptions
