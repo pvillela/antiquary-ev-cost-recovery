@@ -15,7 +15,8 @@
 //! read as one sequence of lines rather than page by page.
 
 use std::error::Error;
-use std::path::Path;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 use jiff::civil::Date;
 
@@ -100,17 +101,25 @@ impl HydroBill {
     ///
     /// # Errors
     ///
-    /// Returns an error naming what was missing or unreadable. A charge line the parser does not
-    /// recognise is an error rather than a figure quietly left out of the totals: these numbers
-    /// get reconciled against metered consumption, and a charge that silently reads as zero is
-    /// worse than no answer.
-    pub fn from_pdf(path: &Path) -> Result<HydroBill, Box<dyn Error>> {
-        let lines: Vec<Line> = pdf_text::read_pages(path)?.into_iter().flatten().collect();
-        HydroBill::from_lines(&lines).map_err(|e| format!("{}: {e}", path.display()).into())
+    /// Returns a [`BillError`] naming the file and what went wrong with it. The variants separate
+    /// the two failures that call for different things: the file never gave up its text, or it
+    /// did and the bill is not laid out the way this reads one. [`BillError::is_layout`] asks that
+    /// question directly.
+    ///
+    /// A charge line the parser does not recognise is one of the errors, rather than a figure
+    /// quietly left out of the totals: these numbers get reconciled against metered consumption,
+    /// and a charge that silently reads as zero is worse than no answer.
+    pub fn from_pdf(path: &Path) -> Result<HydroBill, BillError> {
+        let pages = pdf_text::read_pages(path).map_err(|source| BillError::Unreadable {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let lines: Vec<Line> = pages.into_iter().flatten().collect();
+        HydroBill::from_lines(&lines).map_err(|problem| problem.at(path))
     }
 
     /// The parse proper, over the lines of the whole document in reading order.
-    fn from_lines(lines: &[Line]) -> Result<HydroBill, Box<dyn Error>> {
+    fn from_lines(lines: &[Line]) -> Result<HydroBill, Problem> {
         let usage = Usage::read(lines)?;
         let charges = Charges::read(lines)?;
         let hst = money(value_after_prefix(lines, "H.S.T.")?)?;
@@ -168,6 +177,141 @@ impl HydroBill {
     }
 }
 
+/// Why a bill PDF did not read into a [`HydroBill`].
+///
+/// The variants are apart because they ask different things of whoever hit them.
+/// [`BillError::Unreadable`] is about the file: the wrong one was named, or the download is
+/// damaged. Every other variant means the file read perfectly well and the bill is not laid out
+/// the way the bills this was written against are -- something to look at with
+/// `hydro_bill_dump --lines`, and most likely something to change here. [`BillError::is_layout`]
+/// is that distinction as a single question.
+///
+/// Every variant names the file, so an error printed on its own says which bill it came from.
+#[derive(Debug)]
+pub enum BillError {
+    /// The document's text could not be read at all: the file is missing, is not a PDF, or its
+    /// fonts carry no `ToUnicode` CMap to decode their glyph codes with. Nothing about the bill
+    /// was reached, so this says nothing either way about whether the bill is one this
+    /// understands.
+    Unreadable {
+        path: PathBuf,
+        source: Box<dyn Error>,
+    },
+
+    /// A section or figure that every bill carries was not on the page. `what` names it as a noun
+    /// phrase: `line labelled "Your Electricity Charges"`.
+    Missing { path: PathBuf, what: String },
+
+    /// The section is on the page, but not in the shape it is read in -- a table row of the wrong
+    /// width, or a total printed above the charges it totals.
+    Shape { path: PathBuf, what: String },
+
+    /// A charge line turned up that there is no rule for, given whole in `line`.
+    UnknownCharge { path: PathBuf, line: String },
+
+    /// Text that should be a number or a date is neither. `what` is what it should have been:
+    /// `a number`, `a date`, `a month name`.
+    Malformed {
+        path: PathBuf,
+        what: String,
+        text: String,
+    },
+}
+
+impl BillError {
+    /// The bill this came from.
+    pub fn path(&self) -> &Path {
+        match self {
+            BillError::Unreadable { path, .. }
+            | BillError::Missing { path, .. }
+            | BillError::Shape { path, .. }
+            | BillError::UnknownCharge { path, .. }
+            | BillError::Malformed { path, .. } => path,
+        }
+    }
+
+    /// Whether the bill's layout is what failed, as opposed to the file itself.
+    ///
+    /// True is the actionable case: the PDF gave up its text, so the text is there to look at, and
+    /// what it says is not what this expects. False means there is no text to look at and the
+    /// thing to check is the file.
+    pub fn is_layout(&self) -> bool {
+        !matches!(self, BillError::Unreadable { .. })
+    }
+}
+
+impl fmt::Display for BillError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            // `pdf_text::read_pages` already names the file, and often the page as well.
+            BillError::Unreadable { source, .. } => write!(f, "{source}"),
+            BillError::Missing { path, what } => {
+                write!(f, "{}: the bill has no {what}", path.display())
+            }
+            BillError::Shape { path, what } => write!(f, "{}: {what}", path.display()),
+            BillError::UnknownCharge { path, line } => {
+                write!(f, "{}: unrecognised charge line: {line}", path.display())
+            }
+            BillError::Malformed { path, what, text } => {
+                write!(f, "{}: not {what}: {text:?}", path.display())
+            }
+        }
+    }
+}
+
+impl Error for BillError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            BillError::Unreadable { source, .. } => Some(source.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+/// A [`BillError`] before it knows which file it came from.
+///
+/// The parse works over lines rather than over a file, and so has no path to name. `from_pdf`
+/// attaches one on the way out. Keeping the two types apart is what stops the parse from having to
+/// thread a `&Path` through every helper for the sake of an error that is usually not raised.
+#[derive(Debug)]
+enum Problem {
+    Missing(String),
+    Shape(String),
+    UnknownCharge(String),
+    Malformed { what: String, text: String },
+}
+
+impl Problem {
+    fn at(self, path: &Path) -> BillError {
+        let path = path.to_path_buf();
+        match self {
+            Problem::Missing(what) => BillError::Missing { path, what },
+            Problem::Shape(what) => BillError::Shape { path, what },
+            Problem::UnknownCharge(line) => BillError::UnknownCharge { path, line },
+            Problem::Malformed { what, text } => BillError::Malformed { path, what, text },
+        }
+    }
+}
+
+/// Something every bill carries was not found. `what` is a noun phrase: the message reads
+/// "the bill has no {what}".
+fn missing(what: impl Into<String>) -> Problem {
+    Problem::Missing(what.into())
+}
+
+/// It was found, but not in the shape it is read in. `what` is a whole sentence.
+fn shape(what: impl Into<String>) -> Problem {
+    Problem::Shape(what.into())
+}
+
+/// `text` is not the `what` it should be: the message reads "not {what}: {text:?}".
+fn malformed(what: &str, text: &str) -> Problem {
+    Problem::Malformed {
+        what: what.to_owned(),
+        text: text.trim().to_owned(),
+    }
+}
+
 /// Which charge a rate line belongs to.
 ///
 /// Four of the charges print their amount on the line below their name, alongside the rate it was
@@ -200,7 +344,7 @@ struct Charges {
 }
 
 impl Charges {
-    fn read(lines: &[Line]) -> Result<Charges, Box<dyn Error>> {
+    fn read(lines: &[Line]) -> Result<Charges, Problem> {
         let rows: Vec<Vec<&Fragment>> = lines
             .iter()
             .map(|line| line.left_of(CHARGE_COLUMN_RIGHT))
@@ -209,11 +353,14 @@ impl Charges {
         let start = row_labelled(&rows, "Your Electricity Charges")?;
         let end = row_labelled(&rows, "Your Total Electricity Charges")?;
         if end <= start {
-            return Err("the total comes before the charges it totals".into());
+            return Err(shape("the total comes before the charges it totals"));
         }
 
         let mut charges = Charges {
-            total: money(amount(&rows[end]).ok_or("no total electricity charges amount")?)?,
+            total: money(
+                amount(&rows[end])
+                    .ok_or_else(|| missing("amount on the total electricity charges line"))?,
+            )?,
             ..Charges::default()
         };
         let mut rate_line_for: Option<RateLineFor> = None;
@@ -275,7 +422,10 @@ impl Charges {
                 // charge is a flat one. Time-of-Use lines write `@ $`, so they cannot land here.
                 _ if label.starts_with("at $") || label.contains(" at $") => {
                     let target = rate_line_for.take().ok_or_else(|| {
-                        format!("rate line with no charge above it: {}", row_text(row))
+                        shape(format!(
+                            "rate line with no charge above it: {}",
+                            row_text(row)
+                        ))
                     })?;
                     let value = money(amount.ok_or_else(|| missing_amount(row))?)?;
                     match target {
@@ -289,7 +439,7 @@ impl Charges {
                 }
                 // Rules and other decoration. A line with no figure on it cannot be a charge.
                 _ if amount.is_none() => {}
-                _ => return Err(format!("unrecognised charge line: {}", row_text(row)).into()),
+                _ => return Err(Problem::UnknownCharge(row_text(row))),
             }
         }
         Ok(charges)
@@ -314,7 +464,7 @@ struct Usage {
 }
 
 impl Usage {
-    fn read(lines: &[Line]) -> Result<Usage, Box<dyn Error>> {
+    fn read(lines: &[Line]) -> Result<Usage, Problem> {
         let meter = lines
             .iter()
             .find(|line| {
@@ -322,17 +472,16 @@ impl Usage {
                     .iter()
                     .any(|f| reading_period(&f.text).is_some())
             })
-            .ok_or("no meter reading period on any page")?;
+            .ok_or_else(|| missing("meter reading period on any page"))?;
         // Meter Number, Meter Reading Period, Number of Days, Unit Self-Contained Number, kWh
         // Used, Loss Factor Adjustment, Adjusted kWh Used. The meter number and the unit count
         // are read past: the struct carries neither.
         let [_, period, days, _, used, loss_factor, adjusted] = meter.fragments.as_slice() else {
-            return Err(format!(
+            return Err(shape(format!(
                 "meter reading row has {} values, expected 7: {}",
                 meter.fragments.len(),
                 meter.text()
-            )
-            .into());
+            )));
         };
         let (from, to) = reading_period(&period.text).expect("just matched");
 
@@ -342,13 +491,13 @@ impl Usage {
         let header = lines
             .iter()
             .position(|line| line.fragments.iter().any(|f| f.text.trim() == "Peak kW"))
-            .ok_or("no demand table heading")?;
+            .ok_or_else(|| missing("demand table heading"))?;
         let demand = lines[header..]
             .iter()
             .find(|line| {
                 line.fragments.len() == 7 && line.fragments.iter().all(|f| money(&f.text).is_ok())
             })
-            .ok_or("no row of demand figures below the demand table heading")?;
+            .ok_or_else(|| missing("row of demand figures below the demand table heading"))?;
         let [
             peak_kw,
             adj_peak_kw,
@@ -369,7 +518,7 @@ impl Usage {
                 .text
                 .trim()
                 .parse()
-                .map_err(|_| format!("number of days is not a whole number: {}", days.text))?,
+                .map_err(|_| malformed("a whole number of days", &days.text))?,
             kwh_used: money(&used.text)?,
             loss_factor_adjustment: money(&loss_factor.text)?,
             adjusted_kwh_used: money(&adjusted.text)?,
@@ -385,10 +534,10 @@ impl Usage {
 }
 
 /// The index of the row whose leftmost text is `label`.
-fn row_labelled(rows: &[Vec<&Fragment>], label: &str) -> Result<usize, Box<dyn Error>> {
+fn row_labelled(rows: &[Vec<&Fragment>], label: &str) -> Result<usize, Problem> {
     rows.iter()
         .position(|row| row[0].text.trim() == label)
-        .ok_or_else(|| format!("no line labelled {label:?}").into())
+        .ok_or_else(|| missing(format!("line labelled {label:?}")))
 }
 
 /// The rightmost text on a row, when the row holds more than the label alone.
@@ -396,8 +545,8 @@ fn amount<'a>(row: &[&'a Fragment]) -> Option<&'a str> {
     (row.len() >= 2).then(|| row[row.len() - 1].text.trim())
 }
 
-fn missing_amount(row: &[&Fragment]) -> String {
-    format!("no amount on charge line: {}", row_text(row))
+fn missing_amount(row: &[&Fragment]) -> Problem {
+    missing(format!("amount on charge line: {}", row_text(row)))
 }
 
 fn row_text(row: &[&Fragment]) -> String {
@@ -408,7 +557,7 @@ fn row_text(row: &[&Fragment]) -> String {
 }
 
 /// The text immediately to the right of the run reading exactly `label`.
-fn value_after<'a>(lines: &'a [Line], label: &str) -> Result<&'a str, Box<dyn Error>> {
+fn value_after<'a>(lines: &'a [Line], label: &str) -> Result<&'a str, Problem> {
     value_matching(lines, label, |text| text == label)
 }
 
@@ -416,7 +565,7 @@ fn value_after<'a>(lines: &'a [Line], label: &str) -> Result<&'a str, Box<dyn Er
 ///
 /// The H.S.T. line carries the registration number inside the label, so it cannot be matched whole
 /// without pinning the parse to one account.
-fn value_after_prefix<'a>(lines: &'a [Line], prefix: &str) -> Result<&'a str, Box<dyn Error>> {
+fn value_after_prefix<'a>(lines: &'a [Line], prefix: &str) -> Result<&'a str, Problem> {
     value_matching(lines, prefix, |text| text.starts_with(prefix))
 }
 
@@ -424,37 +573,39 @@ fn value_matching<'a>(
     lines: &'a [Line],
     what: &str,
     matches: impl Fn(&str) -> bool,
-) -> Result<&'a str, Box<dyn Error>> {
+) -> Result<&'a str, Problem> {
     lines
         .iter()
         .find_map(|line| {
             let at = line.fragments.iter().position(|f| matches(f.text.trim()))?;
             Some(line.fragments.get(at + 1)?.text.trim())
         })
-        .ok_or_else(|| format!("no value beside {what:?}").into())
+        .ok_or_else(|| missing(format!("value beside {what:?}")))
 }
 
 /// A number as the bill writes it: thousands separated by commas, sometimes led by a dollar sign.
-fn money(text: &str) -> Result<f64, Box<dyn Error>> {
+fn money(text: &str) -> Result<f64, Problem> {
     let text = text.trim();
     text.trim_start_matches('$')
         .replace(',', "")
         .parse()
-        .map_err(|_| format!("not a number: {text:?}").into())
+        .map_err(|_| malformed("a number", text))
 }
 
 /// `Jan 28 2026`, or `JUN 23 2025` as the usage table writes it.
-fn date(text: &str) -> Result<Date, Box<dyn Error>> {
+fn date(text: &str) -> Result<Date, Problem> {
     let [month, day, year] = text.split_whitespace().collect::<Vec<_>>()[..] else {
-        return Err(format!("not a date: {text:?}").into());
+        return Err(malformed("a date", text));
     };
     let month = MONTHS
         .iter()
         .position(|m| m.eq_ignore_ascii_case(month))
-        .ok_or_else(|| format!("not a month name: {month:?}"))?;
-    let day: i8 = day.parse().map_err(|_| format!("not a day: {day:?}"))?;
-    let year: i16 = year.parse().map_err(|_| format!("not a year: {year:?}"))?;
-    Ok(Date::new(year, month as i8 + 1, day)?)
+        .ok_or_else(|| malformed("a month name", month))?;
+    let day: i8 = day.parse().map_err(|_| malformed("a day", day))?;
+    let year: i16 = year.parse().map_err(|_| malformed("a year", year))?;
+    // A day that does not exist in that month lands here -- `FEB 30 2025` reads as a date in every
+    // part and is still not one.
+    Date::new(year, month as i8 + 1, day).map_err(|_| malformed("a date", text))
 }
 
 /// The two dates of a `JUN 23 2025 TO JUL 23 2025` meter reading period.
@@ -500,5 +651,71 @@ mod test {
         assert!(reading_period("Meter Reading Period").is_none());
         assert!(reading_period("40004253").is_none());
         assert!(reading_period("").is_none());
+    }
+
+    #[test]
+    fn a_day_that_month_does_not_have_is_not_a_date() {
+        assert!(date("FEB 30 2025").is_err());
+        assert_eq!(date("FEB 29 2024").unwrap(), civil_date(2024, 2, 29));
+    }
+
+    /// Every error the parse can raise names the bill it came from, and reads as a sentence about
+    /// that bill rather than as a fragment needing the caller to prefix it.
+    #[test]
+    fn a_problem_becomes_an_error_naming_the_bill() {
+        let path = Path::new("data/hydro_bills/TH_2025_07_28.pdf");
+        for (problem, message) in [
+            (
+                missing("line labelled \"Your Electricity Charges\""),
+                "data/hydro_bills/TH_2025_07_28.pdf: the bill has no line labelled \
+                 \"Your Electricity Charges\"",
+            ),
+            (
+                shape("the total comes before the charges it totals"),
+                "data/hydro_bills/TH_2025_07_28.pdf: the total comes before the charges it totals",
+            ),
+            (
+                Problem::UnknownCharge("Rate Rider for Deferral $12.34".to_owned()),
+                "data/hydro_bills/TH_2025_07_28.pdf: unrecognised charge line: \
+                 Rate Rider for Deferral $12.34",
+            ),
+            (
+                malformed("a number", " CR "),
+                "data/hydro_bills/TH_2025_07_28.pdf: not a number: \"CR\"",
+            ),
+        ] {
+            let error = problem.at(path);
+            assert_eq!(error.to_string(), message);
+            assert_eq!(error.path(), path);
+        }
+    }
+
+    /// The question the caller actually asks: is there text to go and look at?
+    #[test]
+    fn everything_but_an_unreadable_file_is_a_layout_failure() {
+        let path = Path::new("bill.pdf");
+        assert!(missing("statement date").at(path).is_layout());
+        assert!(malformed("a date", "Smarch").at(path).is_layout());
+        assert!(
+            !BillError::Unreadable {
+                path: path.to_path_buf(),
+                source: "bill.pdf: not a PDF".into(),
+            }
+            .is_layout()
+        );
+    }
+
+    /// `pdf_text::read_pages` names the file itself, so the wrapper must not name it twice.
+    #[test]
+    fn an_unreadable_file_is_reported_as_the_reader_reported_it() {
+        let error = BillError::Unreadable {
+            path: PathBuf::from("bill.pdf"),
+            source: "bill.pdf: page 2: font /F1: no ToUnicode CMap".into(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "bill.pdf: page 2: font /F1: no ToUnicode CMap"
+        );
+        assert!(error.source().is_some());
     }
 }

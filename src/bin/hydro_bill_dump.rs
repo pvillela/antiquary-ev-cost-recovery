@@ -1,7 +1,8 @@
 //! Reads a Toronto Hydro bill PDF and debug-prints the parsed [`HydroBill`].
 
-use ev_cost_recovery::hydro_bills::hydro_bill::HydroBill;
+use ev_cost_recovery::hydro_bills::hydro_bill::{BillError, HydroBill};
 use ev_cost_recovery::hydro_bills::pdf_text;
+use std::io;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -55,19 +56,64 @@ fn main() -> ExitCode {
 
 fn run(input: &Path, lines_only: bool) -> Result<(), Box<dyn std::error::Error>> {
     if lines_only {
-        for (number, page) in pdf_text::read_pages(input)?.iter().enumerate() {
-            println!("===== page {} =====", number + 1);
-            for line in page {
-                let runs: Vec<String> = line
-                    .fragments
-                    .iter()
-                    .map(|f| format!("{:.0}:{}", f.x, f.text.trim()))
-                    .collect();
-                println!("[y={:7.1}] {}", line.y, runs.join("  |  "));
-            }
-        }
-        return Ok(());
+        let pages = pdf_text::read_pages(input)?;
+        return match pdf_text::write_pages(&pages, &mut io::stdout().lock()) {
+            // Whatever stdout is connected to can stop reading before the output ends, and the
+            // write then fails. That is its choice to make, not a fault, so this still succeeds.
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+            result => Ok(result?),
+        };
     }
-    println!("{:#?}", HydroBill::from_pdf(input)?);
+    let bill = HydroBill::from_pdf(input).map_err(with_advice)?;
+    println!("{bill:#?}");
     Ok(())
+}
+
+/// A parse failure, with what to do about it where there is something to do.
+///
+/// [`BillError::is_layout`] is the one distinction that changes the advice. A layout failure means
+/// the PDF gave up its text and the text is not what this expects, so there is something to go and
+/// look at. Anything else means there is no text to look at, and pointing at `--lines` would only
+/// send the reader somewhere that fails the same way.
+fn with_advice(e: BillError) -> String {
+    if !e.is_layout() {
+        return e.to_string();
+    }
+    format!(
+        "{e}\n\
+         This is not a bill layout this recognises. To see what the layout actually is:\n\
+         \x20   hydro_bill_dump --lines {}",
+        e.path().display()
+    )
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_layout_failure_is_told_where_to_look() {
+        let advice = with_advice(BillError::Missing {
+            path: PathBuf::from("data/hydro_bills/TH_2025_07_28.pdf"),
+            what: "line labelled \"Your Electricity Charges\"".to_owned(),
+        });
+        assert!(
+            advice
+                .starts_with("data/hydro_bills/TH_2025_07_28.pdf: the bill has no line labelled ")
+        );
+        assert!(advice.ends_with("hydro_bill_dump --lines data/hydro_bills/TH_2025_07_28.pdf"));
+    }
+
+    #[test]
+    fn a_file_that_never_read_is_not_sent_to_lines() {
+        let advice = with_advice(BillError::Unreadable {
+            path: PathBuf::from("README.md"),
+            source: "README.md: couldn't parse input: invalid file header".into(),
+        });
+        assert_eq!(
+            advice,
+            "README.md: couldn't parse input: invalid file header"
+        );
+    }
 }

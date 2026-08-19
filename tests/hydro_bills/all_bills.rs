@@ -43,10 +43,8 @@ fn every_bill_parses_and_its_figures_agree_with_each_other() {
 
     for path in &paths {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        let bill = match HydroBill::from_pdf(path) {
-            Ok(bill) => bill,
-            Err(e) => panic!("{name}: {e}"),
-        };
+        // The error names the bill itself, so it needs no prefix here.
+        let bill = HydroBill::from_pdf(path).unwrap_or_else(|e| panic!("{e}"));
         println!("{name}: {bill:?}");
 
         let charges = bill.on_peak_cost

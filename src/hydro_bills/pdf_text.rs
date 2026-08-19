@@ -20,6 +20,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
+use std::io::{self, Write};
 use std::path::Path;
 
 use lopdf::content::Operation;
@@ -72,6 +73,36 @@ impl Line {
     pub fn left_of(&self, x: f64) -> Vec<&Fragment> {
         self.fragments.iter().filter(|f| f.x < x).collect()
     }
+}
+
+/// Writes what [`read_pages`] found, page by page, with the position of every run.
+///
+/// This is what a reader falls back on when a parse fails. A parser over these pages finds its
+/// figures by the words beside them and by where on the page they sit, so a failure means the
+/// words or the positions are not what it expected -- and neither is visible in the PDF or in
+/// plain-text extraction. Rendering the coordinates alongside the text is what makes the
+/// difference something a person can see.
+///
+/// One line per baseline, its `y` first and then its runs as `x:text`:
+///
+/// ```text
+/// ===== page 1 =====
+/// [y=  883.0] 45:Statement Date  |  120:Jul 28 2025
+/// [y=  520.1] 45:Distribution Charges  |  327:$1,761.07
+/// ```
+pub fn write_pages(pages: &[Vec<Line>], out: &mut impl Write) -> io::Result<()> {
+    for (number, page) in pages.iter().enumerate() {
+        writeln!(out, "===== page {} =====", number + 1)?;
+        for line in page {
+            let runs: Vec<String> = line
+                .fragments
+                .iter()
+                .map(|f| format!("{:.0}:{}", f.x, f.text.trim()))
+                .collect();
+            writeln!(out, "[y={:7.1}] {}", line.y, runs.join("  |  "))?;
+        }
+    }
+    Ok(())
 }
 
 /// Reads a PDF and returns its lines, page by page, each page ordered top to bottom.
@@ -496,6 +527,26 @@ mod test {
         let kept = lines[0].left_of(360.0);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].text, "Transmission Connection Charge");
+    }
+
+    #[test]
+    fn a_dump_carries_the_position_of_every_run_beside_its_text() {
+        let pages = vec![
+            into_lines(vec![
+                at(45.0, 883.0, "Statement Date"),
+                at(120.4, 882.5, " Jul 28 2025 "),
+            ]),
+            into_lines(vec![at(64.0, 500.0, "Customer Charges")]),
+        ];
+        let mut out = Vec::new();
+        write_pages(&pages, &mut out).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "===== page 1 =====\n\
+             [y=  883.0] 45:Statement Date  |  120:Jul 28 2025\n\
+             ===== page 2 =====\n\
+             [y=  500.0] 64:Customer Charges\n"
+        );
     }
 
     /// The shape Toronto Hydro's generator writes, cut down to four glyphs. Note `/CMapName` and
