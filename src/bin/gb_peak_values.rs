@@ -2,13 +2,18 @@
 
 use ev_cost_recovery::{
     green_button::{Feed, parse, write_workbook},
+    hydro_bills::{BILL_END_DAY, BILL_START_DAY},
     time::holidays,
     time::local_date,
 };
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "\
+/// The help text. A function rather than a `const` because it states the billing period boundary,
+/// which is [`BILL_END_DAY`] rather than anything this file should be repeating.
+fn usage() -> String {
+    format!(
+        "\
 gb_peak_values -- billing-period peak values from a Green Button export.
 
 Reads a Toronto Hydro Green Button (ESPI) XML export and writes an Excel workbook beside it with
@@ -16,8 +21,8 @@ two sheets. Peak_values carries one row per billing period: the energy used, the
 kW and kVA over the whole period and within the 7-7 demand window, when each of those occurred, and
 the Time-of-Use period it fell in. Interval_values carries every hour of the export.
 
-A billing period runs from the start of the 24th of one month to the end of the 23rd of the next,
-in Toronto local time, and is labelled by that 23rd.
+A billing period runs from the start of day {BILL_START_DAY} of one month to the end of day {BILL_END_DAY} of the next, in
+Toronto local time, and is labelled by that closing date.
 
 The output file is named after the input, with an .xlsx extension, and is written to the same
 directory. An existing file is never overwritten: move or delete it first. That is deliberate --
@@ -37,17 +42,19 @@ Example:
 
 The feed must carry hourly readings for all three of kWh, kW and kVA. Anything else is an error
 naming what was missing, rather than a workbook with a hole in it.
-";
+"
+    )
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        print!("{USAGE}");
+        print!("{}", usage());
         return ExitCode::SUCCESS;
     }
     let [input] = args.as_slice() else {
-        eprint!("{USAGE}");
+        eprint!("{}", usage());
         return ExitCode::FAILURE;
     };
 

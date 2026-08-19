@@ -1,22 +1,27 @@
 //! Billing periods, and how many hours one is supposed to contain.
 //!
-//! A Toronto Hydro billing period runs from the start of the 24th of one month to the end of the
-//! 23rd of the next, in **local** time, and is labelled by that 23rd. The June 2026 invoice states
-//! its period as `MAY 23 2026 TO JUN 23 2026` over `31` days, which is the same span read from the
+//! A Toronto Hydro billing period runs from the start of the day after
+//! [`BILL_END_DAY`] of one month to the end of [`BILL_END_DAY`] of the next, in **local** time,
+//! and is labelled by that closing date. The June 2026 invoice states its period as
+//! `MAY 23 2026 TO JUN 23 2026` over `31` days, which is the same span read from the
 //! meter-reading instants rather than the calendar days.
+//!
+//! Which day that is belongs to the bill, not to the meter data, so it is [`BILL_END_DAY`] in
+//! `hydro_bills` and this cuts the readings to match.
 
 use crate::green_button::METER_INTERVAL;
+use crate::hydro_bills::{BILL_END_DAY, BILL_START_DAY};
 use crate::time::{local_date, local_midnight};
 use jiff::{Timestamp, civil::Date, civil::date};
 
 /// One billing period, as an instant range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BillingPeriod {
-    /// The 23rd the period is labelled by.
+    /// The closing date the period is labelled by, always [`BILL_END_DAY`] of its month.
     pub ending: Date,
-    /// Local midnight starting the 24th of the previous month.
+    /// Local midnight starting [`BILL_START_DAY`] of the previous month.
     pub start: Timestamp,
-    /// Local midnight starting the 24th of this month; exclusive.
+    /// Local midnight starting [`BILL_START_DAY`] of this month; exclusive.
     pub end: Timestamp,
 }
 
@@ -26,22 +31,22 @@ impl BillingPeriod {
         Self::ending_on(period_ending(local_date(at)))
     }
 
-    /// The period labelled by a given 23rd.
+    /// The period labelled by a given closing date.
     ///
     /// # Panics
     ///
-    /// Panics if `ending` is not the 23rd of a month.
+    /// Panics if `ending` is not [`BILL_END_DAY`] of a month.
     pub fn ending_on(ending: Date) -> Self {
         assert_eq!(
             ending.day(),
-            23,
-            "a billing period is labelled by the 23rd it ends on"
+            BILL_END_DAY,
+            "a billing period is labelled by day {BILL_END_DAY} of the month it ends in"
         );
         let (py, pm) = previous_month(ending.year(), ending.month());
         Self {
             ending,
-            start: local_midnight(date(py, pm, 24)),
-            end: local_midnight(date(ending.year(), ending.month(), 24)),
+            start: local_midnight(date(py, pm, BILL_START_DAY)),
+            end: local_midnight(date(ending.year(), ending.month(), BILL_START_DAY)),
         }
     }
 
@@ -61,14 +66,14 @@ impl BillingPeriod {
     }
 }
 
-/// The 23rd that labels the period a local date falls in. On or after the 24th, the date belongs
-/// to the period ending next month.
+/// The closing date that labels the period a local date falls in. Past [`BILL_END_DAY`], the date
+/// belongs to the period ending next month.
 fn period_ending(d: Date) -> Date {
-    if d.day() >= 24 {
+    if d.day() > BILL_END_DAY {
         let (y, m) = next_month(d.year(), d.month());
-        date(y, m, 23)
+        date(y, m, BILL_END_DAY)
     } else {
-        date(d.year(), d.month(), 23)
+        date(d.year(), d.month(), BILL_END_DAY)
     }
 }
 

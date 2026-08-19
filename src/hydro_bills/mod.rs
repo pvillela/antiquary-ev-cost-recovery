@@ -20,6 +20,9 @@
 mod bill_pdf;
 pub use bill_pdf::*;
 
+mod common;
+pub use common::*;
+
 mod hydro_bill;
 pub use hydro_bill::*;
 
