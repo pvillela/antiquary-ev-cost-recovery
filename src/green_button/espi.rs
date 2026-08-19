@@ -208,10 +208,24 @@ pub fn parse(xml: &str) -> Result<Feed, Box<dyn Error>> {
         }
     }
 
+    // An absent series and a present-but-empty one are the same fault to a reader, and are
+    // reported the same way. The empty case is the one that used to slip through: a feed carrying
+    // the full link chain and no `IntervalReading` at all satisfied every check here, and produced
+    // a workbook with headings and no rows, exit 0. Nothing said the export was empty.
     let mut take = |uom: &str, name: &str| -> Result<Series, Box<dyn Error>> {
-        series.remove(uom).map(|(s, _)| s).ok_or_else(|| {
-            format!("the feed carries no {name} series (uom {uom}); all three are required").into()
-        })
+        match series.remove(uom) {
+            None => Err(format!(
+                "the feed carries no {name} series (uom {uom}); all three are required"
+            )
+            .into()),
+            Some((s, _)) if s.values.is_empty() => Err(format!(
+                "the feed's {name} series (uom {uom}) carries no readings. The link chain is \
+                 intact, so this is an export with nothing in it rather than one this tool cannot \
+                 follow — check the date range the download was made for"
+            )
+            .into()),
+            Some((s, _)) => Ok(s),
+        }
     };
     Ok(Feed {
         kwh: take(UOM_KWH, "kWh")?,
@@ -583,6 +597,38 @@ mod test {
                 .values()
                 .any(|a| a.contains(&Anomaly::ImplausibleGap)),
             "an ordinary outage was rejected as implausible"
+        );
+    }
+
+    /// A feed with an intact link chain and no readings in it is an error, not an empty workbook.
+    ///
+    /// This is the one failure here that was silent. Every check passed, `readings` returned no
+    /// rows, `period_values` returned no periods, and the tool wrote a workbook with headings and
+    /// nothing under them and exited 0. A download made for the wrong date range looks exactly
+    /// like this.
+    #[test]
+    fn a_feed_with_no_readings_at_all_is_rejected() {
+        // The fixture with every `IntervalReading` element removed, leaving the blocks and the
+        // links that reach them.
+        let xml = feed_xml("3600", "3600");
+        let mut stripped = String::new();
+        let mut rest = xml.as_str();
+        while let Some(i) = rest.find("<espi:IntervalReading>") {
+            stripped.push_str(&rest[..i]);
+            let j = rest.find("</espi:IntervalReading>").unwrap() + "</espi:IntervalReading>".len();
+            rest = &rest[j..];
+        }
+        stripped.push_str(rest);
+        assert!(
+            !stripped.contains("IntervalReading"),
+            "the fixture still has readings"
+        );
+
+        let err = parse(&stripped).unwrap_err().to_string();
+        assert!(err.contains("carries no readings"), "{err}");
+        assert!(
+            err.contains("kWh"),
+            "the error should name the series: {err}"
         );
     }
 

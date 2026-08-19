@@ -502,8 +502,11 @@ These are pre-existing, found by the dedicated read.
 - **`date(y, m, 23)` panics** (`billing.rs:67-74`) for a reading at the extreme of the timestamp
   range. Only reachable from a corrupt feed, but it is a panic where everything else returns an
   error.
-- **An empty-but-valid feed produces a silent empty workbook** and exit 0 (`espi.rs:176-186`,
-  `gb_peak_values.rs:114-121`). Nothing tells the user the export was empty.
+- ~~**An empty-but-valid feed produces a silent empty workbook**~~ — **FIXED.** `take` now rejects a
+  present-but-empty series as well as an absent one, naming the series and pointing at the date
+  range the download was made for. Verified silent beforehand: a feed with the full link chain and
+  no `IntervalReading` parsed clean, gave 0 readings and 0 billing periods, and would have written
+  headings with nothing under them at exit 0.
 
 **Coverage gaps**
 
@@ -890,10 +893,9 @@ consecutive rows exactly one hour.** So:
 - The non-hourly `ReadingType` rejection, the untrimmed element text and the `billing.rs` panic all
   need an export unlike any yet seen, and all fail loudly rather than producing a wrong number.
 
-One caveat on the empty-feed item: it is about **this** workflow rather than a foreign feed. A feed
-whose `IntervalBlock`s carry no readings passes every check and yields an empty workbook with exit
-0. A truncated download is more likely to fail parsing outright, so this is a narrow case — but it
-is the one deferred item that does not depend on the input coming from somewhere new.
+The empty-feed item was **not** deferred with the rest, because it was the one that did not depend
+on the input coming from somewhere new: a download made for the wrong date range is this workflow,
+not a foreign feed. It is fixed above.
 
 ---
 
