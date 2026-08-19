@@ -82,15 +82,14 @@ fn the_billed_period_reproduces_the_invoice() {
         );
     }
 
-    // The energy total does not agree exactly, and is not expected to. The invoice reads 11.16 kWh
-    // higher out of 77,292 -- 0.014%. At roughly 104 kWh an hour a period-boundary error would
-    // show as a ~104 kWh gap, so this is a meter read taken a few minutes off local midnight, not
-    // a boundary that is wrong. See the TOU check below, where the whole difference lands in
-    // off-peak, which is what a reading either side of midnight would do.
+    // The energy total agrees to the milli-kWh, and that is the point of the check. It did not
+    // while the period boundary was at prevailing local midnight: the invoice then read 11.16 kWh
+    // higher, which was the 00:00 EDT hour of the closing day falling into the next period. On a
+    // standard-time boundary that hour lands where the meter puts it and the totals coincide.
+    // `docs/hydro_bills/dst-energy-anomaly.md` has the derivation over all 19 invoices.
     let printed_kwh = number(&invoice, "kwh_used");
-    let gap = printed_kwh - kwh;
     assert!(
-        (0.0..20.0).contains(&gap),
+        (kwh - printed_kwh).abs() < 0.001,
         "kWh: generated {kwh}, invoice {printed_kwh}"
     );
 }
@@ -126,12 +125,13 @@ fn the_tou_buckets_reproduce_the_invoice() {
     }
 
     let divisor = feed.kwh.divisor();
+    // All three are exact now. Off-peak used to need a tolerance of 12 kWh, and it was the only
+    // one that did -- the boundary error moved a midnight hour, and midnight is off-peak. That it
+    // was confined there was the clue that the boundary rather than the TOU rules was wrong.
     let cases = [
         (Tou::OnPeak, "tou_on_peak_kwh", 0.001),
         (Tou::MidPeak, "tou_mid_peak_kwh", 0.001),
-        // The whole meter-read discrepancy lands here, since both period boundaries are midnight
-        // and midnight is off-peak. Tolerance covers it; the other two are exact.
-        (Tou::OffPeak, "tou_off_peak_kwh", 12.0),
+        (Tou::OffPeak, "tou_off_peak_kwh", 0.001),
     ];
     for (tou, key, tolerance) in cases {
         let generated = buckets[&tou] as f64 / divisor;

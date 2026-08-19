@@ -1,5 +1,11 @@
 # Green Button against the bills
 
+> **These figures predate a fix.** The energy differences reported here were a period-boundary
+> error, traced in [`dst-energy-anomaly.md`](dst-energy-anomaly.md) and since corrected:
+> `green_button` now cuts periods on standard time and reproduces all 19 invoices to the milli-kWh.
+> The workbook compared here was generated before that change. The demand figures are unaffected and
+> were correct throughout.
+
 What the Green Button meter export says a billing period held, beside what Toronto Hydro invoiced
 for that same period. Every demand figure agrees. The energy totals differ slightly, and the
 differences have a shape.
@@ -111,19 +117,21 @@ follows the direction the clocks moved: short in the spring-forward periods, lon
 fall-back one. The three non-DST periods with the next largest gaps sit at 38.5, 29.6 and 13.6 kWh,
 so these stand out at roughly two to three times the ordinary noise.
 
-This is a pattern, not yet a diagnosis. It is consistent with the export and the utility's meter
-read disagreeing by one interval about where a DST-affected period begins or ends, but it does not
-say which of the two is right, and 671 and 745 are the correct hour counts for those periods —
-`green_button` already computes them that way. Worth an investigation of its own before anything is
-concluded.
+[`dst-energy-anomaly.md`](dst-energy-anomaly.md) resolves this. The period boundary was at
+prevailing local midnight where the meter's is at 00:00 EST, so from March to November the export's
+period was an hour out. The hour counts 671 and 745 were part of the symptom rather than a fact
+about the calendar: the invoices for those periods state 28 and 31 days, meaning 672 and 744 hours.
 
 ### The ordinary differences
 
-Away from the clock changes the gaps are small and both-signed, which is what a meter read taken a
-few minutes either side of local midnight looks like. `docs/green_button/README.md` records the
-check that supports this for 2026-06-23: on-peak and mid-peak energy reproduce that invoice to the
-milli-kWh once the loss factor is divided out, and the entire −11.16 kWh difference falls in
-off-peak — the hours straddling the period boundary.
+They have the same cause. Away from the clock changes the boundary is shifted at *both* ends, so the
+hour count survives and only the difference between two midnight hours shows — a few kWh either way,
+small enough to pass for meter-read noise. It is not noise: every one of these gaps is accounted for
+to the milli-kWh by the two 00:00 hours the shift swaps.
+
+The check `docs/green_button/README.md` recorded for 2026-06-23 pointed at this all along. On-peak
+and mid-peak energy reproduced that invoice exactly while the whole −11.16 kWh difference fell in
+off-peak — which is where a misplaced midnight hour has to land, off-peak running 19:00–07:00.
 
 ## Reproducing this
 

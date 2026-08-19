@@ -1,5 +1,10 @@
 # The DST energy anomaly, resolved
 
+> **Status: fixed.** `green_button` now cuts billing periods on standard time, and the export
+> reproduces every invoice. This document is the investigation that established the rule, and the
+> figures in it describe the behaviour *before* the change. The tables below are what the code used
+> to produce, kept because they are the evidence the change rests on.
+
 [`green-button-vs-bills.md`](green-button-vs-bills.md) flagged three billing periods whose energy
 total missed the invoice by roughly one hour of consumption, all three at a clock change. This is
 what causes them.
@@ -104,38 +109,37 @@ This is why the day-23 reconciliation shows a perfect demand record beside an im
 record. The boundary error lands entirely in an off-peak midnight hour, which changes a monthly
 energy sum and can never change a peak.
 
-## Two corrections this forces
+## Corroboration from the feed itself
 
-**1. The explanation in `docs/green_button/README.md` is superseded.** It records, for 2026-06-23,
-that the −11.16 kWh difference "is not a period-boundary error" and is what "a meter read taken a
-few minutes either side of local midnight would do". It is a period-boundary error, and it is not
-minutes but exactly one hour: the 11.160 kWh is precisely 104.280 − 93.120, the two midnight hours
-the shift swaps.
+The rule was not fitted to 19 points alone. The Green Button feed already keeps a standard-time day:
+its `IntervalBlock`s all start at 05:00 UTC, year-round, so a mid-June block begins at 01:00 EDT
+rather than at local midnight. `green_button/Toronto_Hydro_Object_Model.md` recorded this before any
+of this investigation, under "Fixed daily grid (no DST re-anchoring)", and calls it "a permanent
+midnight-EST day boundary".
 
-The supporting observation in that README stands and in fact corroborates this. It notes the whole
-discrepancy falls in off-peak — which is what a misplaced 00:00 hour would do, off-peak being
-19:00–07:00.
+The utility's own data structure and its billing period agree. It was `green_button` that was
+imposing a prevailing-local reading on both.
 
-**2. `green-button-vs-bills.md` needs its "ordinary differences" section rewritten.** It repeats the
-meter-read explanation and calls the clock-change periods an open question.
+Toronto Hydro's PowerLens portal presents the data the same way.
 
-## Whether to change the code
+## What was changed
 
-Not a decision to take from this document alone, but the options are:
+- `src/time/base.rs` gained `standard_date`, `standard_midnight` and `BILLING_OFFSET` — a clock at a
+  fixed offset, with no daylight-saving rule. `local_date`, `local_hour` and `local_midnight` are
+  untouched and still serve everything stated in prevailing time.
+- `src/green_button/billing.rs` cuts `BillingPeriod` on the new clock.
+- `docs/green_button/README.md`, `docs/time/README.md` and `docs/maintenance-manual.md` state the
+  two-clock rule and what depends on which.
 
-- **Change the boundary to EST-fixed.** Energy then reconciles exactly, and the demand figures are
-  provably unchanged. Against it: `BillingPeriod` is currently expressed in local civil time, which
-  reads naturally and is what the invoice's wording suggests; a fixed offset would need explaining.
-- **Leave it and document the offset.** The demand charge is what this project exists to
-  apportion, and it is already right. The energy error is 0.008% overall.
+The golden fixtures moved, and every one of them moved onto its invoice: `billed_period` to
+77,292.718 kWh, `civic_holiday` to 74,301.358, `dst_fall` to 58,993.438 over 744 hours, `dst_spring`
+to 61,188.358 over 672. The invoice test's tolerances were tightened accordingly — the energy total
+and all three Time-of-Use buckets are now checked to the milli-kWh, where off-peak previously needed
+12 kWh of slack.
 
-Worth confirming first that EST-fixed is Toronto Hydro's actual practice rather than a rule fitted
-to 19 points. Interval meters commonly run on standard time year-round, so it is plausible on its
-face, but 19 periods from one meter is the whole of the evidence here.
+## Reproducing the investigation
 
-## Reproducing
-
-Scripts used are in this session's scratchpad, not the repository. The method is short enough to
-restate: read `Interval_values` from the workbook, key each reading by its UTC timestamp, and sum
-over `[start, end)` where the bounds are the 24th of each month at 00:00 **UTC−5**, rather than at
-local midnight. Compare against `hydro_bill_dump` output for the matching bill.
+The method is short enough to restate: read `Interval_values` from the workbook, key each reading by
+its UTC timestamp, and sum over `[start, end)` where the bounds are the 24th of each month at 00:00
+**UTC−5**, rather than at local midnight. Compare against `hydro_bill_dump` output for the matching
+bill. The scripts themselves were scratch and are not kept.

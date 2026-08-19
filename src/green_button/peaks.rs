@@ -265,15 +265,19 @@ mod test {
         assert_eq!(peak.companion, None);
     }
 
-    /// Readings either side of local midnight on the 24th land in different periods.
+    /// Readings either side of standard-time midnight on the 24th land in different periods.
+    ///
+    /// June, so the clocks are forward and that boundary reads 01:00 on a wall clock. The four
+    /// readings run 22:00, 23:00, 00:00 and 01:00 EDT, and the split falls before the last of
+    /// them, not before the third: the midnight hour still belongs to the period that is closing.
     #[test]
     fn readings_are_grouped_by_billing_period() {
         let start = local_hour(date(2026, 6, 23), 22);
         let values = period_values_at(&readings_from(start, &[(1, 1, 1); 4]));
         assert_eq!(values.len(), 2);
         assert_eq!(values[0].period.ending, date(2026, 6, 23));
-        assert_eq!(values[0].interval_count, 2);
+        assert_eq!(values[0].interval_count, 3);
         assert_eq!(values[1].period.ending, date(2026, 7, 23));
-        assert_eq!(values[1].interval_count, 2);
+        assert_eq!(values[1].interval_count, 1);
     }
 }

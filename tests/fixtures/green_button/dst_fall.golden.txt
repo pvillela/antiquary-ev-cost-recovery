@@ -75,8 +75,8 @@ Z5  45985.875  [yyyy/mm/dd\ hh:mm] Center
 AA5  90.719997  [#,##0.000] Center
 AB5  MidPeak  [General] Center
 A6  45984  [yyyy/mm/dd] Left
-B6  745  [#,##0] Center
-D6  59077.31848  [#,##0.000] Center
+B6  744  [#,##0] Center
+D6  58993.438482  [#,##0.000] Center
 F6  94.559997  [#,##0.000] Center
 G6  45956.291666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
 H6  45956.458333333336  [yyyy/mm/dd\ hh:mm] Center
@@ -98,8 +98,8 @@ Z6  45957.5  [yyyy/mm/dd\ hh:mm] Center
 AA6  91.199997  [#,##0.000] Center
 AB6  MidPeak  [General] Center
 A7  45953  [yyyy/mm/dd] Left
-B7  23  [#,##0] Center  FILL:Argb { a: 255, r: 255, g: 199, b: 206 }
-D7  1913.999954  [#,##0.000] Center
+B7  24  [#,##0] Center  FILL:Argb { a: 255, r: 255, g: 199, b: 206 }
+D7  1997.879952  [#,##0.000] Center
 F7  87.359998  [#,##0.000] Center
 G7  45953.041666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
 H7  45953.208333333336  [yyyy/mm/dd\ hh:mm] Center

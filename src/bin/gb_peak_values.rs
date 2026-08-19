@@ -22,7 +22,8 @@ kW and kVA over the whole period and within the 7-7 demand window, when each of 
 the Time-of-Use period it fell in. Interval_values carries every hour of the export.
 
 A billing period runs from the start of day {start_day} of one month to the end of day {BILL_END_DAY} of the next, in
-Toronto local time, and is labelled by that closing date.
+Eastern Standard Time, and is labelled by that closing date. Standard time all year: the boundary
+does not move when the clocks do, so from March to November it falls at 01:00 by the wall clock.
 
 The output file is named after the input, with an .xlsx extension, and is written to the same
 directory. An existing file is never overwritten: move or delete it first. That is deliberate --

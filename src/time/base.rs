@@ -1,7 +1,7 @@
 use jiff::{
     Timestamp,
     civil::{Date, DateTime},
-    tz::TimeZone,
+    tz::{Offset, TimeZone},
 };
 use std::{sync::LazyLock, time::Duration};
 
@@ -65,6 +65,55 @@ pub(crate) fn local_midnight(d: Date) -> Timestamp {
 }
 
 // ---------------------------------------------------------------------------
+// Standard time
+// ---------------------------------------------------------------------------
+//
+// Toronto Hydro cuts a billing period on standard time all year round: the meter's own clock does
+// not observe daylight saving, and neither does the period boundary read off it. Prevailing local
+// time is still what everything else here means by "local" -- Time-of-Use periods, the 07:00-19:00
+// demand window and the holiday calendar are all stated in the clock a customer reads, and they
+// keep `local_date` and `local_hour` above.
+//
+// The evidence for the rule, and for that division, is in
+// `docs/hydro_bills/dst-energy-anomaly.md`: an EST-fixed window reproduces all 19 invoices to the
+// milli-kWh, while a prevailing-local one matches 6, and the on-peak and mid-peak energy the bills
+// state is reproduced only by TOU periods left on prevailing time.
+
+/// The offset a billing period is cut on, under the name a bill reader will recognise.
+///
+/// The standard-time entry of [`TZ_OFFSETS`], named rather than indexed so that the reason is
+/// visible at the use site. [`test::the_billing_offset_is_the_standard_time_one`] pins it to the
+/// entry it is meant to be, so reordering that array cannot silently move every period boundary.
+pub const BILLING_OFFSET: (&str, i8) = TZ_OFFSETS[0];
+
+static BILLING_ZONE: LazyLock<TimeZone> =
+    LazyLock::new(|| TimeZone::fixed(Offset::constant(BILLING_OFFSET.1)));
+
+/// The zone billing periods are cut in: a fixed offset, with no daylight-saving rule at all.
+fn billing_zone() -> TimeZone {
+    BILLING_ZONE.clone()
+}
+
+/// The standard-time calendar date an instant falls on.
+///
+/// Differs from [`local_date`] for instants in the hour after midnight during daylight saving:
+/// 2025-06-24T00:30 EDT is still the 23rd on a standard-time clock.
+pub(crate) fn standard_date(ts: Timestamp) -> Date {
+    ts.to_zoned(billing_zone()).date()
+}
+
+/// The instant a standard-time date begins.
+///
+/// Unlike [`local_midnight`] this can never fail: a fixed offset has no gap for a wall time to
+/// fall into and no fold for it to be ambiguous in.
+pub(crate) fn standard_midnight(d: Date) -> Timestamp {
+    d.at(0, 0, 0, 0)
+        .to_zoned(billing_zone())
+        .expect("a fixed offset has neither gaps nor folds")
+        .timestamp()
+}
+
+// ---------------------------------------------------------------------------
 // Time grids
 // ---------------------------------------------------------------------------
 //
@@ -123,10 +172,69 @@ pub fn is_on_grid(ts: Timestamp, step: Duration) -> bool {
 mod test {
     use super::*;
 
+    use jiff::civil::date;
+
     const MINUTE: Duration = Duration::from_secs(60);
 
     fn ts(s: &str) -> Timestamp {
         s.parse().unwrap()
+    }
+
+    /// [`BILLING_OFFSET`] is taken from [`TZ_OFFSETS`] by index, so this pins down which entry it
+    /// is meant to be. Reordering that array would otherwise move every billing period boundary by
+    /// an hour with nothing to say so.
+    #[test]
+    fn the_billing_offset_is_the_standard_time_one() {
+        assert_eq!(BILLING_OFFSET, ("EST", -5));
+        assert!(TZ_OFFSETS.contains(&BILLING_OFFSET));
+    }
+
+    /// Standard-time midnight is a fixed UTC-5 all year, where local midnight follows the clocks.
+    /// In winter the two agree; in summer standard-time midnight is an hour later in UTC.
+    #[test]
+    fn standard_midnight_does_not_follow_daylight_saving() {
+        // January: the prevailing offset is already -5, so the two coincide.
+        assert_eq!(
+            standard_midnight(date(2026, 1, 24)),
+            local_midnight(date(2026, 1, 24))
+        );
+        assert_eq!(
+            standard_midnight(date(2026, 1, 24)),
+            ts("2026-01-24T05:00:00Z")
+        );
+        // June: prevailing local midnight is 04:00Z, standard-time midnight stays at 05:00Z.
+        assert_eq!(
+            local_midnight(date(2026, 6, 24)),
+            ts("2026-06-24T04:00:00Z")
+        );
+        assert_eq!(
+            standard_midnight(date(2026, 6, 24)),
+            ts("2026-06-24T05:00:00Z")
+        );
+    }
+
+    /// The hour between the two midnights belongs to the previous day on a standard-time clock.
+    /// This is the hour every billing-period difference in `docs/hydro_bills/` came down to.
+    #[test]
+    fn the_midnight_hour_belongs_to_the_previous_standard_day() {
+        let t = ts("2026-06-24T04:30:00Z"); // 00:30 EDT on the 24th
+        assert_eq!(local_date(t), date(2026, 6, 24));
+        assert_eq!(standard_date(t), date(2026, 6, 23));
+    }
+
+    /// Every standard-time day is exactly 24 hours, including the two the clocks change on. That
+    /// is what makes a billing period always a whole number of days.
+    #[test]
+    fn standard_time_days_are_always_24_hours() {
+        for (y, m, d) in [(2026, 3, 8), (2025, 11, 2), (2026, 6, 15)] {
+            let start = standard_midnight(date(y, m, d));
+            let next = standard_midnight(date(y, m, d) + jiff::Span::new().days(1));
+            assert_eq!(
+                next.as_second() - start.as_second(),
+                24 * 3600,
+                "{y}-{m}-{d}"
+            );
+        }
     }
 
     /// An instant already on the grid does not move, so truncation is idempotent.

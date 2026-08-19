@@ -341,8 +341,15 @@ lets `Peak::tou` be a `Tou` rather than an `Option<Tou>`. Do not change the hour
 without working out what happens to `tou_of` and to the workbook's TOU columns.
 
 **No test may depend on a figure that only the sample data happens to have.** The interval counts
-671, 720, 744 and 745 are exceptions and are deliberate: they are properties of the calendar, not of
-this meter.
+672, 720 and 744 are exceptions and are deliberate: they are properties of the calendar, not of this
+meter.
+
+**The billing period boundary is on standard time, everything else on prevailing local time.** The
+boundary is 00:00 EST year-round; Time-of-Use periods, the 07:00–19:00 demand window and the holiday
+calendar follow the clocks. `standard_midnight` and `local_midnight` in `src/time/base.rs` are the
+two, and they must not be merged — a summer period cut on the wrong one is an hour out at each end.
+The counts 671 and 745 are what that error used to produce, and their absence is now a signal:
+seeing either again means the boundary has drifted back to prevailing time.
 
 ## What would force a re-check of the TOU rules
 
@@ -452,9 +459,12 @@ cargo build --release --example gb_trim_fixture
 ```
 
 Each range is the target billing period plus a day of slack either side. The slack is required:
-`IntervalBlock`s are anchored to 05:00 UTC, which is local midnight in winter but 01:00 in summer,
-so a range never lines up with a period's local-midnight edges. The partial periods this leaves at
-each end are not waste — they exercise the incomplete-period highlight.
+`gb_trim_fixture` takes local dates, while `IntervalBlock`s are anchored to 05:00 UTC — midnight EST
+— so a range never lines up exactly with a period's edges. The partial periods this leaves at each
+end are not waste: they exercise the incomplete-period highlight.
+
+That 05:00 UTC anchor is the feed keeping a permanent midnight-EST day, which is the same boundary
+the billing period now uses. See `green_button/Toronto_Hydro_Object_Model.md`, "Fixed daily grid".
 
 Current fixture checksums:
 

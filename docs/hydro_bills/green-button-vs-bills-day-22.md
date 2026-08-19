@@ -1,5 +1,11 @@
 # Green Button against the bills, with the period closing on the 22nd
 
+> **These figures predate a fix.** Both workbooks compared here were generated while the period
+> boundary was at prevailing local midnight; it is now at 00:00 EST, for the reasons in
+> [`dst-energy-anomaly.md`](dst-energy-anomaly.md). That change does not touch this document's
+> conclusion — the closing day and the clock the boundary runs on are separate questions, and the
+> 23rd is the right closing day under either.
+
 The same comparison as [`green-button-vs-bills.md`](green-button-vs-bills.md), with one thing
 changed: the meter export was regenerated with `BILL_END_DAY = 22` instead of 23, so a billing
 period runs from the start of the 23rd of one month to the end of the 22nd of the next.
@@ -165,7 +171,8 @@ invoice. Moving it a day earlier breaks 13 demand figures that currently match e
 the mean energy error thirteenfold. Nothing here suggests the boundary is anywhere but where the
 bill says it is.
 
-It also puts a bound on the clock-change anomaly the day-23 report flags. Those three outliers
-(−85.6, +83.9, −93.7 kWh) survive here and are, if anything, larger. They are not an artefact of
-where the period boundary falls, so the explanation lies elsewhere — in how a DST hour is handled,
-not in which day the period closes on.
+It also put a bound on the clock-change anomaly the day-23 report flags. Those three outliers
+(−85.6, +83.9, −93.7 kWh) survive here and are, if anything, larger, so they were never an artefact
+of the closing day. That pointed the investigation at the clock the boundary runs on rather than the
+date it falls on, which is where the answer was: see
+[`dst-energy-anomaly.md`](dst-energy-anomaly.md).

@@ -39,13 +39,31 @@ that hour's anomalies.
 ## The rules it applies
 
 **Billing period.** From the start of the 24th of one month to the end of the 23rd of the next, in
-`America/Toronto` local time, labelled by that 23rd. Confirmed against an invoice stating its period
-as `MAY 23 2026 TO JUN 23 2026` over 31 days.
+**Eastern Standard Time**, labelled by that 23rd. Confirmed against an invoice stating its period as
+`MAY 23 2026 TO JUN 23 2026` over 31 days.
 
-**A complete period** holds as many hours as elapse between those two local midnights — *not* days
-× 24. That distinction matters: a February period spans 671 hours because the clocks go forward
-inside it, and an October–November one spans 745 because they go back. Both are complete. Anything
-else is highlighted.
+Standard time, not prevailing local time — the boundary sits at 00:00 EST all year and does not move
+when the clocks do. From March to November that is 01:00 by the wall clock. Getting this wrong is a
+one-hour error at each end of every summer period, and
+[`../hydro_bills/dst-energy-anomaly.md`](../hydro_bills/dst-energy-anomaly.md) is what it cost: a
+prevailing-local boundary reproduced 6 of 19 invoices, a standard-time one reproduces all 19 to the
+milli-kWh. The feed agrees — its own `IntervalBlock`s start at 05:00 UTC year-round, "a permanent
+midnight-EST day boundary", as [`Toronto_Hydro_Object_Model.md`](Toronto_Hydro_Object_Model.md)
+records.
+
+Only the boundary is on standard time. Time-of-Use periods, the 07:00–19:00 demand window and the
+holiday calendar are all on prevailing local time, because those are stated in the clock a customer
+reads. The invoice's own on-peak and mid-peak energy is what confirms the split: it reproduces
+exactly under prevailing-time TOU rules and would not under standard-time ones.
+
+**A complete period** holds days × 24 hours, clock changes included, because a standard-time day is
+always 24 hours long. The count is still derived from the two boundary instants rather than from the
+day count, so it stays right whatever the boundary is; the two now simply agree. Anything else is
+highlighted.
+
+Periods of 671 and 745 hours were reported until the boundary was corrected, for the February–March
+and October–November periods, and were treated as complete. They were the symptom: the invoices for
+those periods state 28 and 31 days, meaning 672 and 744 hours.
 
 **Time-of-Use periods**, from the Ontario Energy Board. Off-peak does not move between seasons; only
 the on-peak and mid-peak labels swap between the midday block and the two shoulders:
@@ -86,13 +104,18 @@ Against a Toronto Hydro invoice for the period ending 2026-06-23:
 | Demand kW | 153.119996 | 153.119 |
 | Peak kW 7-7 | 152.639996 | 152.639 |
 | Demand kVA | 183.359995 | 183.359 |
-| kWh | 77,281.558 | 77,292.718 |
+| kWh | 77,292.718 | 77,292.718 |
 
-The three demand figures agree to the invoice's truncation. The energy total is 11.16 kWh under it —
-0.014% — and that difference is not a period-boundary error: on-peak and mid-peak energy reproduce
-the invoice **to the milli-kWh** once the loss factor is divided out, and the entire discrepancy
-falls in off-peak, which is what a meter read taken a few minutes either side of local midnight
-would do.
+The three demand figures agree to the invoice's truncation, and the energy total agrees to the
+milli-kWh. So does each of the three Time-of-Use buckets, once the loss factor is divided out.
+
+The energy total used to read 77,281.558, 11.16 kWh under the invoice, and the whole of that gap
+fell in off-peak while on-peak and mid-peak were already exact. That was the boundary error, not a
+meter read a few minutes off midnight: the missing hour was 00:00–01:00 EDT on the closing day, and
+midnight is off-peak, which is why it hid there.
+
+The reconciliation now covers all 19 billing periods the export and the bills share, not this one
+invoice alone — see [`../hydro_bills/green-button-vs-bills.md`](../hydro_bills/green-button-vs-bills.md).
 
 Output was also compared against the workbook the previous Python implementation produced, over all
 21 billing periods and every shared column: no differences. See `../maintenance-manual.md`,

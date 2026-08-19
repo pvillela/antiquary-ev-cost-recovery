@@ -52,8 +52,8 @@ AA4  max_kva_nop_kw  [General] Center
 AB4  max_kva_nop_tou  [General] Center
 AD4  anomalies  [General] Center
 A5  45923  [yyyy/mm/dd] Left
-B5  25  [#,##0] Center  FILL:Argb { a: 255, r: 255, g: 199, b: 206 }
-D5  2274.119933  [#,##0.000] Center
+B5  24  [#,##0] Center  FILL:Argb { a: 255, r: 255, g: 199, b: 206 }
+D5  2175.359936  [#,##0.000] Center
 F5  105.599997  [#,##0.000] Center
 G5  45893.541666666664  [yyyy/mm/dd\ hh:mm\ ddd] Center
 H5  45893.708333333336  [yyyy/mm/dd\ hh:mm] Center
@@ -66,7 +66,7 @@ U5  105.599997  [#,##0.000] Center
 V5  OffPeak  [General] Center
 A6  45892  [yyyy/mm/dd] Left
 B6  744  [#,##0] Center
-D6  74287.797899  [#,##0.000] Center
+D6  74301.357898  [#,##0.000] Center
 F6  131.519996  [#,##0.000] Center
 G6  45881.583333333336  [yyyy/mm/dd\ hh:mm\ ddd] Center
 H6  45881.75  [yyyy/mm/dd\ hh:mm] Center
@@ -88,8 +88,8 @@ Z6  45862.833333333336  [yyyy/mm/dd\ hh:mm] Center
 AA6  127.679996  [#,##0.000] Center
 AB6  OnPeak  [General] Center
 A7  45861  [yyyy/mm/dd] Left
-B7  23  [#,##0] Center  FILL:Argb { a: 255, r: 255, g: 199, b: 206 }
-D7  2008.559939  [#,##0.000] Center
+B7  24  [#,##0] Center  FILL:Argb { a: 255, r: 255, g: 199, b: 206 }
+D7  2093.759937  [#,##0.000] Center
 F7  100.799997  [#,##0.000] Center
 G7  45861.583333333336  [yyyy/mm/dd\ hh:mm\ ddd] Center
 H7  45861.75  [yyyy/mm/dd\ hh:mm] Center

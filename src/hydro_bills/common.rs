@@ -7,7 +7,9 @@
 /// invoice rather than chosen. It is here because it is a fact about the bill, and
 /// `green_button` needs it only because the meter data has to be cut the same way the bill cuts
 /// it -- a period there runs from the start of the day after this one to the end of this one, in
-/// local time, and is labelled by the date it ends on.
+/// **standard time**, and is labelled by the date it ends on. Standard time all year, not the
+/// prevailing local clock: see `green_button::BillingPeriod` for why, and
+/// `docs/hydro_bills/dst-energy-anomaly.md` for the evidence.
 ///
 /// Changing it moves every billing period boundary in the crate. Nothing suggests Toronto Hydro
 /// will, but the number was in three places before it was here, and three places is how a change

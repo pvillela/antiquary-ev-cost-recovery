@@ -11,6 +11,7 @@ serial-date conversion, `tou.rs` and `holidays.rs` for Ontario's time-of-use rul
 | Concern | Where |
 |---|---|
 | The time zone, and resolving a wall time that is ambiguous or does not exist | here |
+| The standard-time clock billing periods are cut on | here |
 | Excel serial dates, in both directions | here |
 | Ontario time-of-use periods and the holiday calendar | here |
 | Truncating an instant to a grid of a given step | here |
@@ -25,6 +26,34 @@ because both use it, but neither step is a property of time.
 `TIME_GRID_STEP` and the way segments tile an interval of interest are documented in
 [`docs/sessions/README.md`](../sessions/README.md), under "Boundaries and the time grid". They
 belong there: the grid is the session report's reporting resolution, and only `sessions` has one.
+
+## Two clocks, and which is which
+
+Almost everything here means **prevailing local time** — the clock a customer reads, which moves
+twice a year. `local_date`, `local_hour` and `local_midnight` are that clock, and Time-of-Use
+periods, the 07:00–19:00 demand window and the holiday calendar all run on it.
+
+One thing does not. A Toronto Hydro **billing period** is cut on **standard time**, at 00:00 EST all
+year round, and does not move when the clocks do. `standard_date` and `standard_midnight` are that
+clock, `BILLING_OFFSET` is the offset, and `green_button::BillingPeriod` is the only caller.
+
+The two coincide from November to March and differ by an hour from March to November, which is what
+makes the distinction easy to lose and expensive to get wrong: a summer period cut on the wrong
+clock is an hour out at each end, and a period containing a clock change is an hour out overall.
+Cutting on prevailing local time reproduced 6 of 19 invoices; cutting on standard time reproduces
+all 19 to the milli-kWh. The derivation is in
+[`../hydro_bills/dst-energy-anomaly.md`](../hydro_bills/dst-energy-anomaly.md).
+
+Two consequences worth knowing:
+
+- A standard-time day is always 24 hours, so a billing period is always a whole number of days and
+  matches the `Number of Days` its invoice states. Periods of 671 and 745 hours were what the
+  prevailing-local boundary produced, and they are gone.
+- `standard_midnight` cannot fail, where `local_midnight` can in principle: a fixed offset has no
+  gap for a wall time to fall into and no fold for it to be ambiguous in.
+
+The Green Button feed itself keeps the same standard-time day — its `IntervalBlock`s start at 05:00
+UTC year-round. See `../green_button/Toronto_Hydro_Object_Model.md`, "Fixed daily grid".
 
 ## Time zone
 
