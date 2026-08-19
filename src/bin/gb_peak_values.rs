@@ -2,7 +2,7 @@
 
 use ev_cost_recovery::{
     green_button::{Feed, parse, write_workbook},
-    hydro_bills::{BILL_END_DAY, BILL_START_DAY},
+    hydro_bills::{BILL_END_DAY, bill_start_day},
     time::holidays,
     time::local_date,
 };
@@ -21,7 +21,7 @@ two sheets. Peak_values carries one row per billing period: the energy used, the
 kW and kVA over the whole period and within the 7-7 demand window, when each of those occurred, and
 the Time-of-Use period it fell in. Interval_values carries every hour of the export.
 
-A billing period runs from the start of day {BILL_START_DAY} of one month to the end of day {BILL_END_DAY} of the next, in
+A billing period runs from the start of day {start_day} of one month to the end of day {BILL_END_DAY} of the next, in
 Toronto local time, and is labelled by that closing date.
 
 The output file is named after the input, with an .xlsx extension, and is written to the same
@@ -42,7 +42,8 @@ Example:
 
 The feed must carry hourly readings for all three of kWh, kW and kVA. Anything else is an error
 naming what was missing, rather than a workbook with a hole in it.
-"
+",
+        start_day = bill_start_day(BILL_END_DAY),
     )
 }
 

@@ -14,6 +14,11 @@
 /// like that goes half-applied.
 pub const BILL_END_DAY: i8 = 23;
 
-/// The day of the month a Toronto Hydro billing period starts on: the day after the one the
-/// period before it ended on.
-pub const BILL_START_DAY: i8 = BILL_END_DAY + 1;
+/// The day of the month a billing period starts on, given the day one ends on: the day after.
+///
+/// A function rather than a second constant, so this file states one fact and one relationship
+/// rather than two facts that could drift apart. `const` so it still serves where a constant is
+/// wanted. Call it as `bill_start_day(BILL_END_DAY)`.
+pub const fn bill_start_day(end_day: i8) -> i8 {
+    end_day + 1
+}

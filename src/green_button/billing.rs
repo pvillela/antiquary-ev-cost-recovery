@@ -10,7 +10,7 @@
 //! `hydro_bills` and this cuts the readings to match.
 
 use crate::green_button::METER_INTERVAL;
-use crate::hydro_bills::{BILL_END_DAY, BILL_START_DAY};
+use crate::hydro_bills::{BILL_END_DAY, bill_start_day};
 use crate::time::{local_date, local_midnight};
 use jiff::{Timestamp, civil::Date, civil::date};
 
@@ -19,9 +19,9 @@ use jiff::{Timestamp, civil::Date, civil::date};
 pub struct BillingPeriod {
     /// The closing date the period is labelled by, always [`BILL_END_DAY`] of its month.
     pub ending: Date,
-    /// Local midnight starting [`BILL_START_DAY`] of the previous month.
+    /// Local midnight starting [`bill_start_day`] of the previous month.
     pub start: Timestamp,
-    /// Local midnight starting [`BILL_START_DAY`] of this month; exclusive.
+    /// Local midnight starting [`bill_start_day`] of this month; exclusive.
     pub end: Timestamp,
 }
 
@@ -45,8 +45,12 @@ impl BillingPeriod {
         let (py, pm) = previous_month(ending.year(), ending.month());
         Self {
             ending,
-            start: local_midnight(date(py, pm, BILL_START_DAY)),
-            end: local_midnight(date(ending.year(), ending.month(), BILL_START_DAY)),
+            start: local_midnight(date(py, pm, bill_start_day(BILL_END_DAY))),
+            end: local_midnight(date(
+                ending.year(),
+                ending.month(),
+                bill_start_day(BILL_END_DAY),
+            )),
         }
     }
 
