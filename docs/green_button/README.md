@@ -45,7 +45,7 @@ that hour's anomalies.
 Standard time, not prevailing local time — the boundary sits at 00:00 EST all year and does not move
 when the clocks do. From March to November that is 01:00 by the wall clock. Getting this wrong is a
 one-hour error at each end of every summer period, and
-[`../hydro_bills/dst-energy-anomaly.md`](../hydro_bills/dst-energy-anomaly.md) is what it cost: a
+[`../hydro_bills/archive/dst-energy-anomaly-pre-fix.md`](../hydro_bills/archive/dst-energy-anomaly-pre-fix.md) is what it cost: a
 prevailing-local boundary reproduced 6 of 19 invoices, a standard-time one reproduces all 19 to the
 milli-kWh. The feed agrees — its own `IntervalBlock`s start at 05:00 UTC year-round, "a permanent
 midnight-EST day boundary", as [`Toronto_Hydro_Object_Model.md`](Toronto_Hydro_Object_Model.md)

@@ -75,9 +75,9 @@ pub(crate) fn local_midnight(d: Date) -> Timestamp {
 // keep `local_date` and `local_hour` above.
 //
 // The evidence for the rule, and for that division, is in
-// `docs/hydro_bills/dst-energy-anomaly.md`: an EST-fixed window reproduces all 19 invoices to the
-// milli-kWh, while a prevailing-local one matches 6, and the on-peak and mid-peak energy the bills
-// state is reproduced only by TOU periods left on prevailing time.
+// `docs/hydro_bills/archive/dst-energy-anomaly-pre-fix.md`: an EST-fixed window reproduces all 19
+// invoices to the milli-kWh, while a prevailing-local one matches 6, and the on-peak and mid-peak
+// energy the bills state is reproduced only by TOU periods left on prevailing time.
 
 /// The offset a billing period is cut on, under the name a bill reader will recognise.
 ///

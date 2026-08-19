@@ -5,7 +5,7 @@
 > figures in it describe the behaviour *before* the change. The tables below are what the code used
 > to produce, kept because they are the evidence the change rests on.
 
-[`green-button-vs-bills.md`](green-button-vs-bills.md) flagged three billing periods whose energy
+[`green-button-vs-bills-pre-fix.md`](green-button-vs-bills-pre-fix.md) flagged three billing periods whose energy
 total missed the invoice by roughly one hour of consumption, all three at a clock change. This is
 what causes them.
 

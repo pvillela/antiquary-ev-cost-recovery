@@ -10,7 +10,8 @@
 //! move when the clocks do. That is what the invoices say. Cutting at prevailing local midnight
 //! instead reproduces 6 of 19 invoices; cutting on a fixed EST clock reproduces all 19 to the
 //! milli-kWh, and matches the `Number of Days` each bill states in every period rather than in 16
-//! of them. `docs/hydro_bills/dst-energy-anomaly.md` is the derivation.
+//! of them. `docs/hydro_bills/archive/dst-energy-anomaly-pre-fix.md` is the
+//! derivation.
 //!
 //! Only the boundary is on standard time. Time-of-Use periods, the 07:00-19:00 demand window and
 //! the holiday calendar stay on prevailing local time, because those are stated in the clock a

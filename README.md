@@ -7,14 +7,20 @@ period. That figure is metered for the building as a whole, and nothing measures
 chargers were responsible for. This software estimates that share from the two records that do
 exist: the utility's interval data, and the charging network's session report.
 
-## The two modules
+## The four modules
+
+Three read a source of data. The fourth is the calendar they all run on.
 
 | Module | Reads | Answers |
 |---|---|---|
 | [`green_button`](docs/green_button/README.md) | Toronto Hydro's Green Button export, an ESPI XML feed of hourly meter readings | When did the building peak, and at what kW and kVA? Which billing period was that in? |
 | [`sessions`](docs/sessions/README.md) | The Evolute monthly session report, a CSV of charging sessions | Over a chosen interval, how much of the demand was EV charging — as a bracket, not a point? |
+| [`hydro_bills`](docs/hydro_bills/) | The PDF invoices Toronto Hydro issues | What did the utility charge, and on what terms? |
+| [`time`](docs/time/README.md) | Nothing of its own — the other three call it | What does a timestamp mean here, and what does the Ontario calendar say about it? |
 
-Both write Excel workbooks, because a workbook is what a figure gets checked in.
+`time` is a module rather than a scattering of helpers because the same calendar has to be applied
+identically by all three. Getting it subtly different in two places is a class of error nothing else
+here would catch.
 
 `sessions` reports a **bracket** rather than a single number, and that is deliberate. Session start
 and end times are reported only to the minute, so a session's true extent is known to within a
@@ -22,8 +28,9 @@ minute at each end. Every figure therefore runs from what the reported times lea
 they most support. See [`docs/sessions/time-reporting-uncertainty.md`](docs/sessions/time-reporting-uncertainty.md)
 for the derivation.
 
-`hydro_bills` is the third module, and is empty. It is where the tariff arithmetic will go — the
-step from *how much power* to *how much money*.
+`hydro_bills` is the least complete of the four. It reads a bill and it defines the billing period
+boundary, since that is a fact about the bill; the step from *how much power* to *how much money* is
+still to be written.
 
 ## Documentation
 
@@ -31,8 +38,10 @@ step from *how much power* to *how much money*.
   interval-of-interest rules
 - [`docs/green_button/README.md`](docs/green_button/README.md) — the ESPI feed, the peak values, the
   workbook layout
-- [`docs/time/README.md`](docs/time/README.md) — the time zone, the DST fold and how it is resolved,
-  the time grid
+- [`docs/hydro_bills/green-button-vs-bills.md`](docs/hydro_bills/green-button-vs-bills.md) — the
+  export checked against every invoice, period by period
+- [`docs/time/README.md`](docs/time/README.md) — the two clocks and which is for what, the DST fold
+  and how it is resolved, the time grid
 - [`docs/maintenance-manual.md`](docs/maintenance-manual.md) — what to check before changing a
   constant, how to regenerate the golden files, the invariants nothing enforces
 - [`docs/sessions/time-reporting-uncertainty.md`](docs/sessions/time-reporting-uncertainty.md) — the

@@ -86,7 +86,8 @@ fn the_billed_period_reproduces_the_invoice() {
     // while the period boundary was at prevailing local midnight: the invoice then read 11.16 kWh
     // higher, which was the 00:00 EDT hour of the closing day falling into the next period. On a
     // standard-time boundary that hour lands where the meter puts it and the totals coincide.
-    // `docs/hydro_bills/dst-energy-anomaly.md` has the derivation over all 19 invoices.
+    // `docs/hydro_bills/archive/dst-energy-anomaly-pre-fix.md` has the derivation over all 19
+    // invoices.
     let printed_kwh = number(&invoice, "kwh_used");
     assert!(
         (kwh - printed_kwh).abs() < 0.001,
