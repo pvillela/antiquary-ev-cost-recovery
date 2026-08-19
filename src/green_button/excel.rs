@@ -269,13 +269,20 @@ pub struct WriteReport {
 
 /// Builds the workbook and writes it to `path`.
 ///
+/// `bill_end_day` is the day of the month the bill closes on, which decides how the readings are
+/// divided into the rows of the `Peak_values` sheet. See [`period_values`].
+///
 /// # Errors
 ///
 /// Returns an error if the workbook cannot be built or the file cannot be written. It is the
 /// caller's job to have established that `path` does not already exist.
-pub fn write_workbook(path: &Path, feed: &Feed) -> Result<WriteReport, Box<dyn Error>> {
+pub fn write_workbook(
+    path: &Path,
+    feed: &Feed,
+    bill_end_day: i8,
+) -> Result<WriteReport, Box<dyn Error>> {
     let readings = feed.readings();
-    let periods = period_values(&readings);
+    let periods = period_values(&readings, bill_end_day);
 
     let mut report = WriteReport {
         interval_rows: readings.rows.len(),

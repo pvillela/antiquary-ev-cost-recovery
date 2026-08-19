@@ -32,6 +32,7 @@
 
 use super::{fixture, fixtures_dir};
 use ev_cost_recovery::green_button::{parse, write_workbook};
+use ev_cost_recovery::hydro_bills::BILL_END_DAY;
 use std::fmt::Write as _;
 use std::path::Path;
 use umya_spreadsheet::{Worksheet, reader};
@@ -67,7 +68,7 @@ fn each_fixture_matches_its_golden() {
         std::fs::create_dir_all(&dir).unwrap();
         let workbook = dir.join(format!("{name}.xlsx"));
         let _ = std::fs::remove_file(&workbook);
-        write_workbook(&workbook, &feed).unwrap();
+        write_workbook(&workbook, &feed, BILL_END_DAY).unwrap();
 
         let actual = dump(&workbook);
 

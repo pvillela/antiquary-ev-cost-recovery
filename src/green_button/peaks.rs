@@ -48,11 +48,14 @@ impl PeriodValues {
 
 /// Groups hourly readings into billing periods and computes each period's row, ascending by
 /// period.
-pub fn period_values(readings: &Readings) -> Vec<PeriodValues> {
+///
+/// `bill_end_day` is the day of the month the bill closes on, which is what decides where one
+/// period ends and the next begins. See [`BillingPeriod`].
+pub fn period_values(readings: &Readings, bill_end_day: i8) -> Vec<PeriodValues> {
     let mut grouped: BTreeMap<BillingPeriod, Vec<&Reading>> = BTreeMap::new();
     for reading in &readings.rows {
         grouped
-            .entry(BillingPeriod::containing(reading.start))
+            .entry(BillingPeriod::containing(reading.start, bill_end_day))
             .or_default()
             .push(reading);
     }
@@ -129,8 +132,15 @@ fn peak(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::hydro_bills::BILL_END_DAY;
     use crate::time::local_hour;
     use jiff::civil::date;
+
+    /// [`period_values`] on Toronto Hydro's own billing calendar, which is the only one these
+    /// tests care about; they are about the peaks, not about where a period ends.
+    fn period_values_at(readings: &Readings) -> Vec<PeriodValues> {
+        period_values(readings, BILL_END_DAY)
+    }
 
     /// Readings for consecutive hours starting at a local hour, with `(kwh, kw, kva)` each.
     fn readings_from(start: Timestamp, values: &[(i64, i64, i64)]) -> Readings {
@@ -158,7 +168,7 @@ mod test {
     fn the_first_maximising_interval_wins() {
         // Three summer-weekday hours from 12:00, all in the demand window.
         let start = local_hour(date(2026, 6, 15), 12);
-        let values = period_values(&readings_from(
+        let values = period_values_at(&readings_from(
             start,
             &[(10, 50, 60), (10, 50, 60), (10, 40, 45)],
         ));
@@ -174,7 +184,7 @@ mod test {
     fn the_demand_window_peak_excludes_off_peak_hours() {
         // 05:00 and 06:00 are off-peak; 07:00 is the first hour of the demand window.
         let start = local_hour(date(2026, 6, 15), 5);
-        let values = period_values(&readings_from(
+        let values = period_values_at(&readings_from(
             start,
             &[(10, 99, 99), (10, 10, 10), (10, 20, 20)],
         ));
@@ -203,7 +213,7 @@ mod test {
     #[test]
     fn a_weekend_only_period_has_no_demand_window_peak() {
         let start = local_hour(date(2026, 6, 13), 0); // Saturday
-        let values = period_values(&readings_from(start, &[(10, 50, 60); 24]));
+        let values = period_values_at(&readings_from(start, &[(10, 50, 60); 24]));
         assert!(values[0].max_kw.is_some());
         assert!(values[0].max_kw_nop.is_none());
         assert!(values[0].max_kva_nop.is_none());
@@ -220,7 +230,7 @@ mod test {
             kw: None,
             kva: None,
         });
-        let row = &period_values(&readings)[0];
+        let row = &period_values_at(&readings)[0];
         assert_eq!(row.interval_count, 2);
         assert_eq!(row.kwh_total, 20);
         assert!(!row.is_complete());
@@ -237,7 +247,7 @@ mod test {
             kw: Some(999),
             kva: Some(999),
         });
-        let row = &period_values(&readings)[0];
+        let row = &period_values_at(&readings)[0];
         assert_eq!(row.max_kw.unwrap().value, 50);
         assert_eq!(
             row.kwh_total, 109,
@@ -251,7 +261,7 @@ mod test {
         let start = local_hour(date(2026, 6, 15), 12);
         let mut readings = readings_from(start, &[(10, 50, 60)]);
         readings.rows[0].kva = None;
-        let peak = period_values(&readings)[0].max_kw.unwrap();
+        let peak = period_values_at(&readings)[0].max_kw.unwrap();
         assert_eq!(peak.companion, None);
     }
 
@@ -259,7 +269,7 @@ mod test {
     #[test]
     fn readings_are_grouped_by_billing_period() {
         let start = local_hour(date(2026, 6, 23), 22);
-        let values = period_values(&readings_from(start, &[(1, 1, 1); 4]));
+        let values = period_values_at(&readings_from(start, &[(1, 1, 1); 4]));
         assert_eq!(values.len(), 2);
         assert_eq!(values[0].period.ending, date(2026, 6, 23));
         assert_eq!(values[0].interval_count, 2);

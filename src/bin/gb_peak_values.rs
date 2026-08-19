@@ -83,7 +83,7 @@ fn run(input: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     report_holidays(&feed);
 
-    let report = write_workbook(&output, &feed)?;
+    let report = write_workbook(&output, &feed, BILL_END_DAY)?;
     println!("{}", output.display());
     eprintln!(
         "{} billing periods, {} intervals",

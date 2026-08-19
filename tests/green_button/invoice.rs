@@ -8,6 +8,7 @@
 //! fixture carries in full.
 
 use ev_cost_recovery::green_button::{parse, period_values};
+use ev_cost_recovery::hydro_bills::BILL_END_DAY;
 use ev_cost_recovery::time::{Interval, Tou, tou_of};
 use jiff::civil::date;
 use std::collections::HashMap;
@@ -49,7 +50,7 @@ fn the_billed_period_reproduces_the_invoice() {
     let readings = feed.readings();
 
     let ending = date(2026, 6, 23);
-    let period = period_values(&readings)
+    let period = period_values(&readings, BILL_END_DAY)
         .into_iter()
         .find(|p| p.period.ending == ending)
         .expect("the fixture carries the billed period");
@@ -108,7 +109,7 @@ fn the_tou_buckets_reproduce_the_invoice() {
     let feed = parse(&xml).unwrap();
     let readings = feed.readings();
 
-    let period = period_values(&readings)
+    let period = period_values(&readings, BILL_END_DAY)
         .into_iter()
         .find(|p| p.period.ending == date(2026, 6, 23))
         .unwrap();
