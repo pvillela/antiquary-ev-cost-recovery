@@ -444,8 +444,8 @@ mod test {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sessions");
         for stem in ["Session_Report_Diagram", "Session_Report_Anomalies"] {
             // Convert in a scratch directory, so no generated workbook lands in the fixtures.
-            let dir =
-                std::env::temp_dir().join(format!("ev_cost_recovery_{stem}_{}", std::process::id()));
+            let dir = std::env::temp_dir()
+                .join(format!("ev_cost_recovery_{stem}_{}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let csv = dir.join(format!("{stem}.csv"));
             std::fs::copy(fixtures.join(format!("{stem}.csv")), &csv).unwrap();

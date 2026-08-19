@@ -812,11 +812,14 @@ fn add_comments(sheet: &mut Worksheet) {
         ),
         (
             Source::AdjConnEndLocal,
-            "Adjusted connection end: the whole minute AFTER the one Conn_DateTime_End names, and \
-             EXCLUSIVE. The true end is known only to fall somewhere in the reported minute -- and \
-             it is not known whether that minute's last second is inside the session or outside \
-             it -- so this is the first instant the connection is certainly over. Because the end \
-             is excluded, a session starting at this exact time does NOT overlap this one.",
+            "Adjusted connection end: EXCLUSIVE -- the first instant the connection is certainly \
+             over. The true end is known only to fall somewhere in the minute Conn_DateTime_End \
+             names, and it is not known whether that minute's last second counts as inside the \
+             session or outside it. So one second is added, the result is rounded DOWN to the \
+             whole minute, and one further minute is added. For a reported end on the whole \
+             minute -- which is every row the session report currently produces -- that comes to \
+             the following minute. Because the end is excluded, a session starting at this exact \
+             time does NOT overlap this one.",
         ),
         (
             Source::AdjConnDuration,
@@ -829,8 +832,10 @@ fn add_comments(sheet: &mut Worksheet) {
             Source::AvgKw,
             "Energy_Use / Active_Charge_Time, in kW. Active_Charge_Time is an Excel duration, i.e. \
              a fraction of a day, hence the *24 to convert it to hours. A zero Active_Charge_Time \
-             yields #DIV/0!, which is the honest answer: energy delivered in no time at all has no \
-             finite average power.",
+             yields #DIV/0!, which is the honest answer: there is no average power to state. Such \
+             a row beside a non-zero Energy_Use is almost certainly a reporting fault -- the \
+             session report's three duration fields track the same thing to within about a \
+             second -- and is worth looking at individually.",
         ),
         (
             Source::Anomalies,
