@@ -9,3 +9,5 @@
 //!
 //! Plural because a run reconciles a series of them — a billing period at a time, the way
 //! `green_button::BillingPeriod` already divides the meter data.
+
+pub mod hydro_bill;
