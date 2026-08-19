@@ -481,10 +481,12 @@ These are pre-existing, found by the dedicated read.
   (`espi.rs:15`) promises a foreign feed "either resolves or says which link is missing"; this is
   the case that resolves to a wrong number. Fix: error when `power_of_ten` disagrees, or key on
   `(uom, reading_type_href)`.
-- **Gap-filling is unbounded** (`espi.rs:216-229`). Nothing bounds the hole, and `Timestamp` spans
-  roughly year −9999 to 9999, so one corrupt `<espi:start>` pushes a `Reading` per hour of the gap —
-  up to ~175 M rows — then tries to render them. The failure is an OOM or an apparent hang, not a
-  diagnosable error.
+- ~~**Gap-filling is unbounded**~~ — **FIXED.** `MAX_GAP_INTERVALS` caps the fill at two years of
+  hours. Beyond that the hole is left unfilled and the reading after it carries the new
+  `Anomaly::ImplausibleGap`, so the workbook is still produced and still shows where the trouble is.
+  Two tests: one moves a reading 200 years out and asserts nothing is filled, one moves it three
+  days out and asserts the 72 missing hours still are — the bound must not swallow the case
+  placeholders exist for. The real export is unaffected; its workbook is byte-identical.
 - **`is_complete` compares a count, not a set** (`peaks.rs:47-49,76`). A period missing one hour but
   carrying one extra misaligned reading totals correctly and reports complete, suppressing the red
   `nbr_of_intervals` fill. `kwh_total` (`peaks.rs:77`) likewise sums misaligned rows, so an
@@ -865,15 +867,33 @@ Ranked by what I would fix first:
 
 | Item | Why it ranks here |
 | --- | --- |
-| ~~`espi.rs:145` — guard against a second `ReadingType` per unit~~ — **scheduled into Phase 1** | The only defect that produces a **wrong number silently**. Everything else fails loudly or not at all. |
-| `espi.rs:218` — bound the gap fill | Turns a corrupt timestamp from an error into an OOM. Cheap to fix. |
+| ~~`espi.rs:145` — guard against a second `ReadingType` per unit~~ — **DONE, Phase 1** | The only defect that produces a **wrong number silently**. Everything else fails loudly or not at all. |
+| ~~`espi.rs:218` — bound the gap fill~~ — **DONE** | Turned a corrupt timestamp into an OOM or a hang rather than an error. |
 | `peaks.rs:47` — make `is_complete` a set check, or soften its doc comment | The red completeness fill is a signal you rely on when reconciling against invoices. |
 | Tests for `DuplicateInterval` and the four link-chain errors | Untested paths in the module's headline design decision. |
 | The rest of finding 12 | Quality and hardening; no impact on a well-formed Toronto Hydro export. |
 
-The remaining items are hardening against feeds this tool has never seen. If the only input is ever
-Toronto Hydro's own export, deferring all of them is defensible — the note is here so that stays a
-decision rather than an oversight.
+**Decision taken: the rest are deferred**, on the ground that they are hardening against feeds this
+tool has never seen, and the present use case is Toronto Hydro's own export. Resurface them if that
+changes.
+
+The real export was measured rather than assumed, and it is clean on every count the deferred items
+concern: **13,896 readings, 0 misaligned, 0 gaps, 0 duplicate starts, and every step between
+consecutive rows exactly one hour.** So:
+
+- `peaks.rs:47`, `is_complete` counting rather than comparing a set, **cannot currently misfire** —
+  misfiring needs a misaligned reading to offset a missing one, and there are none. It degrades
+  silently rather than loudly if that ever changes, which is the reason it ranked highest of the
+  remainder.
+- `DuplicateInterval` is never exercised by a test **and never raised by the real data**, so the
+  untested path is also an unreached one.
+- The non-hourly `ReadingType` rejection, the untrimmed element text and the `billing.rs` panic all
+  need an export unlike any yet seen, and all fail loudly rather than producing a wrong number.
+
+One caveat on the empty-feed item: it is about **this** workflow rather than a foreign feed. A feed
+whose `IntervalBlock`s carry no readings passes every check and yields an empty workbook with exit
+0. A truncated download is more likely to fail parsing outright, so this is a narrow case — but it
+is the one deferred item that does not depend on the input coming from somewhere new.
 
 ---
 

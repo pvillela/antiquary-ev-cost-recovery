@@ -80,6 +80,15 @@ pub enum Anomaly {
     /// The interval does not start on a whole hour. Excluded from peak selection, so it can never
     /// become a reported maximum.
     MisalignedInterval,
+    /// The hole before this interval is too large to be an outage, so it was **not** filled with
+    /// placeholder rows. Recorded on the reading that follows the hole.
+    ///
+    /// A gap is normally made visible by writing one placeholder row per missing hour. That is
+    /// only sane while the hole is a plausible one: a single corrupt `<espi:start>` can put a
+    /// reading thousands of years out, and filling to it would mean millions of rows — an
+    /// out-of-memory kill or an apparent hang, neither of which tells anyone what is wrong.
+    /// Appended last, since the variant order is the `Ord` order the goldens are written in.
+    ImplausibleGap,
 }
 
 impl Anomaly {
@@ -92,6 +101,7 @@ impl Anomaly {
             Self::MissingInterval => "MissingInterval",
             Self::DuplicateInterval => "DuplicateInterval",
             Self::MisalignedInterval => "MisalignedInterval",
+            Self::ImplausibleGap => "ImplausibleGap",
         }
     }
 
@@ -104,6 +114,7 @@ impl Anomaly {
             "MissingInterval" => Self::MissingInterval,
             "DuplicateInterval" => Self::DuplicateInterval,
             "MisalignedInterval" => Self::MisalignedInterval,
+            "ImplausibleGap" => Self::ImplausibleGap,
             _ => return None,
         })
     }

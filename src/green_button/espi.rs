@@ -29,6 +29,19 @@ use crate::time::is_on_grid;
 /// [`METER_INTERVAL`] in seconds, which is the form the feed states it in.
 const METER_INTERVAL_SECS: i64 = METER_INTERVAL.as_secs() as i64;
 
+/// The largest hole in the readings that will be filled with placeholder rows: two years of hours.
+///
+/// A gap is made visible by writing one placeholder row per missing hour, which is right for an
+/// outage and catastrophic for a corrupt timestamp. `Timestamp` spans roughly year -9999 to 9999,
+/// so one bad `<espi:start>` can imply about 175 million rows; the tool then tries to build and
+/// render them, and dies of memory exhaustion or appears to hang. Neither says what is wrong.
+///
+/// Two years is far past any outage worth reconciling a bill across — a year of missing data means
+/// there is no bill to check — and far short of the range a corrupt value reaches. Beyond it the
+/// hole is left unfilled and the reading after it carries [`Anomaly::ImplausibleGap`], so the
+/// workbook is still produced and still shows where the trouble is.
+const MAX_GAP_INTERVALS: i64 = 2 * 365 * 24;
+
 const ATOM_NS: &str = "http://www.w3.org/2005/Atom";
 const ESPI_NS: &str = "http://naesb.org/espi";
 
@@ -235,19 +248,26 @@ impl Feed {
         let mut rows: Vec<Reading> = Vec::with_capacity(starts.len());
         let mut previous: Option<Timestamp> = None;
         for at in starts {
-            // Fill the hours between the last row and this one, if the feed skipped any.
+            // Fill the hours between the last row and this one, if the feed skipped any -- but
+            // only while the hole is small enough to be a real outage. See MAX_GAP_INTERVALS.
             if let Some(prev) = previous {
-                let mut gap = prev.as_second() + METER_INTERVAL_SECS;
-                while gap < at.as_second() {
-                    let missing = Timestamp::from_second(gap).expect("inside the feed's own span");
-                    note(missing, Anomaly::MissingInterval);
-                    rows.push(Reading {
-                        start: missing,
-                        kwh: None,
-                        kw: None,
-                        kva: None,
-                    });
-                    gap += METER_INTERVAL_SECS;
+                let hours = (at.as_second() - prev.as_second()) / METER_INTERVAL_SECS;
+                if hours > MAX_GAP_INTERVALS {
+                    note(at, Anomaly::ImplausibleGap);
+                } else {
+                    let mut gap = prev.as_second() + METER_INTERVAL_SECS;
+                    while gap < at.as_second() {
+                        let missing =
+                            Timestamp::from_second(gap).expect("inside the feed's own span");
+                        note(missing, Anomaly::MissingInterval);
+                        rows.push(Reading {
+                            start: missing,
+                            kwh: None,
+                            kw: None,
+                            kva: None,
+                        });
+                        gap += METER_INTERVAL_SECS;
+                    }
                 }
             }
             previous = Some(at);
@@ -499,6 +519,71 @@ mod test {
         let feed = parse(&xml).unwrap();
         assert_eq!(feed.kwh.values.len(), 3);
         assert_eq!(feed.kwh.power_of_ten, -3);
+    }
+
+    /// A hole too large to be an outage is left unfilled and flagged, rather than turned into
+    /// millions of placeholder rows.
+    ///
+    /// The reproducer is the real failure: one reading is moved far into the future, as a corrupt
+    /// `<espi:start>` would put it. Filling to it would need roughly 70 million rows — the tool
+    /// would be killed for memory or appear to hang, and neither outcome names the bad reading.
+    /// Here it costs nothing and the reading after the hole says what happened.
+    #[test]
+    fn an_implausible_hole_is_flagged_rather_than_filled() {
+        let mut feed = parse(&feed_xml("3600", "3600")).unwrap();
+        let second = Timestamp::from_second(1732341600).unwrap();
+        // 200 years on. Well past the bound, and still inside the range `Timestamp` can hold --
+        // a corrupt value can reach the end of that range, but a test cannot use one there.
+        let far_future = Timestamp::from_second(1732341600 + 200 * 365 * 24 * 3600).unwrap();
+        for series in [&mut feed.kwh, &mut feed.kw, &mut feed.kva] {
+            let v = series.values.remove(&second).unwrap();
+            series.values.insert(far_future, v);
+        }
+
+        let readings = feed.readings();
+
+        // Two real readings and nothing between them.
+        assert_eq!(readings.rows.len(), 2, "the hole was filled after all");
+        assert_eq!(readings.rows[1].start, far_future);
+        assert!(
+            readings.anomalies[&far_future].contains(&Anomaly::ImplausibleGap),
+            "the reading after the hole is not flagged: {:?}",
+            readings.anomalies.get(&far_future)
+        );
+        // Not reported as a run of missing hours, which is what it is not.
+        assert!(
+            !readings
+                .anomalies
+                .values()
+                .any(|a| a.contains(&Anomaly::MissingInterval)),
+            "an implausible hole was described as missing intervals"
+        );
+    }
+
+    /// A hole small enough to be a real outage is still filled, one placeholder row per hour.
+    ///
+    /// The bound must not be so eager that it swallows the case the placeholders exist for.
+    #[test]
+    fn an_outage_sized_hole_is_still_filled() {
+        let mut feed = parse(&feed_xml("3600", "3600")).unwrap();
+        let second = Timestamp::from_second(1732341600).unwrap();
+        // Three days past the reading it replaces, so 72 hours are missing between the first
+        // reading and this one.
+        let later = Timestamp::from_second(1732341600 + 72 * 3600).unwrap();
+        for series in [&mut feed.kwh, &mut feed.kw, &mut feed.kva] {
+            let v = series.values.remove(&second).unwrap();
+            series.values.insert(later, v);
+        }
+
+        let readings = feed.readings();
+        assert_eq!(readings.rows.len(), 2 + 72, "the outage was not filled");
+        assert!(
+            !readings
+                .anomalies
+                .values()
+                .any(|a| a.contains(&Anomaly::ImplausibleGap)),
+            "an ordinary outage was rejected as implausible"
+        );
     }
 
     /// A timestamp present in one series and not another is reported rather than zero-filled.
