@@ -220,11 +220,16 @@ fn peak_interval(
 /// `None` when the name is not of that form. Nothing else about the file is inspected.
 fn report_coverage(path: &Path) -> Option<ReportCoverage> {
     let stem = path.file_stem()?.to_str()?;
-    let (from, to) = stem.strip_prefix("Session_Report_")?.split_once('-')?;
+    // Anything after the closing date is ignored, so a file marked up by hand -- a `-mock`, a
+    // `-bak`, a `-what-if` -- still says what it covers. The two dates are what is read; a suffix
+    // is a note to a person and says nothing about the sessions inside.
+    let mut parts = stem.strip_prefix("Session_Report_")?.split('-');
+    let from = report_date(parts.next()?)?;
+    let to = report_date(parts.next()?)?;
     Some(ReportCoverage {
         path: path.to_path_buf(),
-        from: report_date(from)?,
-        to: report_date(to)?,
+        from,
+        to,
     })
 }
 
@@ -351,6 +356,20 @@ mod test {
         let c = coverage("Session_Report_December_1_2025-January_31_2026.csv");
         assert_eq!(c.from, date(2025, 12, 1));
         assert_eq!(c.to, date(2026, 1, 31));
+    }
+
+    /// A suffix on the name is a note to a person, so it is ignored rather than allowed to hide
+    /// what the file covers. `data` holds several such files.
+    #[test]
+    fn a_marked_up_name_still_states_its_dates() {
+        for name in [
+            "data/Session_Report_July_1_2026-July_31_2026-mock.csv",
+            "Session_Report_July_1_2026-July_31_2026-bak.csv",
+            "Session_Report_July_1_2026-July_31_2026-what-if.csv",
+        ] {
+            let c = coverage(name);
+            assert_eq!((c.from, c.to), (date(2026, 7, 1), date(2026, 7, 31)));
+        }
     }
 
     /// Anything else is refused rather than guessed at, because the guess would be checked against
