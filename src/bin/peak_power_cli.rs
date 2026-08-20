@@ -1,7 +1,7 @@
 //! Peak power estimates for one billing period, from a Green Button export and the Evolute session
 //! reports covering the period's two ends.
 
-use ev_cost_recovery::{PowerEstimates, peak_power};
+use ev_cost_recovery::{PowerEstimates, io::peak_power};
 use jiff::civil::Date;
 use std::error::Error;
 use std::path::Path;

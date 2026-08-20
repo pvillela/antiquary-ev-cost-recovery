@@ -1,81 +1,12 @@
-//! What a front-end asks the library, stated in the terms a front-end has.
-//!
-//! The modules below are organised by the source of data they read. A caller checking an invoice
-//! has none of those in hand — it has a billing period, a meter export and the charging network's
-//! monthly reports — so this module is where those become the calls the modules understand, and
-//! where the several error types they return become one a front-end can present.
-
 use crate::green_button::{BillingPeriod, METER_INTERVAL, Peak, period_values_xml};
 use crate::hydro_bills::BILL_END_DAY;
 use crate::sessions::{SessionReport, csv, estimates_from_report};
 use crate::time::{Interval, standard_date};
+use crate::{ApiError, PowerEstimates, SessionReportCoverage};
 use jiff::civil::Date;
 use std::error::Error;
 use std::fmt;
-use std::path::{Path, PathBuf};
-
-pub use crate::sessions::IntervalEstimates;
-
-/// Peak power estimates for a billing period.
-pub struct PowerEstimates {
-    pub kw_estimates: IntervalEstimates,
-    pub kva_estimates: IntervalEstimates,
-}
-
-#[derive(Debug)]
-pub enum ApiError {
-    // Encapsulates the different kinds of error that the library may emit, in a way that is useful
-    // for consumers of the API, i.e., the binaries in this crate.
-    //
-    // Each variant carries what the caller would have to state to explain the failure, rather than
-    // a message it has to parse. Rendering is [`fmt::Display`]'s job and happens in one place.
-    /// The date given does not label a billing period: it is not [`BILL_END_DAY`] of its month.
-    NotABillingPeriodEnding { ending: Date },
-
-    /// The Green Button export could not be read, could not be parsed, or carries no reading in the
-    /// billing period asked for.
-    GreenButton {
-        path: PathBuf,
-        cause: Box<dyn Error>,
-    },
-
-    /// A session report could not be read.
-    SessionReport {
-        path: PathBuf,
-        cause: Box<dyn Error>,
-    },
-
-    /// A session report's file name does not state the dates it covers, so it cannot be checked
-    /// against the billing period. See [`report_coverage`].
-    UndatedSessionReport { path: PathBuf },
-
-    /// The session reports given do not cover the whole billing period between them.
-    ///
-    /// Almost always the wrong months handed in. The alternative is an estimate that reads as a
-    /// small or zero EV contribution, which is a figure someone may go on to argue a bill from.
-    PeriodNotCovered {
-        period_start: Date,
-        period_ending: Date,
-        coverage: Vec<ReportCoverage>,
-    },
-
-    /// The billing period carries no reading in one of the two power series, so it has no maximum
-    /// to estimate against. The feed is expected to carry hourly kW *and* kVA.
-    NoPeak {
-        period_ending: Date,
-        unit: &'static str,
-    },
-}
-
-/// What a session report's file name says it holds.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReportCoverage {
-    pub path: PathBuf,
-    /// First calendar date the report covers.
-    pub from: Date,
-    /// Last calendar date the report covers, inclusive.
-    pub to: Date,
-}
+use std::path::Path;
 
 /// Returns peak power estimates for the intervals of interest that maximize kW and kVA in the
 /// specified billing period.
@@ -218,7 +149,7 @@ fn peak_interval(
 /// from "wrong file", and it is the second of those that would quietly halve an estimate.
 ///
 /// `None` when the name is not of that form. Nothing else about the file is inspected.
-fn report_coverage(path: &Path) -> Option<ReportCoverage> {
+fn report_coverage(path: &Path) -> Option<SessionReportCoverage> {
     let stem = path.file_stem()?.to_str()?;
     // Anything after the closing date is ignored, so a file marked up by hand -- a `-mock`, a
     // `-bak`, a `-what-if` -- still says what it covers. The two dates are what is read; a suffix
@@ -226,7 +157,7 @@ fn report_coverage(path: &Path) -> Option<ReportCoverage> {
     let mut parts = stem.strip_prefix("Session_Report_")?.split('-');
     let from = report_date(parts.next()?)?;
     let to = report_date(parts.next()?)?;
-    Some(ReportCoverage {
+    Some(SessionReportCoverage {
         path: path.to_path_buf(),
         from,
         to,
@@ -264,7 +195,7 @@ fn report_date(s: &str) -> Option<Date> {
 /// Order-insensitive, and tolerant of the two overlapping, which they do whenever a session runs
 /// past midnight on the last of the month. What it will not accept is a gap between them, or a pair
 /// that stops short at either end.
-fn covers(first: Date, last: Date, coverage: &[ReportCoverage]) -> bool {
+fn covers(first: Date, last: Date, coverage: &[SessionReportCoverage]) -> bool {
     let mut ranges: Vec<(Date, Date)> = coverage.iter().map(|c| (c.from, c.to)).collect();
     ranges.sort();
 
@@ -342,7 +273,7 @@ mod test {
     use super::*;
     use jiff::civil::date;
 
-    fn coverage(name: &str) -> ReportCoverage {
+    fn coverage(name: &str) -> SessionReportCoverage {
         report_coverage(Path::new(name)).unwrap_or_else(|| panic!("{name} should parse"))
     }
 
