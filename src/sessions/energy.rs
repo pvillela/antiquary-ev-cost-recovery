@@ -3,10 +3,17 @@ use crate::{
     time::{Interval, Tou, tou_partition},
 };
 
+#[derive(Debug)]
 pub struct TouKwh {
     pub on_peak: f64,
     pub mid_peak: f64,
     pub off_peak: f64,
+}
+
+impl TouKwh {
+    pub fn total_kwh(&self) -> f64 {
+        self.on_peak + self.mid_peak + self.off_peak
+    }
 }
 
 pub fn tou_kwh(time_range: Interval, sessions: &[Session]) -> TouKwh {
