@@ -60,6 +60,12 @@ over an interval), `gb_peak_values` (Green Button feed to workbook) and `peak_po
 billing period's kW and kVA peaks, estimated from a Green Button export and the two session reports
 spanning it). Each prints its usage when run with no arguments.
 
+`peak_power_cli` needs two adjacent months' session reports, since a billing period runs from the
+24th to the 23rd. Only June's is real, so `scripts/make-may-mock.py` builds the May half from it —
+shifted dates, fresh ids, and two deliberate quirks that exercise the merge: a session at the end
+of May that both reports carry, and a reused `Charge_Session_ID` of May's own. The script explains
+both, and refuses to overwrite an output that already exists.
+
 ## License
 
 Licensed under either of
