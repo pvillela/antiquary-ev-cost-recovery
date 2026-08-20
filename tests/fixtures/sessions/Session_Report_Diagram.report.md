@@ -64,9 +64,10 @@ Anomalies
 |   5 | D       | ExcessiveAvgKw(6.600) |
 |   7 | F       | ExcessiveAvgKw(6.700) |
 
-Row numbers are workbook rows, so each one can be looked up directly. Only
-sessions reaching the interval of interest are listed here; a session
-anomalous elsewhere in the workbook is not this interval's concern.
+Row numbers are rows of the source data file named above, so each one can be
+looked up directly. Only sessions reaching the interval of interest are
+listed here; a session anomalous elsewhere in the workbook is not this
+interval's concern.
 
 - ExcessiveAvgKw - average kilowatts above the Evolute breaker rating, which
   the hardware should not allow; the session still counts towards every

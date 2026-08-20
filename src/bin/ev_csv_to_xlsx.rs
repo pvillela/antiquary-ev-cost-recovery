@@ -9,8 +9,9 @@ Usage: ev_csv_to_xlsx <SESSION_REPORT.csv>...
 Each workbook is written beside its input with the extension replaced. Rows needing a judgement
 call — an ambiguous DST fold, a wall time in the DST gap, a session with no charge time, one whose
 reported duration runs past its reported end — are reported on stderr and recorded in the
-workbook's Anomalies column; they do not stop the conversion. Row numbers are workbook rows, so a
-record duplicated to resolve a DST fold is reported twice, once per copy.
+workbook's Anomalies column; they do not stop the conversion. Row numbers are rows of the CSV, so a
+record duplicated to resolve a DST fold is reported twice against the one row it came from, once
+per copy; the -EDT/-EST suffix on the session id tells the two apart.
 
 A .convert.log is written beside the workbook. It lists the same findings, or says there were
 none.";

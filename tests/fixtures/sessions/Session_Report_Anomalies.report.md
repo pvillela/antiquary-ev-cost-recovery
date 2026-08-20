@@ -54,9 +54,9 @@ each session's average power the same way.
 Segment membership
 ------------------
 
-- 16:00 - MARGIN, N1
-- 16:15 - EXCESS, N1, N2, SPIKE
-- 16:30 - EXCESS, N1, N2
+- 16:00 - N1, MARGIN
+- 16:15 - N1, N2, EXCESS, SPIKE
+- 16:30 - N1, N2, EXCESS
 - 16:45 - none
 
 
@@ -89,10 +89,11 @@ Anomalies
 |   6 | SPIKE   | ZeroActiveChargeTime  |
 |   9 | EXCESS  | ExcessiveAvgKw(6.900) |
 
-Row numbers are workbook rows, so each one can be looked up directly. Only
-sessions reaching the interval of interest are listed here. The Excluded
-sessions table above is scoped differently - it covers the whole workbook,
-and carries an "In interval" column for that reason.
+Row numbers are rows of the source data file named above, so each one can be
+looked up directly. Only sessions reaching the interval of interest are
+listed here. The Excluded sessions table above is scoped differently - it
+covers the whole workbook, and carries an "In interval" column for that
+reason.
 
 - ZeroActiveChargeTime - zero Active_Charge_Time, so the session delivered
   its energy in no time at all and has no finite average power; the

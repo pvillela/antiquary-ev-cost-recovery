@@ -56,8 +56,9 @@ cargo run --example sessions -- <workbook.xlsx>
 ```
 
 The command-line tools are `ev_csv_to_xlsx` (session report to workbook), `ev_peak_cli` (estimate
-over an interval) and `gb_peak_values` (Green Button feed to workbook). Each prints its usage when
-run with no arguments.
+over an interval), `gb_peak_values` (Green Button feed to workbook) and `peak_power_cli` (the
+billing period's kW and kVA peaks, estimated from a Green Button export and the two session reports
+spanning it). Each prints its usage when run with no arguments.
 
 ## License
 

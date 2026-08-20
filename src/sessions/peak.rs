@@ -1,7 +1,5 @@
 use super::excel::session_list;
-use super::{
-    Anomaly, Bracket, RSegment, RSession, SEGMENT_DURATION, Segment, Session, SessionReport,
-};
+use super::{Anomaly, Bracket, RSegment, RSession, SEGMENT_DURATION, Segment, SessionReport};
 use crate::time::Interval;
 use std::{
     error::Error,
@@ -11,9 +9,13 @@ use std::{
 
 /// Estimates for an interval of interest.
 pub struct IntervalEstimates {
-    /// Workbook the sessions were read from. Held so the report is self-describing: it can be
-    /// stored or rendered later without a caller having to remember what produced it.
-    pub source: PathBuf,
+    /// Files the sessions were read from, in the order they were read. Held so the report is
+    /// self-describing: it can be stored or rendered later without a caller having to remember what
+    /// produced it.
+    ///
+    /// More than one when the estimate spans a billing period, which needs the two monthly session
+    /// reports covering its ends. See [`crate::peak_power`].
+    pub sources: Vec<PathBuf>,
     /// Interval of interest.
     pub interval: Interval,
     /// All segments and their estimates.
@@ -27,8 +29,9 @@ pub struct IntervalEstimates {
     pub energy_based_seg_estimate: (RSegment, EstimateSet),
     /// Segment and estimate set that maximize the count-based estimates. Shared, as above.
     pub count_based_seg_estimate: (RSegment, EstimateSet),
-    /// Every anomaly carried by every session that intersects the interval of interest.
-    /// Sessions excluded outright are *not* here; they are in
+    /// Every anomaly touching a session that intersects the interval of interest — the sessions'
+    /// own faults, and the report-level ones that are relations between records rather than faults
+    /// in any of them. Sessions excluded outright are *not* here; they are in
     /// [`Self::excluded_sessions`].
     pub session_anomalies: Vec<Anomaly>,
     /// Every session excluded from the estimates for
@@ -39,7 +42,7 @@ pub struct IntervalEstimates {
     /// it intersects the interval is asking a question of the very timestamps that are in doubt.
     /// The report states which ones appear to touch the interval and lists the rest anyway,
     /// leaving the judgement to a reader who can go back to the source rows.
-    pub excluded_sessions: Vec<Session>,
+    pub excluded_sessions: Vec<RSession>,
 }
 
 /// The four estimates for one [`Segment`].
@@ -71,21 +74,37 @@ impl EstimateSet {
 /// report at `path`.
 pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimates, Box<dyn Error>> {
     let session_report = session_list(path)?;
-    // `excluded` sessions contradict themselves and take no part in any estimate, but they are
-    // still reported: a caller judging an estimate needs to know what was left out. See
-    // docs/sessions/README.md, "Other".
-    let SessionReport {
-        sessions,
-        spikes,
-        excluded,
-        log_path: _,
-    } = session_report;
+    Ok(estimates_from_report(
+        ioi,
+        vec![path.to_path_buf()],
+        &session_report,
+    ))
+}
 
+/// The estimate proper, once the sessions have been read.
+///
+/// Separate from [`interval_estimates`] because there is more than one way to arrive at a
+/// [`SessionReport`]: that function reads one workbook, while [`crate::peak_power`] merges the two
+/// monthly CSVs a billing period spans. Both must produce the same figures from the same sessions,
+/// which they do by both coming through here.
+///
+/// Takes the report by reference so one set of sessions can feed several intervals of interest
+/// without being read again — `peak_power` estimates over two.
+pub(crate) fn estimates_from_report(
+    ioi: Interval,
+    sources: Vec<PathBuf>,
+    report: &SessionReport,
+) -> IntervalEstimates {
     // Spikes take part in the estimates on the same footing as any other session. A spike's raw
     // energy over charge time is infinite or NaN, either of which would swamp or poison any
     // segment it entered, and [`Session::avg_kw`] substitutes a finite figure for exactly that
     // reason — so nothing has to be done to a spike here. See docs/sessions/README.md, "Other".
-    let rsessions: Vec<RSession> = sessions.into_iter().chain(spikes).map(Rc::new).collect();
+    let rsessions: Vec<RSession> = report
+        .sessions
+        .iter()
+        .chain(&report.spikes)
+        .cloned()
+        .collect();
     let segments = segments_for_ioi(ioi, &rsessions);
     let seg_estimates: Vec<(RSegment, EstimateSet)> = segments
         .iter()
@@ -93,17 +112,20 @@ pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimate
         .collect();
     let energy_based_seg_estimate = maximal_segment_estimate(&segments, |seg| seg.agg_kw().mid());
     let count_based_seg_estimate = maximal_segment_estimate(&segments, |seg| seg.agg_count().mid());
-    let session_anomalies = collect_session_anomalies(&ioi, &rsessions);
+    let session_anomalies = collect_session_anomalies(&ioi, &rsessions, &report.anomalies);
 
-    Ok(IntervalEstimates {
-        source: path.to_path_buf(),
+    IntervalEstimates {
+        sources,
         interval: ioi,
         seg_estimates,
         energy_based_seg_estimate,
         count_based_seg_estimate,
         session_anomalies,
-        excluded_sessions: excluded,
-    })
+        // `excluded` sessions contradict themselves and take no part in any estimate, but they are
+        // still reported: a caller judging an estimate needs to know what was left out. See
+        // docs/sessions/README.md, "Other".
+        excluded_sessions: report.excluded.clone(),
+    }
 }
 
 /// The [`SEGMENT_DURATION`]-wide segments tiling `ioi`, each holding the sessions that intersect
@@ -197,27 +219,40 @@ pub(crate) fn maximal_segment_estimate(
 ///
 /// Deliberately blind to [`crate::AnomalyKind`]: it matches on nothing, so a kind added later
 /// surfaces here without anyone having to remember to wire it up.
-fn collect_session_anomalies(interval: &Interval, rsessions: &[RSession]) -> Vec<Anomaly> {
+fn collect_session_anomalies(
+    interval: &Interval,
+    rsessions: &[RSession],
+    report_anomalies: &[Anomaly],
+) -> Vec<Anomaly> {
     let mut anomalies: Vec<Anomaly> = rsessions
         .iter()
+        .filter(|s| s.intersects(interval))
         .flat_map(|s| {
-            if !s.intersects(interval) {
-                return Vec::new();
-            }
-            s.anomalies
-                .iter()
-                .map(|kind| Anomaly {
-                    row: s.row,
-                    session_id: s.id.clone(),
-                    kind: *kind,
-                })
-                .collect::<Vec<_>>()
+            s.anomalies.iter().map(|kind| Anomaly {
+                session: s.clone(),
+                kind: *kind,
+            })
         })
+        // The report's own anomalies are relations between records rather than faults in one, so
+        // they are not on any `Session::anomalies` and have to be picked up separately. Scoped to
+        // the interval on the same test as the rest, so this table stays a statement about the
+        // interval of interest and not about the whole file.
+        .chain(
+            report_anomalies
+                .iter()
+                .filter(|a| a.session.intersects(interval))
+                .cloned(),
+        )
         .collect();
+    // By source file first, since a merged report interleaves two of them and a row number means
+    // nothing without the file it is in. `sort_by` is stable, so a session's own anomalies keep the
+    // order `Session::anomalies` states them in.
     anomalies.sort_by(|a, b| {
-        a.row
-            .cmp(&b.row)
-            .then_with(|| a.session_id.cmp(&b.session_id))
+        a.session
+            .path
+            .cmp(&b.session.path)
+            .then_with(|| a.session.row.cmp(&b.session.row))
+            .then_with(|| a.session.id.cmp(&b.session.id))
     });
     anomalies
 }
@@ -269,9 +304,10 @@ mod test {
         let conn_start = ts(start);
         let adj_conn_end = ts(end);
         let charge_time = Duration::from_secs(3600);
-        let session = Session {
-            id: id.to_owned(),
+        let session = crate::sessions::Session {
+            path: std::rc::Rc::new(PathBuf::from("Session_Report_Test.csv")),
             row: 2,
+            id: id.to_owned(),
             conn_start,
             conn_end: adj_conn_end - TIME_GRID_STEP,
             conn_duration: adj_conn_end.duration_since(conn_start).unsigned_abs(),

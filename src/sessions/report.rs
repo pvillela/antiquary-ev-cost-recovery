@@ -28,7 +28,7 @@ use super::{
 };
 use crate::time::{Interval, time_zone};
 use jiff::{Timestamp, Zoned};
-use std::{collections::HashMap, fmt};
+use std::fmt;
 
 /// Width the prose is wrapped to. Comfortably inside 80 columns, leaving room for a quoting prefix
 /// in an email reply.
@@ -186,9 +186,9 @@ fn in_interval(session: &Session, ioi: &Interval) -> String {
 /// keeps the workbook's `anomalies` column a list of bare variant names that
 /// [`AnomalyKind::from_token`] can read back, and keeps the glossary below the table explaining
 /// each kind once rather than once per session.
-fn anomaly_cell(kind: AnomalyKind, avg_kw: Option<f64>) -> String {
-    match (kind, avg_kw) {
-        (AnomalyKind::ExcessiveAvgKw, Some(kw)) => format!("{}({kw:.3})", kind.as_str()),
+fn anomaly_cell(kind: AnomalyKind, avg_kw: f64) -> String {
+    match kind {
+        AnomalyKind::ExcessiveAvgKw => format!("{}({avg_kw:.3})", kind.as_str()),
         _ => kind.as_str().to_owned(),
     }
 }
@@ -222,10 +222,14 @@ impl IntervalEstimates {
         out.push(String::new());
         out.push(format!(
             "Source     {}",
-            self.source
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| self.source.to_string_lossy().into_owned())
+            self.sources
+                .iter()
+                .map(|p| p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.to_string_lossy().into_owned()))
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
         out.push(format!("Interval   {}", interval_line(self.interval)));
         out.push(String::new());
@@ -247,23 +251,6 @@ impl IntervalEstimates {
         self.seg_estimates
             .iter()
             .all(|(seg, _)| seg.sessions.is_empty())
-    }
-
-    /// Average power per session id, gathered from the segments.
-    ///
-    /// The segments are the report's only handle on the sessions themselves: an anomaly record
-    /// carries a row, an id and a kind, and nothing else. Every session with an anomaly intersects
-    /// the interval of interest, and so appears in some segment of it, so anything the anomaly list
-    /// can name is reachable here.
-    ///
-    /// A spike's figure is the one the estimating logic uses, not the sheet's `#DIV/0!` — the
-    /// number that actually fed the totals, which is the one worth seeing beside an anomaly.
-    fn avg_kw_by_session(&self) -> HashMap<String, f64> {
-        self.seg_estimates
-            .iter()
-            .flat_map(|(seg, _)| seg.sessions.iter())
-            .map(|s| (s.id.clone(), s.avg_kw()))
-            .collect()
     }
 
     /// The figures for the maximal segment on each derivation, and the prose that reads them.
@@ -434,7 +421,7 @@ impl IntervalEstimates {
                     // itself here, so its figure needs no lookup.
                     s.anomalies
                         .iter()
-                        .map(|k| anomaly_cell(*k, Some(s.avg_kw())))
+                        .map(|k| anomaly_cell(*k, s.avg_kw()))
                         .collect::<Vec<_>>()
                         .join(", "),
                 ]
@@ -480,9 +467,6 @@ impl IntervalEstimates {
             return;
         }
 
-        // The sessions themselves are not on an `Anomaly`; only a segment holds them.
-        let avg_kw = self.avg_kw_by_session();
-
         // No "In interval" column here, unlike the Excluded sessions table. Every session listed
         // reaches the interval of interest — that is the condition on which the anomaly was
         // collected at all — so the column would read yes on every row of every report, and a
@@ -493,9 +477,11 @@ impl IntervalEstimates {
             .iter()
             .map(|a: &Anomaly| {
                 vec![
-                    a.row.to_string(),
-                    a.session_id.clone(),
-                    anomaly_cell(a.kind, avg_kw.get(a.session_id.as_str()).copied()),
+                    a.session.row.to_string(),
+                    a.session.id.clone(),
+                    // The session's own figure, not the sheet's `#DIV/0!` — the number that fed the
+                    // totals is the one worth seeing beside the flag.
+                    anomaly_cell(a.kind, a.session.avg_kw()),
                 ]
             })
             .collect();
@@ -505,8 +491,9 @@ impl IntervalEstimates {
             &[Right, Left, Left],
         ));
         out.push(String::new());
-        let mut note = "Row numbers are workbook rows, so each one can be looked up directly. \
-                        Only sessions reaching the interval of interest are listed here"
+        let mut note = "Row numbers are rows of the source data file named above, so each one can \
+                        be looked up directly. Only sessions reaching the interval of interest are \
+                        listed here"
             .to_owned();
         if self.excluded_sessions.is_empty() {
             note.push_str(

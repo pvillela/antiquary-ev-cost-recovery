@@ -59,8 +59,9 @@ pub fn ui(ui: &mut egui::Ui, state: &mut ConvertState, working: &mut WorkingDir)
             widgets::note(
                 ui,
                 "These are recorded in the workbook's Anomalies column and do not stop the \
-                 conversion. Row numbers are workbook rows, so a record duplicated to resolve a \
-                 DST fold appears twice, once per copy.",
+                 conversion. Row numbers are rows of the CSV, so a record duplicated to resolve a \
+                 DST fold appears twice against the one row it came from; the -EDT/-EST suffix on \
+                 the session id tells the two apart.",
             );
             ui.add_space(6.0);
             widgets::monospace_block(ui, &outcome.anomalies.join("\n"));

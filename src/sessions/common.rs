@@ -3,7 +3,7 @@ use crate::time::{Interval, duration, time_zone, truncate_to};
 use super::site_load::{Load, ev_load, ev_real_power_kw, transformer_load};
 use jiff::{Timestamp, Zoned};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt::{self, Debug},
     iter::Sum,
     ops::{Add, Div, Mul},
@@ -124,12 +124,13 @@ pub(crate) type RSession = Rc<Session>;
 #[derive(Debug)]
 /// Charging session
 pub struct Session {
+    /// Path to source data file.
+    pub path: Rc<PathBuf>,
+    /// Row number in the source data file. The header occupies row 1, so the lowest possible value
+    /// is 2.
+    pub row: usize,
     /// From `session report`.
     pub id: String,
-    /// Row number in the Excel workbook. The header occupies row 1, so the lowest possible value
-    /// is 2. This is *not* the CSV row: a record duplicated to resolve a DST fold occupies two
-    /// workbook rows, so the two diverge from that point on.
-    pub row: usize,
     /// `conn_start_utc`: connection start date-time from `session report`.
     pub conn_start: Timestamp,
     /// `conn_end_utc`: connection end date-time as reported, truncated to the minute.
@@ -262,7 +263,17 @@ impl Session {
         }
     }
 
-    /// Used to check inconsistent duplicates.
+    /// Whether two records sharing an `id` describe *different* sessions.
+    ///
+    /// The question [`MergedSessions::merge_sessions`] asks of every pair of records with the same
+    /// `Charge_Session_ID`. `false` means the two are one session reported in two overlapping
+    /// files, and one copy is dropped. `true` means they are not the same session — either Evolute
+    /// reused the id, or the two files disagree about one — and both are kept.
+    ///
+    /// The fields compared are the ones every estimate is built from: where the session sits on the
+    /// timeline, how long it charged, and how much energy it took. `row` and `path` are excluded on
+    /// purpose — the same session is at different rows in different files, which is precisely the
+    /// case this has to see through.
     pub(crate) fn is_inconsistent_duplicate(&self, other: &Session) -> bool {
         self.id == other.id
             && (self.adj_conn_start() != other.adj_conn_start()
@@ -317,25 +328,11 @@ impl Session {
     }
 }
 
-impl PartialEq for Session {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for Session {}
-
-impl PartialOrd for Session {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Session {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.id.cmp(&other.id)
-    }
-}
+// `Session` deliberately has no `PartialEq`, `Ord` or `Hash`. It had them so that [`Segment`] could
+// hold a `BTreeSet`, and they compared `id` alone — which made segment membership, and every figure
+// drawn from it, rest on `Charge_Session_ID` being unique. It is not: Evolute's June 2026 report
+// carries `S37487` on two unrelated sessions a week apart. `Segment` holds a `Vec` for that reason,
+// and nothing else needs to ask whether two sessions are equal.
 
 /// A [`Session`]'s overlap with an [`Interval`], including quantification of
 /// overlap uncertainty due to [`TIME_GRID_STEP`].
@@ -356,47 +353,78 @@ impl SessionOverlap {
     }
 }
 
-/// The result of flattening and deduplicating a list of lists of sessions.
-pub struct DedupedSessions {
-    /// The deduped session list.
-    pub merged: Vec<Session>,
-    /// Each session in this list has the same `id` as a session in `merged` but relevant field
-    /// values don't match.
-    pub duplicates: Vec<Session>,
+/// Several files' sessions as one list, with what is wrong across them.
+pub struct MergedSessions {
+    /// Every session, in the order the lists were given, less the records collapsed as identical.
+    pub sessions: Vec<RSession>,
+    /// Anomalies that are not properties of any single record and so are not on
+    /// [`Session::anomalies`]. Currently [`AnomalyKind::DuplicateId`] only.
+    pub anomalies: Vec<Anomaly>,
 }
 
-impl DedupedSessions {
-    /// Flattens and deduplicates lists of sessions.
-    pub fn merge_sessions(session_lists: Vec<Vec<Session>>) -> DedupedSessions {
-        let mut id_map: BTreeMap<String, Session> = BTreeMap::new();
-        let mut merged_ids = Vec::new();
-        let mut duplicates = Vec::new();
-
+impl MergedSessions {
+    /// Flattens session lists, collapsing records that appear identically in more than one, and
+    /// flags every surviving session whose `id` another one shares.
+    ///
+    /// Two rules, and the distinction between them is the whole of this function:
+    ///
+    /// - Same `id` and every compared field equal — see [`Session::is_inconsistent_duplicate`] —
+    ///   is one session reported in two overlapping files. One copy is kept. Counting both would
+    ///   inflate every figure derived from it, which is why a billing period spanning two monthly
+    ///   reports cannot simply concatenate them.
+    /// - Same `id` with any field differing is *not* one session. `Charge_Session_ID` is not unique
+    ///   in Evolute's reports — the June 2026 report carries `S37487` on two sessions a week apart
+    ///   — so such records are kept and estimated from, and flagged
+    ///   [`AnomalyKind::DuplicateId`] so a reader can see the id was reused. That flag cannot
+    ///   distinguish a reused id from two files genuinely disagreeing about one session; both look
+    ///   the same from here, and both are worth seeing.
+    ///
+    /// One list in means there is nothing to collapse across files, and this is detection alone.
+    /// That is how a single-file read gets the same flagging: it comes through here too.
+    pub(crate) fn merge_sessions(session_lists: Vec<Vec<RSession>>) -> Self {
+        let mut sessions: Vec<RSession> = Vec::new();
         for list in session_lists {
-            for s in list {
-                let id = s.id.clone();
-                if let Some(seen) = id_map.get(&id) {
-                    if seen.is_inconsistent_duplicate(&s) {
-                        duplicates.push(s);
-                    }
-                } else {
-                    id_map.insert(id.clone(), s);
-                    merged_ids.push(id);
+            for session in list {
+                // Linear against what is already kept. The comparison is on the compared fields,
+                // not on the id, so no map keyed by id would serve: an id may legitimately name
+                // several distinct sessions, which is the case that produced this function.
+                let already_kept = sessions
+                    .iter()
+                    .any(|kept| kept.id == session.id && !kept.is_inconsistent_duplicate(&session));
+                if !already_kept {
+                    sessions.push(session);
                 }
             }
         }
 
-        let merged = merged_ids
-            .into_iter()
-            .map(|id| {
-                id_map
-                    .remove(&id)
-                    .unwrap_or_else(|| panic!("session id {id} should be in merged_ids"))
-            })
-            .collect::<Vec<_>>();
-
-        DedupedSessions { merged, duplicates }
+        let anomalies = duplicate_id_anomalies(&sessions);
+        Self {
+            sessions,
+            anomalies,
+        }
     }
+}
+
+/// One [`AnomalyKind::DuplicateId`] per session whose `id` another session in the list also
+/// carries.
+///
+/// Symmetric: every member of a colliding group is flagged, not only the later ones. Which record
+/// was read first says nothing about which is the odd one out, and a reader looking up either row
+/// should find the flag there.
+fn duplicate_id_anomalies(sessions: &[RSession]) -> Vec<Anomaly> {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for session in sessions {
+        *counts.entry(session.id.as_str()).or_default() += 1;
+    }
+
+    sessions
+        .iter()
+        .filter(|s| counts[s.id.as_str()] > 1)
+        .map(|s| Anomaly {
+            session: s.clone(),
+            kind: AnomalyKind::DuplicateId,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -540,15 +568,24 @@ impl Add for Load {
 /// two derivations peaked together with [`std::rc::Rc::ptr_eq`], instead of comparing clock times
 /// and hoping.
 ///
-/// The saved copying is a secondary benefit and a real one: a `Segment` carries a
-/// `BTreeSet` of its sessions, and cloning that duplicates the tree.
+/// The saved copying is a secondary benefit and a real one: a `Segment` carries a list of its
+/// sessions, and cloning that duplicates every entry.
 pub type RSegment = Rc<Segment>;
 
-#[derive(Debug, Clone, PartialEq)]
+// No `PartialEq`: comparing two segments means comparing their sessions, and `Session` has no
+// equality for the reasons given above it.
+#[derive(Debug, Clone)]
 /// A sub-interval of the interval-of-interest over which power estimates are computed.
 pub struct Segment {
     pub interval: Interval,
-    pub sessions: BTreeSet<RSession>,
+    /// The sessions intersecting this segment, in the order the report states them.
+    ///
+    /// A `Vec` rather than a set. A set would need [`Session`] to answer whether two sessions are
+    /// the same, and the only answer available was `id`, which Evolute reuses — so the set was
+    /// quietly making segment membership depend on a uniqueness that does not hold. It was never
+    /// doing the work either: `segments_for_ioi` offers each session to each segment once, so
+    /// there is nothing to deduplicate.
+    pub sessions: Vec<RSession>,
 }
 
 impl Segment {
@@ -598,7 +635,7 @@ impl Segment {
     }
 
     pub(crate) fn add_session(&mut self, session: RSession) {
-        self.sessions.insert(session);
+        self.sessions.push(session);
     }
 }
 
@@ -684,8 +721,17 @@ pub enum AnomalyKind {
     /// flagged, according to how its `Energy_Use / Active_Charge_Time` rounds in binary floating
     /// point. That is the price of the guarantee above, and it errs towards reporting.
     ExcessiveAvgKw,
-    /// A previously seen session has the same ID and relevant field values don't match.
-    InconsistentDuplicate,
+    /// Another session in the same list carries the same `Charge_Session_ID`.
+    ///
+    /// `Charge_Session_ID` is not unique in Evolute's reports: the June 2026 report carries
+    /// `S37487` on two sessions a week apart. Informational only — every session so flagged takes
+    /// part in the estimates exactly as it would otherwise, since two records sharing an id are
+    /// two sessions until something says otherwise.
+    ///
+    /// Raised symmetrically, on every member of a colliding group. It cannot distinguish a reused
+    /// id from two overlapping reports disagreeing about one session, because from
+    /// [`MergedSessions::merge_sessions`] the two look identical. Both are worth a reader's eye.
+    DuplicateId,
 }
 
 impl AnomalyKind {
@@ -700,7 +746,7 @@ impl AnomalyKind {
             Self::DstGapShifted => "DstGapShifted",
             Self::DstUnresolvable => "DstUnresolvable",
             Self::ExcessiveAvgKw => "ExcessiveAvgKw",
-            Self::InconsistentDuplicate => "InconsistentDuplicate",
+            Self::DuplicateId => "DuplicateId",
         }
     }
 
@@ -713,20 +759,24 @@ impl AnomalyKind {
             "DstGapShifted" => Self::DstGapShifted,
             "DstUnresolvable" => Self::DstUnresolvable,
             "ExcessiveAvgKw" => Self::ExcessiveAvgKw,
-            "InconsistentDuplicate" => Self::InconsistentDuplicate,
+            "DuplicateId" => Self::DuplicateId,
             _ => return None,
         })
     }
 }
 
-/// A single row that needs review. Never fatal: the conversion still writes the row, and the
+/// A session that needs review. Never fatal: the conversion still writes the row, and the
 /// estimating logic still produces a figure. Used by both sides — see
 /// [`crate::sessions::ConversionReport`] and [`crate::sessions::IntervalEstimates`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Holds the session itself rather than a copy of a field or two off it. Copying `id` and `row` out
+/// meant every consumer that wanted anything else — the average power beside the flag, the file the
+/// row is in — had to find its way back to the session through a key, and no key available is one
+/// Evolute guarantees: ids repeat, and `(path, row)` is shared by the two halves of a DST fold.
+/// Holding the `Rc` is what removes that question.
+#[derive(Debug, Clone)]
 pub struct Anomaly {
-    /// Excel row number.
-    pub row: usize,
-    pub session_id: String,
+    pub session: RSession,
     pub kind: AnomalyKind,
 }
 
@@ -753,8 +803,9 @@ impl fmt::Display for AnomalyKind {
                  allow; the session still counts towards every estimate, but the breaker-spec \
                  figures assume no session draws more than that rating"
             }
-            Self::InconsistentDuplicate => {
-                "A previously seen session has the same ID and relevant field values don't match"
+            Self::DuplicateId => {
+                "another session in the report carries the same Charge_Session_ID; the id is not \
+                 unique in Evolute's reports, so both sessions still count towards every estimate"
             }
         };
         f.write_str(s)
@@ -763,7 +814,11 @@ impl fmt::Display for AnomalyKind {
 
 impl fmt::Display for Anomaly {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "row {} ({}): {}", self.row, self.session_id, self.kind)
+        write!(
+            f,
+            "row {} ({}): {}",
+            self.session.row, self.session.id, self.kind
+        )
     }
 }
 
@@ -783,7 +838,7 @@ pub struct SessionReport {
     /// Sessions with a finite average power. This is what the peak power contribution logic
     /// consumes unaltered. A session with zero `Energy_Use` belongs here — its `avg_kw` is
     /// legitimately zero, and it still occupies a breaker.
-    pub sessions: Vec<Session>,
+    pub sessions: Vec<RSession>,
     /// Sessions with zero `Active_Charge_Time`, so [`Session::charge_time`] is zero and energy
     /// over charge time is infinite or `NaN`. Kept out of `sessions` because those values would
     /// swamp or poison any segment they entered.
@@ -796,14 +851,25 @@ pub struct SessionReport {
     /// beside a non-zero `Energy_Use` is a contradiction in the report rather than an event. See
     /// `Questions_for_Evolute.md`, "Answers received". [`Session::avg_kw`] substitutes a finite
     /// figure so the row can still be listed. See docs/sessions/README.md, "Other".
-    pub spikes: Vec<Session>,
+    pub spikes: Vec<RSession>,
     /// Sessions flagged [`AnomalyKind::InconsistentDuration`]: their reported start, end and
     /// duration contradict each other, so they cannot be placed on a timeline at all. Excluded
     /// from the estimates and returned only for review. See docs/sessions/README.md, "Other".
-    pub excluded: Vec<Session>,
-    /// Where the run log was written. It always exists, and says either that nothing was found or
-    /// what was. Its contents depend on which reader produced this report — see their docs.
-    pub log_path: PathBuf,
+    pub excluded: Vec<RSession>,
+    /// Anomalies that are not properties of any single record, and so are not reachable through
+    /// [`Session::anomalies`]. Currently [`AnomalyKind::DuplicateId`] only.
+    ///
+    /// Separate from the sessions because such an anomaly is a relation between records rather than
+    /// a fault in one: an id is a duplicate only relative to another session, and which of the two
+    /// is at fault is not a question the data answers.
+    pub anomalies: Vec<Anomaly>,
+    /// Where the run logs were written, one per file read. Each always exists, and says either
+    /// that nothing was found or what was. Their contents depend on which reader produced this
+    /// report — see their docs.
+    ///
+    /// A vector because a report can be the merger of several — see [`SessionReport::merge`] —
+    /// and each source file has a log of its own, written beside it.
+    pub log_paths: Vec<PathBuf>,
 }
 
 impl SessionReport {
@@ -822,12 +888,22 @@ impl SessionReport {
     /// 3. Everything else — [`SessionReport::sessions`].
     ///
     /// Order within each bucket is the order given, which for both readers is report order.
-    pub(crate) fn new(sessions: Vec<Session>, log_path: PathBuf) -> Self {
+    ///
+    /// The anomalies are taken rather than derived: they come from
+    /// [`MergedSessions::merge_sessions`], which is the one place that sees a whole session list at
+    /// once and so the only place that can tell a shared id from a unique one. Deriving them here
+    /// as well would raise each of them twice.
+    pub(crate) fn new(merged: MergedSessions, log_paths: Vec<PathBuf>) -> Self {
+        let MergedSessions {
+            sessions,
+            anomalies,
+        } = merged;
         let mut report = Self {
             sessions: Vec::new(),
             spikes: Vec::new(),
             excluded: Vec::new(),
-            log_path,
+            anomalies,
+            log_paths,
         };
         for session in sessions {
             if session
@@ -842,5 +918,149 @@ impl SessionReport {
             }
         }
         report
+    }
+
+    /// Combines reports read from several files into one.
+    ///
+    /// Needed because a billing period straddles two calendar months while a session report covers
+    /// one, so estimating over a period means reading two reports whose coverage may overlap. What
+    /// counts as one session across those two files, and what is merely a reused id, is
+    /// [`MergedSessions::merge_sessions`]'s to decide.
+    ///
+    /// The inputs' own [`SessionReport::anomalies`] are dropped rather than concatenated. They were
+    /// derived from each file in isolation, and detection is re-run over the merged list, so
+    /// carrying them forward would raise every one of them twice.
+    ///
+    /// Bucketing is likewise redone from the merged list rather than concatenating the inputs'
+    /// buckets, so the result is exactly what reading all the files as one would have produced.
+    /// Order within each bucket follows the order the reports were given.
+    pub(crate) fn merge(reports: Vec<SessionReport>) -> Self {
+        let mut log_paths = Vec::new();
+        let mut session_lists = Vec::new();
+        for report in reports {
+            log_paths.extend(report.log_paths);
+            // Every bucket, so a session excluded by one file cannot be silently re-admitted by the
+            // other's copy of it: both copies go through the merge and the survivor is re-bucketed
+            // on its own anomalies.
+            session_lists.push(
+                report
+                    .sessions
+                    .into_iter()
+                    .chain(report.spikes)
+                    .chain(report.excluded)
+                    .collect(),
+            );
+        }
+
+        Self::new(MergedSessions::merge_sessions(session_lists), log_paths)
+    }
+}
+
+// cargo test --lib -- sessions::common::test
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn session(path: &str, row: usize, id: &str, start: &str, energy_use: f64) -> RSession {
+        let conn_start: Timestamp = start.parse().expect("an RFC 3339 timestamp");
+        let conn_duration = Duration::from_secs(3600);
+        Rc::new(Session {
+            path: Rc::new(PathBuf::from(path)),
+            row,
+            id: id.to_owned(),
+            conn_start,
+            conn_end: conn_start + conn_duration,
+            conn_duration,
+            charge_time: conn_duration,
+            energy_use,
+            anomalies: Vec::new(),
+        })
+    }
+
+    fn ids(sessions: &[RSession]) -> Vec<&str> {
+        sessions.iter().map(|s| s.id.as_str()).collect()
+    }
+
+    fn flagged(anomalies: &[Anomaly]) -> Vec<(&str, usize)> {
+        anomalies
+            .iter()
+            .map(|a| {
+                assert_eq!(a.kind, AnomalyKind::DuplicateId);
+                (a.session.id.as_str(), a.session.row)
+            })
+            .collect()
+    }
+
+    /// The case merging exists for: two monthly reports overlap, and the session in both is one
+    /// session. Counting it twice would inflate every figure drawn from it.
+    #[test]
+    fn a_record_present_identically_in_two_files_is_kept_once() {
+        let may = vec![
+            session("May.csv", 2, "S1", "2026-05-30T12:00:00Z", 4.0),
+            session("May.csv", 3, "S2", "2026-05-31T12:00:00Z", 5.0),
+        ];
+        // The same two sessions as the next report states them, at its own row numbers.
+        let june = vec![
+            session("June.csv", 2, "S1", "2026-05-30T12:00:00Z", 4.0),
+            session("June.csv", 3, "S2", "2026-05-31T12:00:00Z", 5.0),
+            session("June.csv", 4, "S3", "2026-06-01T12:00:00Z", 6.0),
+        ];
+
+        let merged = MergedSessions::merge_sessions(vec![may, june]);
+        assert_eq!(ids(&merged.sessions), ["S1", "S2", "S3"]);
+        // The first file's copy is the one kept, so the rows are its.
+        assert_eq!(merged.sessions[0].row, 2);
+        assert_eq!(*merged.sessions[0].path, PathBuf::from("May.csv"));
+        assert!(
+            merged.anomalies.is_empty(),
+            "one session reported twice is not a duplicate id"
+        );
+    }
+
+    /// `Charge_Session_ID` is not unique in Evolute's reports — the June 2026 report carries
+    /// `S37487` on two sessions a week apart. Both count, and both are flagged.
+    #[test]
+    fn a_reused_id_within_one_file_keeps_both_sessions_and_flags_them() {
+        let june = vec![
+            session("June.csv", 2, "S37487", "2026-06-18T15:29:00Z", 0.0),
+            session("June.csv", 3, "S1", "2026-06-20T12:00:00Z", 4.0),
+            session("June.csv", 4, "S37487", "2026-06-25T10:08:00Z", 1.0),
+        ];
+
+        let merged = MergedSessions::merge_sessions(vec![june]);
+        assert_eq!(
+            ids(&merged.sessions),
+            ["S37487", "S1", "S37487"],
+            "two sessions sharing an id are two sessions"
+        );
+        // Symmetric: both members of the colliding pair, not only the later one.
+        assert_eq!(flagged(&merged.anomalies), [("S37487", 2), ("S37487", 4)]);
+    }
+
+    /// Two files disagreeing about one session looks exactly like a reused id from here, and is
+    /// treated the same way: nothing is dropped, and both records are flagged for a reader to
+    /// judge.
+    #[test]
+    fn files_that_disagree_about_a_session_keep_both_records() {
+        let may = vec![session("May.csv", 2, "S1", "2026-05-30T12:00:00Z", 4.0)];
+        let june = vec![session("June.csv", 9, "S1", "2026-05-30T12:00:00Z", 4.5)];
+
+        let merged = MergedSessions::merge_sessions(vec![may, june]);
+        assert_eq!(merged.sessions.len(), 2);
+        assert_eq!(flagged(&merged.anomalies), [("S1", 2), ("S1", 9)]);
+    }
+
+    /// A single list has nothing to collapse across files, so merging one is detection alone. That
+    /// is how both readers get the flagging without a second code path.
+    #[test]
+    fn merging_one_list_leaves_it_alone() {
+        let sessions = vec![
+            session("June.csv", 2, "S1", "2026-06-01T12:00:00Z", 4.0),
+            session("June.csv", 3, "S2", "2026-06-02T12:00:00Z", 5.0),
+        ];
+
+        let merged = MergedSessions::merge_sessions(vec![sessions]);
+        assert_eq!(ids(&merged.sessions), ["S1", "S2"]);
+        assert!(merged.anomalies.is_empty());
     }
 }

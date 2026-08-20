@@ -22,13 +22,20 @@ use crate::time::{is_on_grid, local_datetime, time_zone, wall_clock_instant};
 
 use super::TIME_GRID_STEP;
 use super::{
-    Anomaly, AnomalyKind, BREAKER_RATING_KW, RunLog, Session, SessionReport, duration_is_consistent,
+    Anomaly, AnomalyKind, BREAKER_RATING_KW, MergedSessions, RSession, RunLog, Session,
+    SessionReport, duration_is_consistent,
 };
 use jiff::{
     SignedDuration, Timestamp, civil,
     tz::{AmbiguousOffset, TimeZone},
 };
-use std::{collections::HashMap, error::Error, path::Path, time::Duration};
+use std::{
+    collections::HashMap,
+    error::Error,
+    path::{Path, PathBuf},
+    rc::Rc,
+    time::Duration,
+};
 
 /// The window `Conn_start + Conn_Duration` may land in, stated as an offset from the reported end.
 ///
@@ -84,8 +91,14 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
     let log_path = rows
         .log
         .write_beside(path, "csv.read", "Read from session report")?;
-    let sessions = rows.rows.into_iter().map(|row| row.session).collect();
-    Ok(SessionReport::new(sessions, log_path))
+    // Through the merge even though there is one file: it is the one place that sees a whole
+    // session list at once, and so the only place that can tell a shared `Charge_Session_ID` from a
+    // unique one. A single list has nothing to collapse, so this is detection alone.
+    let sessions: Vec<RSession> = rows.rows.into_iter().map(|row| row.session).collect();
+    Ok(SessionReport::new(
+        MergedSessions::merge_sessions(vec![sessions]),
+        vec![log_path],
+    ))
 }
 
 /// Every row one session report CSV yields, in the order the report states them.
@@ -126,7 +139,7 @@ impl SessionRows {
         if raw.is_empty() {
             return Ok(None);
         }
-        parse_duration(raw, row.record + 1, name).map(Some)
+        parse_duration(raw, row.record + 2, name).map(Some)
     }
 }
 
@@ -137,24 +150,22 @@ impl SessionRows {
 pub(crate) fn session_rows(path: &Path) -> Result<SessionRows, Box<dyn Error>> {
     let tz = time_zone();
     let (headers, records) = read_csv(path)?;
+    // One allocation for the file, shared by every session read from it.
+    let source = Rc::new(path.to_path_buf());
 
     let mut anomalies = Vec::new();
     let mut rows: Vec<Row> = Vec::new();
     for (i, record) in records.iter().enumerate() {
-        let csv_row = i + 1;
+        // The CSV row, counting the header, and the number every session parsed from this record
+        // carries. A record duplicated to resolve a DST fold yields two sessions and they share it,
+        // because they share the row they came from — see `Session::row`. The workbook row is a
+        // different number, and it belongs to the workbook: `super::excel` derives it from a
+        // session's position in `rows` when it writes one.
+        let csv_row = i + 2;
         let session = CsvSession::parse(&headers, record, csv_row)?;
-        // The output row is tracked separately from the CSV row: a record duplicated to resolve a
-        // DST fold occupies two output rows, so from there on the two counts diverge. It counts
-        // the header, so it is also the workbook row `super::excel` will write this session to.
-        let out_row = rows.len() + 2;
-        for (offset, mut row) in session.resolve(&tz, csv_row)?.into_iter().enumerate() {
-            // Restamped here rather than in `resolve`, which knows only its record's position.
-            // Both readers must number a session the same way or the two `session_list`s would
-            // disagree about a session they agree on in every other respect.
-            row.session.row = out_row + offset;
+        for row in session.resolve(&tz, &source, csv_row)? {
             anomalies.extend(row.session.anomalies.iter().map(|&kind| Anomaly {
-                row: row.session.row,
-                session_id: row.session.id.clone(),
+                session: row.session.clone(),
                 kind,
             }));
             rows.push(row);
@@ -317,7 +328,7 @@ struct CsvSession {
 pub(crate) struct Row {
     /// Index into [`SessionRows::records`], for the pass-through columns.
     record: usize,
-    pub(crate) session: Session,
+    pub(crate) session: RSession,
     /// The two reported wall times, kept as written. `Session` holds instants, and the local
     /// columns must show what the report said rather than a re-derivation of it — those differ in
     /// the DST gap, where the reported wall time never occurred.
@@ -392,7 +403,12 @@ impl CsvSession {
     /// Their tie-breaks differ for the same reason. Giving this one `map_local`'s behaviour would
     /// throw away the duration evidence; giving `map_local` this one's would have it invent
     /// evidence it does not have.
-    fn resolve(&self, tz: &TimeZone, row: usize) -> Result<Vec<Row>, Box<dyn Error>> {
+    fn resolve(
+        &self,
+        tz: &TimeZone,
+        source: &Rc<PathBuf>,
+        row: usize,
+    ) -> Result<Vec<Row>, Box<dyn Error>> {
         // Kinds known before the DST branch runs. They describe the record itself, so on
         // duplication both copies inherit them.
         let mut common = Vec::new();
@@ -457,23 +473,24 @@ impl CsvSession {
                 }
 
                 Ok(Row {
-                    record: row - 1,
-                    session: Session {
+                    record: row - 2,
+                    session: Rc::new(Session {
+                        path: source.clone(),
+                        // The CSV row this record occupies. Both halves of a duplicated fold carry
+                        // it, since both were read from that one row; the `-EDT`/`-EST` suffix on
+                        // the id is what tells them apart.
+                        row,
                         id: match suffix {
                             Some(s) => format!("{}-{s}", self.id),
                             None => self.id.clone(),
                         },
-                        // Provisional: the CSV record's own position, which is right only until a
-                        // duplication pushes later sessions down. `session_rows` restamps it with
-                        // the output row, which is what a reader is given.
-                        row,
                         conn_start: start_utc,
                         conn_end: end_utc,
                         conn_duration: self.conn_duration,
                         charge_time: self.active_charge_time,
                         energy_use: self.energy_use,
                         anomalies,
-                    },
+                    }),
                     start_local: self.start_local,
                     end_local: self.end_local,
                 })
@@ -536,6 +553,12 @@ mod test {
         civil::DateTime::strptime("%Y-%m-%d %H:%M", s).unwrap()
     }
 
+    /// A stand-in source file for tests that call [`CsvSession::resolve`] directly. Nothing here
+    /// reads it; it is only what the sessions record as where they came from.
+    fn test_source() -> Rc<PathBuf> {
+        Rc::new(PathBuf::from("Session_Report_Test.csv"))
+    }
+
     fn session(start: &str, end: &str, conn: &str) -> CsvSession {
         let active_charge_time = parse_duration(conn, 1, "Active_Charge_Time").unwrap();
         CsvSession {
@@ -583,7 +606,7 @@ mod test {
     #[test]
     fn adj_conn_end_pads_the_reported_end() {
         let rows = session("2026-06-01 16:22", "2026-06-01 21:29", "5:07:53")
-            .resolve(&time_zone(), 1)
+            .resolve(&time_zone(), &test_source(), 2)
             .unwrap();
         assert_eq!(
             local_of(rows[0].session.adj_conn_end()),
@@ -592,7 +615,7 @@ mod test {
         assert!(timing_anomalies(&rows[0].session.anomalies).is_empty());
 
         let rows = session("2026-06-07 16:42", "2026-06-07 23:41", "6:58:29")
-            .resolve(&time_zone(), 1)
+            .resolve(&time_zone(), &test_source(), 2)
             .unwrap();
         assert_eq!(
             local_of(rows[0].session.adj_conn_end()),
@@ -613,7 +636,7 @@ mod test {
         ];
         for (start, end, conn) in cases {
             let s = session(start, end, conn);
-            let rows = s.resolve(&time_zone(), 1).unwrap();
+            let rows = s.resolve(&time_zone(), &test_source(), 2).unwrap();
             let row = &rows[0];
             assert!(
                 row.session.adj_conn_end() >= row.session.conn_end,
@@ -638,7 +661,7 @@ mod test {
     #[test]
     fn utc_conversion_uses_edt_in_june() {
         let rows = session("2026-06-01 16:22", "2026-06-01 21:29", "5:07:53")
-            .resolve(&time_zone(), 1)
+            .resolve(&time_zone(), &test_source(), 2)
             .unwrap();
         assert_eq!(
             rows[0]
@@ -655,7 +678,7 @@ mod test {
     fn dst_fold_resolved_by_reported_end() {
         // 01:30 EDT + 3h elapsed = 03:30 EST. Starting at 01:30 EST would end at 04:30.
         let rows = session("2026-11-01 01:30", "2026-11-01 03:30", "3:00:00")
-            .resolve(&time_zone(), 1)
+            .resolve(&time_zone(), &test_source(), 2)
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(
@@ -677,7 +700,7 @@ mod test {
     fn dst_fold_resolved_to_est_rejects_the_hour_early_candidate() {
         // 01:30 EST + 3h elapsed = 04:30 EST. Starting at 01:30 EDT would end at 03:30.
         let rows = session("2026-11-01 01:30", "2026-11-01 04:30", "3:00:00")
-            .resolve(&time_zone(), 1)
+            .resolve(&time_zone(), &test_source(), 2)
             .unwrap();
         assert_eq!(
             rows.len(),
@@ -706,7 +729,7 @@ mod test {
         // The EST candidate lands at 04:29:31, an hour out, so only EDT is consistent — but the old
         // equal-minutes test rejected *both* and called the record unresolvable.
         let rows = session("2026-11-01 01:30", "2026-11-01 03:30", "2:59:31")
-            .resolve(&time_zone(), 1)
+            .resolve(&time_zone(), &test_source(), 2)
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert!(
@@ -732,7 +755,7 @@ mod test {
     #[test]
     fn dst_fold_ambiguous_duplicates_the_record() {
         let rows = session("2026-11-01 01:10", "2026-11-01 01:40", "0:30:00")
-            .resolve(&time_zone(), 1)
+            .resolve(&time_zone(), &test_source(), 2)
             .unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].session.id, "S1-EDT");
@@ -758,7 +781,7 @@ mod test {
     #[test]
     fn dst_gap_resolves_forward_and_reports() {
         let rows = session("2026-03-08 02:30", "2026-03-08 04:00", "0:30:00")
-            .resolve(&time_zone(), 1)
+            .resolve(&time_zone(), &test_source(), 2)
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(local_of(rows[0].session.conn_start), dt("2026-03-08 03:30"));
@@ -773,7 +796,7 @@ mod test {
     #[test]
     fn fold_spanning_session_has_true_elapsed_duration() {
         let rows = session("2026-11-01 00:30", "2026-11-01 02:30", "3:00:00")
-            .resolve(&time_zone(), 1)
+            .resolve(&time_zone(), &test_source(), 2)
             .unwrap();
         let row = &rows[0];
         let elapsed = row
@@ -799,7 +822,7 @@ mod test {
         for energy in [5.0, 0.0] {
             let mut s = session("2026-06-01 10:00", "2026-06-01 10:00", "0:00:00");
             s.energy_use = energy;
-            let rows = s.resolve(&time_zone(), 7).unwrap();
+            let rows = s.resolve(&time_zone(), &test_source(), 7).unwrap();
             assert_eq!(
                 timing_anomalies(&rows[0].session.anomalies),
                 vec![AnomalyKind::ZeroActiveChargeTime],
@@ -822,11 +845,12 @@ mod test {
     fn inconsistent_duration_is_reported() {
         let kinds = |start, end, conn| {
             let all = session(start, end, conn)
-                .resolve(&time_zone(), 1)
+                .resolve(&time_zone(), &test_source(), 2)
                 .unwrap()
                 .swap_remove(0)
                 .session
-                .anomalies;
+                .anomalies
+                .clone();
             timing_anomalies(&all)
         };
         let bad = vec![AnomalyKind::InconsistentDuration];
@@ -899,10 +923,10 @@ S3,2026-06-03 09:00,2026-06-03 09:00,0:00:00,0:00:00,4.2
 
         // Beside the CSV, under its own suffix, so it cannot collide with the workbook's logs.
         assert_eq!(
-            report.log_path,
+            report.log_paths[0],
             dir.join("Session_Report_Test.csv.read.log")
         );
-        let log = fs::read_to_string(&report.log_path).unwrap();
+        let log = fs::read_to_string(&report.log_paths[0]).unwrap();
         assert!(
             log.contains("InconsistentDuration") || log.contains("contradict"),
             "{log}"

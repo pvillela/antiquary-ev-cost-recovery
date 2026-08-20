@@ -14,12 +14,13 @@ use crate::time::{
 };
 
 use super::csv::{self, SessionRows};
-use super::{Anomaly, AnomalyKind, RunLog, Session, SessionReport};
+use super::{Anomaly, AnomalyKind, MergedSessions, RSession, RunLog, Session, SessionReport};
 use jiff::Timestamp;
 use std::{
     collections::{BTreeMap, HashMap},
     error::Error,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Workbook, Worksheet};
 
@@ -548,7 +549,9 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
     // Counted rather than logged per row. Every formula column of a freshly written workbook is
     // unevaluated, so a line each would bury the real discrepancies under one per row per column.
     let mut unevaluated: BTreeMap<&'static str, usize> = BTreeMap::new();
-    let mut sessions = Vec::new();
+    // One allocation for the workbook, shared by every session read from it.
+    let source = Rc::new(path.to_path_buf());
+    let mut sessions: Vec<RSession> = Vec::new();
     for row in 2..=sheet.highest_row() {
         let id = sheet
             .value((headers["Charge_Session_ID"], row))
@@ -562,8 +565,9 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
         let charge_time = duration_of_serial(number(sheet, &headers, "Active_Charge_Time", row)?);
         let anomalies = anomaly_kinds(sheet, &headers, row, path)?;
         let session = Session {
-            id,
+            path: source.clone(),
             row: row as usize,
+            id,
             conn_start: instant_of_serial(number(sheet, &headers, "conn_start_utc", row)?)?,
             conn_end: instant_of_serial(number(sheet, &headers, "conn_end_utc", row)?)?,
             conn_duration: duration_of_serial(number(sheet, &headers, "Conn_Duration", row)?),
@@ -574,7 +578,7 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
 
         check_stored_columns(sheet, &headers, row, &session, &mut log, &mut unevaluated);
 
-        sessions.push(session);
+        sessions.push(Rc::new(session));
     }
 
     for (name, count) in &unevaluated {
@@ -587,7 +591,12 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
     }
     let log_path = log.write_beside(path, "xlsx.read", "Read back from workbook")?;
 
-    Ok(SessionReport::new(sessions, log_path))
+    // Through the merge for the same reason `csv::session_list` is: it is where a shared
+    // `Charge_Session_ID` is noticed, and one file can carry one as readily as two can.
+    Ok(SessionReport::new(
+        MergedSessions::merge_sessions(vec![sessions]),
+        vec![log_path],
+    ))
 }
 
 /// Compares the workbook's stored derived columns against what the [`Session`] methods recompute,
@@ -992,13 +1001,14 @@ S2,2026-11-02 08:00,2026-11-02 09:00,1:00:00,0:59:00,5.9
         fs::remove_dir_all(xlsx.parent().unwrap()).ok();
     }
 
-    /// The two readers describe the same sessions, down to the row numbers.
+    /// The two readers describe the same sessions, and number them by the file each one read.
     ///
-    /// They share a parse, so agreeing on the timestamps is guaranteed by construction. What is
-    /// not is the numbering: [`csv::session_list`] never sees a sheet, and a duplicated record
-    /// pushes every later session one row further down than its CSV position. The fixture puts a
-    /// duplication first so that every row after it is displaced, and one session of each bucket
-    /// after that.
+    /// They share a parse, so agreeing on the sessions and their buckets is guaranteed by
+    /// construction. The row numbers are the one thing they are *not* meant to agree on:
+    /// [`Session::row`] is a row of [`Session::path`], and the two readers have different files in
+    /// front of them. A resolved DST fold is where that shows — it is one CSV record and two
+    /// workbook rows — so the fixture puts a duplication first and every later row is displaced by
+    /// it, with one session of each bucket after that.
     #[test]
     fn the_two_readers_agree() {
         const CSV: &str = "\
@@ -1017,30 +1027,36 @@ S4,2026-06-03 09:00,2026-06-03 09:00,0:00:00,0:00:00,4.2
         let from_xlsx = session_list(&xlsx).unwrap();
 
         let ids = |r: &SessionReport| {
-            let bucket = |b: &[Session]| {
-                b.iter()
-                    .map(|s| (s.id.clone(), s.row))
-                    .collect::<Vec<(String, usize)>>()
-            };
+            let bucket = |b: &[RSession]| b.iter().map(|s| s.id.clone()).collect::<Vec<String>>();
             (bucket(&r.sessions), bucket(&r.spikes), bucket(&r.excluded))
         };
         assert_eq!(ids(&from_csv), ids(&from_xlsx));
 
-        // And the rows are the sheet's, so `S2` is on workbook row 4 rather than at its CSV
-        // position of 2 — the duplication of `S1` above it took two rows.
-        assert_eq!(
-            from_csv.sessions.iter().map(|s| s.row).collect::<Vec<_>>(),
-            [2, 3, 4]
-        );
-        assert_eq!(from_csv.excluded[0].row, 5);
-        assert_eq!(from_csv.spikes[0].row, 6);
+        let rows = |r: &SessionReport| {
+            let bucket = |b: &[RSession]| b.iter().map(|s| s.row).collect::<Vec<usize>>();
+            (bucket(&r.sessions), bucket(&r.spikes), bucket(&r.excluded))
+        };
+
+        // Read from the CSV, the rows are the CSV's. Both halves of the `S1` fold came from record
+        // 2 and both say so; `S2` follows on 3, undisplaced.
+        assert_eq!(rows(&from_csv), (vec![2, 2, 3], vec![5], vec![4]));
+
+        // Read from the workbook, the rows are the sheet's. The fold occupies two of them, so `S2`
+        // sits on row 4 rather than 3, and everything after it is pushed down to match.
+        assert_eq!(rows(&from_xlsx), (vec![2, 3, 4], vec![6], vec![5]));
+
+        // Both readers name the file they read, which is what makes a row number resolvable.
+        assert!(from_csv.sessions.iter().all(|s| *s.path == csv_path));
+        assert!(from_xlsx.sessions.iter().all(|s| *s.path == xlsx));
 
         fs::remove_dir_all(&dir).ok();
     }
 
-    /// The two anomaly items in the conversion report carry *workbook* rows, not CSV rows.
+    /// The conversion report's anomalies carry rows of the file they were read from, which for a
+    /// conversion is the CSV. The two halves of a resolved DST fold therefore share a row number:
+    /// they came from one record, and the `-EDT`/`-EST` suffix on the id is what tells them apart.
     #[test]
-    fn conversion_report_anomalies_carry_excel_rows() {
+    fn conversion_report_anomalies_carry_source_rows() {
         const CSV: &str = "\
 Charge_Session_ID,Conn_DateTime_Start,Conn_DateTime_End,Conn_Duration,Active_Charge_Time,Energy_Use
 S1,2026-11-01 01:10,2026-11-01 01:40,0:30:00,0:29:00,2.9
@@ -1055,15 +1071,16 @@ S2,2026-11-02 08:00,2026-11-02 08:00,0:00:00,0:00:00,4.2
             .anomalies
             .iter()
             .filter(|a| a.kind != AnomalyKind::ExcessiveAvgKw)
-            .map(|a| (a.row, a.session_id.as_str(), a.kind))
+            .map(|a| (a.session.row, a.session.id.as_str(), a.kind))
             .collect();
         assert_eq!(
             items,
             [
                 (2, "S1-EDT", AnomalyKind::DstAmbiguousDuplicated),
-                (3, "S1-EST", AnomalyKind::DstAmbiguousDuplicated),
-                // CSV row 2, but workbook row 4: the duplication above pushed it down.
-                (4, "S2", AnomalyKind::ZeroActiveChargeTime),
+                (2, "S1-EST", AnomalyKind::DstAmbiguousDuplicated),
+                // CSV row 3. It sits on workbook row 4, the duplication above having pushed it
+                // down, but the workbook row is the workbook's business and not this report's.
+                (3, "S2", AnomalyKind::ZeroActiveChargeTime),
             ]
         );
 
@@ -1172,7 +1189,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
             "the stored value overruled the recomputed one"
         );
 
-        let log = fs::read_to_string(&report.log_path).unwrap();
+        let log = fs::read_to_string(&report.log_paths[0]).unwrap();
         assert!(
             log.contains("adj_conn_end_utc"),
             "the discrepancy was not logged:\n{log}"
@@ -1203,7 +1220,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
         // Beside the workbook, under its own suffix, so it cannot collide with the convert log or
         // with the CSV reader's.
         assert_eq!(
-            report.log_path,
+            report.log_paths[0],
             xlsx.with_file_name("Session_Report_Test.xlsx.read.log")
         );
 
