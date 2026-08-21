@@ -1,4 +1,13 @@
-//! The EV share of the two hours a billing period peaked in.
+//! The EV share of the hours a billing period peaked in, and what that share cost.
+//!
+//! [`fn@peak_power`] answers the first: the site's maximum demand happened in some hour, and the
+//! chargers account for part of it. [`peak_power_cost`] prices that share against the bill, over
+//! the three hours the three demand-priced delivery lines are each charged on.
+//!
+//! One module rather than two, because the cost is the estimate priced. Both read the same meter
+//! figures over the same intervals, both build one [`SessionReport`] from the same records by the
+//! same rules, and both refuse a period the meter data does not cover. Splitting them would leave
+//! two copies of that agreement to keep.
 
 use crate::api::pure::billing_period::{NotABillingPeriodEnding, billing_period_dates};
 use crate::green_button::{METER_INTERVAL, Peak};
