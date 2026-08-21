@@ -82,16 +82,6 @@ pub enum PeakPowerError {
         period_ending: Date,
         unit: &'static str,
     },
-
-    /// The bill supplied covers some other billing period. Raised by [`peak_power_cost`] alone;
-    /// [`fn@peak_power`] reads no bill and so cannot produce it.
-    ///
-    /// Checked because every figure in a [`DeliveryCost`] is a proportion of a bill line, and a
-    /// bill from the wrong month would yield a plausible-looking number with nothing behind it.
-    BillIsForAnotherPeriod {
-        period_ending: Date,
-        bill_period_end: Date,
-    },
 }
 
 impl From<NotABillingPeriodEnding> for PeakPowerError {
@@ -111,14 +101,6 @@ impl fmt::Display for PeakPowerError {
                 f,
                 "the billing period ending {period_ending} carries no {unit} reading, so it has no \
                  {unit} maximum to estimate against"
-            ),
-            Self::BillIsForAnotherPeriod {
-                period_ending,
-                bill_period_end,
-            } => write!(
-                f,
-                "the bill covers the billing period ending {bill_period_end}, not the one ending \
-                 {period_ending}"
             ),
         }
     }
@@ -178,8 +160,15 @@ const BILLED_DAYS_PER_MONTH: f64 = 30.0;
 ///
 /// # Arguments
 ///
-/// As [`fn@peak_power`], plus `bill` — the Toronto Hydro bill for that same period, which supplies
-/// every rate and every day count used. Nothing is assumed about the tariff.
+/// - `bill` - the Toronto Hydro bill for the period, which supplies every rate and every day count
+///   used. Nothing is assumed about the tariff.
+/// - `gb_period_values` - that period's figures, read from the meter export.
+/// - `sessions` - every session from every report covering the period, as [`fn@peak_power`] takes
+///   them.
+///
+/// The period is not a parameter. `bill` states which one it covers, so passing it alongside would
+/// let a caller name two different periods in one call; [`HydroBill::period_end_date`] is the one
+/// answer, and every figure here is a proportion of a line on that same bill.
 ///
 /// The session handling is [`fn@peak_power`]'s exactly, duplicates and all: both calls build one
 /// [`SessionReport`] from the same records by the same rules, so a cost and the estimates it rests
@@ -187,23 +176,19 @@ const BILLED_DAYS_PER_MONTH: f64 = 30.0;
 ///
 /// # Errors
 ///
-/// [`PeakPowerError::NotABillingPeriodEnding`] if `billing_period_ending` does not label a period,
-/// [`PeakPowerError::NoPeak`] if the period carries no reading in one of the three series, and
-/// [`PeakPowerError::BillIsForAnotherPeriod`] if `bill` closes on some other date.
+/// [`PeakPowerError::NotABillingPeriodEnding`] if the bill's meter reading period does not close on
+/// [`BILL_END_DAY`](crate::hydro_bills::BILL_END_DAY), and [`PeakPowerError::NoPeak`] if the period
+/// carries no reading in one of the three series.
 pub fn peak_power_cost(
-    billing_period_ending: Date,
+    bill: &HydroBill,
     gb_period_values: PeriodValues,
     sessions: &[RSession],
-    bill: &HydroBill,
 ) -> Result<DeliveryCost, PeakPowerError> {
-    // Re-checked rather than assumed, as in `peak_power`: this is an entry point in its own right.
+    // An off-cycle bill -- one whose meter reading period does not close a billing period -- is
+    // refused rather than estimated from. Its demand figures are levied over a window this does not
+    // model, so the proration below would be arithmetic on two different bases.
+    let billing_period_ending = bill.period_end_date();
     billing_period_dates(billing_period_ending)?;
-    if bill.period_end_date() != billing_period_ending {
-        return Err(PeakPowerError::BillIsForAnotherPeriod {
-            period_ending: billing_period_ending,
-            bill_period_end: bill.period_end_date(),
-        });
-    }
 
     let (sessions_report, sources) = one_report(sessions);
     let estimates = |peak, unit| {
@@ -532,15 +517,14 @@ mod test {
         }
     }
 
-    /// The cost for the fixture period, sessions and bill.
+    /// The cost for the fixture bill, sessions and meter figures.
     fn cost() -> DeliveryCost {
         peak_power_cost(
-            period_ending(),
+            &bill(),
             period_values_with_nop(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR), Some(NOP_PEAK_HOUR)),
             &two_reports(),
-            &bill(),
         )
-        .expect("the period has all three maxima and the bill is its own")
+        .expect("the bill closes a billing period and it has all three maxima")
     }
 
     /// Money, to the cent.
@@ -847,10 +831,9 @@ mod test {
     #[test]
     fn a_period_missing_the_7_7_maximum_has_no_cost() {
         let err = peak_power_cost(
-            period_ending(),
+            &bill(),
             period_values(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR)),
             &two_reports(),
-            &bill(),
         )
         .err()
         .expect("the period carries no 7-7 maximum");
@@ -863,29 +846,30 @@ mod test {
     /// Every figure is a proportion of a bill line, so a bill from another month would give a
     /// plausible number resting on nothing.
     #[test]
-    fn a_bill_for_another_period_is_refused() {
-        let mut wrong_month = bill();
-        wrong_month.meter_reading_period_from = date(2026, 4, 23);
-        wrong_month.meter_reading_period_to = date(2026, 5, 23);
+    fn the_cost_is_for_the_period_the_bill_covers() {
+        // The same sessions and the same meter figures, against a bill for the month before. The
+        // period is not a parameter, so this is a different call and not a mismatch: it prices May's
+        // rates over the hours June peaked in, and says so.
+        let mut may = bill();
+        may.meter_reading_period_from = date(2026, 4, 23);
+        may.meter_reading_period_to = date(2026, 5, 23);
+        may.number_of_days = 30;
+        may.distribution_charges = 775.0;
 
-        let err = peak_power_cost(
-            period_ending(),
+        let june = cost();
+        let cost = peak_power_cost(
+            &may,
             period_values_with_nop(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR), Some(NOP_PEAK_HOUR)),
             &two_reports(),
-            &wrong_month,
         )
-        .err()
-        .expect("the bill closes a month early");
-        assert!(
-            matches!(
-                err,
-                PeakPowerError::BillIsForAnotherPeriod {
-                    bill_period_end,
-                    ..
-                } if bill_period_end == date(2026, 5, 23)
-            ),
-            "{err}"
-        );
+        .expect("May closes a billing period too");
+
+        assert_eq!(cost.days_in_period, 30);
+        assert!(close(cost.days_adj_factor, 1.0));
+        // The EV demand is the same -- it comes off the meter and the sessions, which did not
+        // change -- and only the money moved, so the bill is the only thing that period selects.
+        assert_eq!(cost.demand_kva, june.demand_kva);
+        assert!(cost.distribution_charges < june.distribution_charges);
     }
 
     /// Reached directly rather than through `io::peak_power`, this still checks its own arguments.
@@ -903,18 +887,18 @@ mod test {
             "{err}"
         );
 
-        // Both entry points check for themselves; neither relies on having been reached through the
-        // other or through `io`.
+        // The cost takes no date, so the same refusal reaches it through the bill: an off-cycle
+        // bill, whose meter reading period does not close on the 23rd, is not something to prorate
+        // to a 30-day month.
+        let mut off_cycle = bill();
+        off_cycle.meter_reading_period_to = date(2026, 6, 30);
         let err = peak_power_cost(
-            date(2026, 6, 30),
+            &off_cycle,
             period_values_with_nop(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR), Some(NOP_PEAK_HOUR)),
             &two_reports(),
-            &bill(),
         )
         .err()
         .expect("30 June does not label a billing period");
-        // Checked before the bill is looked at: the bill is for a period that does exist, and the
-        // date is refused on its own terms rather than as a mismatch with it.
         assert!(
             matches!(err, PeakPowerError::NotABillingPeriodEnding(_)),
             "{err}"
