@@ -729,8 +729,9 @@ pub enum AnomalyKind {
     /// two sessions until something says otherwise.
     ///
     /// Raised symmetrically, on every member of a colliding group. It cannot distinguish a reused
-    /// id from two overlapping reports disagreeing about one session, because from
-    /// [`MergedSessions::merge_sessions`] the two look identical. Both are worth a reader's eye.
+    /// id from two overlapping reports disagreeing about one session: both are records sharing an
+    /// id and differing in their figures, which is all the merge can see. Both are worth a
+    /// reader's eye.
     DuplicateId,
 }
 
@@ -867,17 +868,24 @@ pub struct SessionReport {
     /// that nothing was found or what was. Their contents depend on which reader produced this
     /// report — see their docs.
     ///
-    /// A vector because a report can be the merger of several — see [`SessionReport::merge`] —
-    /// and each source file has a log of its own, written beside it.
+    /// A vector because a report can be built from several files at once — see
+    /// [`SessionReport::from_session_lists`] — and each source file has a log of its own, written
+    /// beside it.
     pub log_paths: Vec<PathBuf>,
 }
 
 impl SessionReport {
-    /// Sorts `sessions` into the three buckets.
+    /// Merges the session lists and sorts what survives into the three buckets.
     ///
-    /// Kept here, and out of both readers, so that a session read from a CSV and the same session
-    /// read back from the workbook written from it cannot land in different buckets.
+    /// One call rather than two because every caller wants both and neither step is useful without
+    /// the other. Merging decides which records are the same session — see
+    /// [`MergedSessions::merge_sessions`], which is also where a shared `Charge_Session_ID` is
+    /// noticed — and bucketing decides what each surviving session is fit for. A caller passing one
+    /// list has nothing to merge across files and gets the flagging alone, which is how a
+    /// single-file read is the same code path as a two-file one.
     ///
+    /// Bucketing is kept here, and out of both readers, so that a session read from a CSV and the
+    /// same session read back from the workbook written from it cannot land in different buckets.
     /// The tests are applied in this order, strongest first:
     ///
     /// 1. Flagged [`AnomalyKind::InconsistentDuration`] — [`SessionReport::excluded`]. Such a
@@ -888,16 +896,14 @@ impl SessionReport {
     /// 3. Everything else — [`SessionReport::sessions`].
     ///
     /// Order within each bucket is the order given, which for both readers is report order.
-    ///
-    /// The anomalies are taken rather than derived: they come from
-    /// [`MergedSessions::merge_sessions`], which is the one place that sees a whole session list at
-    /// once and so the only place that can tell a shared id from a unique one. Deriving them here
-    /// as well would raise each of them twice.
-    pub(crate) fn new(merged: MergedSessions, log_paths: Vec<PathBuf>) -> Self {
+    pub(crate) fn from_session_lists(
+        session_lists: Vec<Vec<RSession>>,
+        log_paths: Vec<PathBuf>,
+    ) -> Self {
         let MergedSessions {
             sessions,
             anomalies,
-        } = merged;
+        } = MergedSessions::merge_sessions(session_lists);
         let mut report = Self {
             sessions: Vec::new(),
             spikes: Vec::new(),
@@ -918,41 +924,6 @@ impl SessionReport {
             }
         }
         report
-    }
-
-    /// Combines reports read from several files into one.
-    ///
-    /// Needed because a billing period straddles two calendar months while a session report covers
-    /// one, so estimating over a period means reading two reports whose coverage may overlap. What
-    /// counts as one session across those two files, and what is merely a reused id, is
-    /// [`MergedSessions::merge_sessions`]'s to decide.
-    ///
-    /// The inputs' own [`SessionReport::anomalies`] are dropped rather than concatenated. They were
-    /// derived from each file in isolation, and detection is re-run over the merged list, so
-    /// carrying them forward would raise every one of them twice.
-    ///
-    /// Bucketing is likewise redone from the merged list rather than concatenating the inputs'
-    /// buckets, so the result is exactly what reading all the files as one would have produced.
-    /// Order within each bucket follows the order the reports were given.
-    pub(crate) fn merge(reports: Vec<SessionReport>) -> Self {
-        let mut log_paths = Vec::new();
-        let mut session_lists = Vec::new();
-        for report in reports {
-            log_paths.extend(report.log_paths);
-            // Every bucket, so a session excluded by one file cannot be silently re-admitted by the
-            // other's copy of it: both copies go through the merge and the survivor is re-bucketed
-            // on its own anomalies.
-            session_lists.push(
-                report
-                    .sessions
-                    .into_iter()
-                    .chain(report.spikes)
-                    .chain(report.excluded)
-                    .collect(),
-            );
-        }
-
-        Self::new(MergedSessions::merge_sessions(session_lists), log_paths)
     }
 }
 

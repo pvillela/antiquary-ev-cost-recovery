@@ -14,7 +14,7 @@ use crate::time::{
 };
 
 use super::csv::{self, SessionRows};
-use super::{Anomaly, AnomalyKind, MergedSessions, RSession, RunLog, Session, SessionReport};
+use super::{Anomaly, AnomalyKind, RSession, RunLog, Session, SessionReport};
 use jiff::Timestamp;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -523,7 +523,8 @@ type SheetHeaders = HashMap<String, u32>;
 ///
 /// Sorting into the three buckets of [`SessionReport`] happens here rather than at conversion time,
 /// because the workbook is meant to be a faithful rendering of the session report. The rules are
-/// [`SessionReport::new`]'s, shared with [`csv::session_list`] so the two readers cannot disagree.
+/// [`SessionReport::from_session_lists`]'s, shared with [`csv::session_list`] so the two readers
+/// cannot disagree.
 ///
 /// `avg_kw` is recomputed here rather than read from the sheet's `avg_kw` column, which
 /// holds a formula whose cached value this crate never writes. For a spike that leaves it infinite
@@ -593,8 +594,8 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
 
     // Through the merge for the same reason `csv::session_list` is: it is where a shared
     // `Charge_Session_ID` is noticed, and one file can carry one as readily as two can.
-    Ok(SessionReport::new(
-        MergedSessions::merge_sessions(vec![sessions]),
+    Ok(SessionReport::from_session_lists(
+        vec![sessions],
         vec![log_path],
     ))
 }

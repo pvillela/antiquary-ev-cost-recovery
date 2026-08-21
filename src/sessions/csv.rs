@@ -22,8 +22,8 @@ use crate::time::{is_on_grid, local_datetime, time_zone, wall_clock_instant};
 
 use super::TIME_GRID_STEP;
 use super::{
-    Anomaly, AnomalyKind, BREAKER_RATING_KW, MergedSessions, RSession, RunLog, Session,
-    SessionReport, duration_is_consistent,
+    Anomaly, AnomalyKind, BREAKER_RATING_KW, RSession, RunLog, Session, SessionReport,
+    duration_is_consistent,
 };
 use jiff::{
     SignedDuration, Timestamp, civil,
@@ -73,7 +73,8 @@ const REQUIRED_HEADERS: &[&str] = &[
 /// `adj_conn_duration`, and the treatment of zero-`Energy_Use` sessions — are specified in
 /// `docs/time/README.md` under "Time zone" and in `docs/sessions/README.md` under "Other".
 ///
-/// Sessions are sorted into the three buckets of [`SessionReport`] by [`SessionReport::new`],
+/// Sessions are sorted into the three buckets of [`SessionReport`] by
+/// [`SessionReport::from_session_lists`],
 /// which carries the rules. Every session in the report reaches one of them; none is dropped.
 ///
 /// A `<stem>.csv.read.log` is written beside the input, holding the anomalies found and the
@@ -91,12 +92,12 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
     let log_path = rows
         .log
         .write_beside(path, "csv.read", "Read from session report")?;
-    // Through the merge even though there is one file: it is the one place that sees a whole
-    // session list at once, and so the only place that can tell a shared `Charge_Session_ID` from a
-    // unique one. A single list has nothing to collapse, so this is detection alone.
+    // One list, so there is nothing to collapse across files -- but it still goes through the
+    // merge, because that is where a shared `Charge_Session_ID` is noticed, and one file can carry
+    // one as readily as two can.
     let sessions: Vec<RSession> = rows.rows.into_iter().map(|row| row.session).collect();
-    Ok(SessionReport::new(
-        MergedSessions::merge_sessions(vec![sessions]),
+    Ok(SessionReport::from_session_lists(
+        vec![sessions],
         vec![log_path],
     ))
 }
