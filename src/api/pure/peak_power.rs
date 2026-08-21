@@ -2,6 +2,7 @@
 
 use crate::api::pure::billing_period::{NotABillingPeriodEnding, billing_period_dates};
 use crate::green_button::{METER_INTERVAL, Peak};
+use crate::hydro_bills::HydroBill;
 use crate::sessions::{IntervalEstimates, SessionReport, estimates_from_report};
 use crate::time::Interval;
 
@@ -19,6 +20,46 @@ use std::path::PathBuf;
 pub struct PowerEstimates {
     pub kw_estimates: IntervalEstimates,
     pub kva_estimates: IntervalEstimates,
+}
+
+/// Breakdown of delivery cost attributable to EV sessions in a billing period.
+pub struct DeliveryCost {
+    /// `'Distribution Charges' / 'Adj. kVA'` from bill.
+    pub blended_distribution_rate: f64,
+    /// `'Transmission Connection Charge' / 'Adj. kW'` from bill.
+    pub blended_connection_rate: f64,
+    /// `'Transmission Network Charge' / 'Adj. Peak kW 7-7'` from bill.
+    pub blended_network_rate: f64,
+
+    /// Mid-point of energy-based bracket of EV kVA from sessions
+    /// for Demand kVA interval of interest.
+    pub demand_kva: f64,
+    /// Mid-point of energy-based bracket of EV kW from sessions
+    /// for Demand kW interval of interest.
+    pub demand_kw: f64,
+    /// Mid-point of energy-based bracket of EV kW from sessions
+    /// for Peak 7-7 kW interval of interest.
+    pub peak_7_7_kw: f64,
+
+    /// Days in billing period.
+    pub days_in_period: u8,
+    /// `days_in_period / 30`
+    pub days_adj_factor: u8,
+
+    /// Distribution charges attributable to EV sessions.
+    pub distribution_charges: f64,
+    /// Transmission Connection Charge attributable to EV sessions.
+    pub connection_charge: f64,
+    /// Transmission Network Charge attributable to EV sessions.
+    pub network_charge: f64,
+
+    /// HST on delivery charges attributable to EV sessions, before OER.
+    pub hst: f64,
+    /// Onario Electricity Rebate
+    pub ontario_electricity_rebate: f64,
+
+    /// Total delivery cost attributable to EV sessions, net of HST and OER.
+    pub delivery_cost: f64,
 }
 
 /// Why a billing period's figures cannot be turned into peak power estimates.
@@ -66,6 +107,16 @@ impl Error for PeakPowerError {
             _ => None,
         }
     }
+}
+
+/// Estimates the net delivery cost attributable to EV charging sessions during a billing period.
+pub fn peak_power_cost(
+    billing_period_ending: Date,
+    gb_period_values: PeriodValues,
+    sessions: &[RSession],
+    bill: &HydroBill,
+) -> Result<DeliveryCost, PeakPowerError> {
+    todo!()
 }
 
 /// Returns peak power estimates for the intervals of interest that maximize kW and kVA in the
