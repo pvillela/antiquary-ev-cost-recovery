@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 // Re-exported rather than merely imported: these name what the functions here return, and a caller
 // should not have to know which module a call delegates to in order to spell that.
 pub use crate::api::error::ApiError;
-pub use crate::api::pure::energy::TouKwh;
+pub use crate::api::pure::energy::{EnergyCost, TouKwh};
 pub use crate::api::pure::peak_power::{DeliveryCost, PowerEstimates};
 
 /// A source file could not be read.
@@ -217,6 +217,51 @@ pub fn energy(
     Ok(pure::energy(billing_period_ending, &sessions)?)
 }
 
+/// Returns the energy cost attributable to EV charging sessions in a billing period.
+///
+/// Reads the bill and the two session reports, and hands them to
+/// [`pure::energy_cost`](fn@super::pure::energy_cost), which states how the figures are arrived at.
+/// Every rate used is the bill's own; nothing here assumes a tariff.
+///
+/// No Green Button XML: consumption is billed by the kilowatt-hour, so the hour the site peaked in
+/// does not bear on it. The meter export is [`peak_power_cost`]'s.
+///
+/// # Arguments
+/// - `bill_pdf` - the Toronto Hydro bill PDF for the period.
+/// - `session_csv1` - Evolute session report covering the left end of the billing period.
+/// - `session_csv2` - Evolute session report covering the right end of the billing period.
+///
+/// There is no `billing_period_ending` argument. The bill states which period it covers, and it is
+/// read first so that the reports are checked against that period rather than against one passed
+/// alongside it, which could only agree with the bill or contradict it.
+///
+/// The two reports must cover the billing period completely between them, checked from their file
+/// names. Which is given first makes no difference; the names say what each holds.
+///
+/// Reading a report writes a `.csv.read.log` beside it, as [`csv::session_list`] always does.
+///
+/// # Errors
+///
+/// See [`ApiError`]. The bill is read before the check that needs a period, so an unreadable bill is
+/// reported ahead of anything the reports might also be wrong about.
+pub fn energy_cost(
+    bill_pdf: &Path,
+    session_csv1: &Path,
+    session_csv2: &Path,
+) -> Result<EnergyCost, ApiError> {
+    // First, because it is what says which period this is about. `energy` can open with the free
+    // name check instead; here that check has nothing to compare against until the bill is in hand.
+    let bill = hydro_bill_from_pdf(bill_pdf).map_err(|cause| ReadError::Bill {
+        path: bill_pdf.to_path_buf(),
+        cause: Box::new(cause),
+    })?;
+
+    pure::check_reports_cover_period(bill.period_end_date(), &[session_csv1, session_csv2])?;
+    let sessions = read_sessions(&[session_csv1, session_csv2])?;
+
+    Ok(pure::energy_cost(&bill, &sessions)?)
+}
+
 /// Every session the named reports hold, in the order the reports are given.
 ///
 /// Flattened rather than kept per file, and deliberately not merged. Which records describe one
@@ -330,5 +375,25 @@ mod test {
             "{err}"
         );
         assert!(err.to_string().contains("2026-05-24"), "{err}");
+    }
+
+    /// The energy cost takes no period either, so the bill is read before the report check, as it
+    /// is for the delivery cost. With every path bad, the bill is still the failure reported.
+    #[test]
+    fn the_energy_cost_reads_the_bill_first_too() {
+        let err = energy_cost(
+            Path::new("nothing.pdf"),
+            // Months that do not cover a period between them, so the report check would fire first
+            // if it could run at all. It cannot: it has no period to check against yet.
+            Path::new("Session_Report_April_1_2026-April_30_2026.csv"),
+            Path::new("Session_Report_June_1_2026-June_30_2026.csv"),
+        )
+        .err()
+        .expect("there is no such bill");
+        assert!(
+            matches!(err, ApiError::Read(ReadError::Bill { .. })),
+            "{err}"
+        );
+        assert!(err.to_string().contains("nothing.pdf"), "{err}");
     }
 }

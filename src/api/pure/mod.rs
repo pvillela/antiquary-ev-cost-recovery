@@ -22,6 +22,6 @@ pub mod energy;
 pub mod peak_power;
 pub mod session_report;
 
-pub use energy::energy;
+pub use energy::{energy, energy_cost};
 pub use peak_power::{peak_power, peak_power_cost};
 pub use session_report::{check_reports_cover_period, report_coverage, reports_cover};
