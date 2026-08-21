@@ -18,9 +18,11 @@ use jiff::civil::Date;
 use std::{error::Error, fmt};
 
 // Re-exported because the two functions here take these and return those, and a caller should not
-// have to know which module they come from in order to spell the call.
+// have to know which module they come from in order to spell the call. `Tou` for the same reason
+// one level down: it is what `EnergyError::NoRate` carries, and matching on that names it.
 pub use crate::hydro_bill::HydroBill;
 pub use crate::session::{RSession, TouKwh};
+pub use crate::time::Tou;
 
 /// EV cost-recovery TOU rates.
 pub struct CostRecoveryRates {
@@ -83,10 +85,7 @@ pub enum EnergyError {
     /// band the site drew nothing in is a band the chargers cannot have drawn anything in either --
     /// so a bill saying otherwise disagrees with the reports, and neither figure can be trusted
     /// over the other.
-    NoRate {
-        period_ending: Date,
-        tou: &'static str,
-    },
+    NoRate { period_ending: Date, tou: Tou },
 }
 
 impl From<NotABillingPeriodEnding> for EnergyError {
@@ -99,11 +98,14 @@ impl fmt::Display for EnergyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotABillingPeriodEnding(e) => e.fmt(f),
-            Self::NoRate { period_ending, tou } => write!(
-                f,
-                "the bill for the billing period ending {period_ending} reports no {tou} \
-                 consumption, so it states no {tou} rate to price the EV share at"
-            ),
+            Self::NoRate { period_ending, tou } => {
+                let band = band_name(*tou);
+                write!(
+                    f,
+                    "the bill for the billing period ending {period_ending} reports no {band} \
+                     consumption, so it states no {band} rate to price the EV share at"
+                )
+            }
         }
     }
 }
@@ -228,9 +230,9 @@ pub fn energy_cost(bill: &HydroBill, sessions: &[RSession]) -> Result<EnergyCost
     };
 
     let rate = |cost, band_kwh, tou| blended_rate(cost, band_kwh, tou, billing_period_ending);
-    let th_on_peak_rate = rate(bill.on_peak_cost, bill.on_peak_kwh, "on-peak")?;
-    let th_mid_peak_rate = rate(bill.mid_peak_cost, bill.mid_peak_kwh, "mid-peak")?;
-    let th_off_peak_rate = rate(bill.off_peak_cost, bill.off_peak_kwh, "off-peak")?;
+    let th_on_peak_rate = rate(bill.on_peak_cost, bill.on_peak_kwh, Tou::OnPeak)?;
+    let th_mid_peak_rate = rate(bill.mid_peak_cost, bill.mid_peak_kwh, Tou::MidPeak)?;
+    let th_off_peak_rate = rate(bill.off_peak_cost, bill.off_peak_kwh, Tou::OffPeak)?;
 
     let on_peak_cost = adjusted_kwh.on_peak * th_on_peak_rate;
     let mid_peak_cost = adjusted_kwh.mid_peak * th_mid_peak_rate;
@@ -272,13 +274,25 @@ pub fn energy_cost(bill: &HydroBill, sessions: &[RSession]) -> Result<EnergyCost
 fn blended_rate(
     cost: f64,
     band_kwh: f64,
-    tou: &'static str,
+    tou: Tou,
     period_ending: Date,
 ) -> Result<f64, EnergyError> {
     if band_kwh == 0.0 {
         return Err(EnergyError::NoRate { period_ending, tou });
     }
     Ok(cost / band_kwh)
+}
+
+/// A band's name as a bill and a reader spell it.
+///
+/// Not [`Tou::as_str`], which is documented as a wire format for workbook column names and spells
+/// these `OnPeak`. This is prose, and goes into a sentence.
+fn band_name(tou: Tou) -> &'static str {
+    match tou {
+        Tou::OnPeak => "on-peak",
+        Tou::MidPeak => "mid-peak",
+        Tou::OffPeak => "off-peak",
+    }
 }
 
 // cargo test --lib -- api::pure::energy::test
@@ -513,15 +527,16 @@ mod test {
         mid.mid_peak_kwh = 0.0;
         off.off_peak_kwh = 0.0;
 
-        for (band, bill) in [("on-peak", on), ("mid-peak", mid), ("off-peak", off)] {
+        for (band, bill) in [(Tou::OnPeak, on), (Tou::MidPeak, mid), (Tou::OffPeak, off)] {
             let err = energy_cost(&bill, &sessions())
                 .err()
                 .unwrap_or_else(|| panic!("the bill reports no {band} consumption"));
             assert!(
-                matches!(&err, EnergyError::NoRate { tou, .. } if *tou == band),
+                matches!(err, EnergyError::NoRate { tou, .. } if tou == band),
                 "{err}"
             );
-            assert!(err.to_string().contains(band), "{err}");
+            // The message names the band in prose, not as the workbook token.
+            assert!(err.to_string().contains(band_name(band)), "{err}");
         }
     }
 
