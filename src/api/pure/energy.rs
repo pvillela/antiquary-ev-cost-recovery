@@ -6,9 +6,13 @@
 
 use crate::{
     hydro_bill::{BILL_END_DAY, BillingPeriod, NotABillingPeriodEnding, billing_period_dates},
-    session::{RSession, SessionReport, TouKwh, tou_kwh},
+    session::{SessionReport, tou_kwh},
     time::Interval,
 };
+
+// Re-exported because `energy` takes one and returns the other, and a caller should not have to
+// know which module they come from in order to spell the call.
+pub use crate::session::{RSession, TouKwh};
 use jiff::civil::Date;
 use std::error::Error;
 use std::fmt;

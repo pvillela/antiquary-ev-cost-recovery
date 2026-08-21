@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 // Re-exported rather than merely imported: these name what the functions here return, and a caller
 // should not have to know which module a call delegates to in order to spell that.
 pub use crate::api::error::ApiError;
+pub use crate::api::pure::energy::TouKwh;
 pub use crate::api::pure::peak_power::{DeliveryCost, PowerEstimates};
 
 /// A source file could not be read.
@@ -183,6 +184,39 @@ pub fn peak_power_cost(
     Ok(pure::peak_power_cost(&bill, gb_period_values, &sessions)?)
 }
 
+/// Returns the energy attributable to EV charging sessions in a billing period, split by
+/// time-of-use period.
+///
+/// Reads the two session reports and hands them to [`pure::energy`](fn@super::pure::energy), which
+/// states how a session's energy is divided. No meter export and no bill: consumption is billed by
+/// the kilowatt-hour, so neither the hour the site peaked in nor any rate on the bill bears on it.
+///
+/// # Arguments
+/// - `billing_period_ending` - the billing period, named by the date it closes on. Must be
+///   [`BILL_END_DAY`] of its month.
+/// - `session_csv1` - Evolute session report covering the left end of the billing period.
+/// - `session_csv2` - Evolute session report covering the right end of the billing period.
+///
+/// The two reports must cover the billing period completely between them, which is checked from
+/// their file names before anything is read. That check matters more here than to a peak estimate:
+/// [`pure::energy`](fn@super::pure::energy) sums whatever it is given, so a month's report missing
+/// from the call yields a total that is simply too low, with nothing in the figures to say so.
+///
+/// Reading a report writes a `.csv.read.log` beside it, as [`csv::session_list`] always does.
+///
+/// # Errors
+///
+/// See [`ApiError`]. Nothing is read until the file names have been checked against the period.
+pub fn energy(
+    billing_period_ending: Date,
+    session_csv1: &Path,
+    session_csv2: &Path,
+) -> Result<TouKwh, ApiError> {
+    pure::check_reports_cover_period(billing_period_ending, &[session_csv1, session_csv2])?;
+    let sessions = read_sessions(&[session_csv1, session_csv2])?;
+    Ok(pure::energy(billing_period_ending, &sessions)?)
+}
+
 /// Every session the named reports hold, in the order the reports are given.
 ///
 /// Flattened rather than kept per file, and deliberately not merged. Which records describe one
@@ -275,5 +309,26 @@ mod test {
         );
         // Named once, by the reader, as every other file in this module is.
         assert!(err.to_string().contains("nothing.pdf"), "{err}");
+    }
+
+    /// The energy total is a sum over whatever it is given, so a month missing from the call comes
+    /// back as a figure that is simply too low. The names are what catch it, before either file is
+    /// opened.
+    #[test]
+    fn energy_refuses_reports_that_do_not_cover_the_period() {
+        let err = energy(
+            date(2026, 6, 23),
+            Path::new("Session_Report_April_1_2026-April_30_2026.csv"),
+            Path::new("Session_Report_June_1_2026-June_30_2026.csv"),
+        )
+        .expect_err("April and June do not cover a period starting 24 May");
+        assert!(
+            matches!(
+                err,
+                ApiError::Coverage(CoverageError::PeriodNotCovered { .. })
+            ),
+            "{err}"
+        );
+        assert!(err.to_string().contains("2026-05-24"), "{err}");
     }
 }
