@@ -7,17 +7,17 @@
 
 use crate::api::pure;
 use crate::green_button::period_values_xml;
-use crate::hydro_bills::BILL_END_DAY;
+use crate::hydro_bills::{BILL_END_DAY, hydro_bill_from_pdf};
 use crate::sessions::{RSession, csv};
 use jiff::civil::Date;
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-// Re-exported rather than merely imported: both name what `peak_power` returns, and a caller
-// should not have to know which module the call delegates to in order to spell that.
+// Re-exported rather than merely imported: these name what the functions here return, and a caller
+// should not have to know which module a call delegates to in order to spell that.
 pub use crate::api::error::ApiError;
-pub use crate::api::pure::peak_power::PowerEstimates;
+pub use crate::api::pure::peak_power::{DeliveryCost, PowerEstimates};
 
 /// A source file could not be read.
 ///
@@ -41,12 +41,24 @@ pub enum ReadError {
         path: PathBuf,
         cause: Box<dyn Error>,
     },
+
+    /// A Toronto Hydro bill PDF could not be read, or is not laid out the way one is read.
+    ///
+    /// [`BillError::is_layout`](crate::hydro_bills::BillError::is_layout) tells those two apart,
+    /// and `cause` downcasts to [`BillError`](crate::hydro_bills::BillError) for a caller that
+    /// wants to ask.
+    Bill {
+        path: PathBuf,
+        cause: Box<dyn Error>,
+    },
 }
 
 impl fmt::Display for ReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::GreenButton { cause, .. } | Self::SessionReport { cause, .. } => cause.fmt(f),
+            Self::GreenButton { cause, .. }
+            | Self::SessionReport { cause, .. }
+            | Self::Bill { cause, .. } => cause.fmt(f),
         }
     }
 }
@@ -54,9 +66,9 @@ impl fmt::Display for ReadError {
 impl Error for ReadError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::GreenButton { cause, .. } | Self::SessionReport { cause, .. } => {
-                Some(cause.as_ref())
-            }
+            Self::GreenButton { cause, .. }
+            | Self::SessionReport { cause, .. }
+            | Self::Bill { cause, .. } => Some(cause.as_ref()),
         }
     }
 }
@@ -111,6 +123,64 @@ pub fn peak_power(
         gb_period_values,
         &sessions,
     )?)
+}
+
+/// Returns the delivery cost attributable to EV charging sessions in a billing period.
+///
+/// Reads the bill, the meter export and the two session reports, and hands them to
+/// [`pure::peak_power_cost`](fn@super::pure::peak_power_cost), which states how the figures are
+/// arrived at. Every rate used is the bill's own; nothing here assumes a tariff.
+///
+/// # Arguments
+/// - `bill_pdf` - the Toronto Hydro bill PDF for the period.
+/// - `gb_xml` - source Green Button XML file covering the billing period.
+/// - `session_csv1` - Evolute session report covering the left end of the billing period.
+/// - `session_csv2` - Evolute session report covering the right end of the billing period.
+///
+/// There is no `billing_period_ending` argument. The bill states which period it covers, and it is
+/// read first so that every other file is fetched for that period — the meter export selected by
+/// it, and the reports checked against it. A period passed alongside could only agree with the bill
+/// or contradict it, and [`pure::peak_power_cost`](fn@super::pure::peak_power_cost) drops it for
+/// the same reason.
+///
+/// The two reports must cover the billing period completely between them, checked from their file
+/// names. Which is given first makes no difference; the names say what each holds.
+///
+/// Reading a report writes a `.csv.read.log` beside it, as [`csv::session_list`] always does.
+///
+/// # Errors
+///
+/// See [`ApiError`]. The bill is read before the checks that need a period, so an unreadable bill
+/// is reported ahead of anything the reports or the export might also be wrong about.
+pub fn peak_power_cost(
+    bill_pdf: &Path,
+    gb_xml: &Path,
+    session_csv1: &Path,
+    session_csv2: &Path,
+) -> Result<DeliveryCost, ApiError> {
+    // First, because it is what says which period this is about. `peak_power` can open with the
+    // free name check instead; here that check has nothing to compare against until the bill is in
+    // hand.
+    let bill = hydro_bill_from_pdf(bill_pdf).map_err(|cause| ReadError::Bill {
+        path: bill_pdf.to_path_buf(),
+        cause: Box::new(cause),
+    })?;
+    let billing_period_ending = bill.period_end_date();
+
+    // Still ahead of both parses: it reads the two file *names*, so the wrong month is caught
+    // before a year of meter readings is.
+    pure::check_reports_cover_period(billing_period_ending, &[session_csv1, session_csv2])?;
+
+    let gb_period_values =
+        period_values_xml(gb_xml, billing_period_ending, BILL_END_DAY).map_err(|cause| {
+            ReadError::GreenButton {
+                path: gb_xml.to_path_buf(),
+                cause,
+            }
+        })?;
+    let sessions = read_sessions(&[session_csv1, session_csv2])?;
+
+    Ok(pure::peak_power_cost(&bill, gb_period_values, &sessions)?)
 }
 
 /// Every session the named reports hold, in the order the reports are given.
@@ -183,5 +253,27 @@ mod test {
             "{err}"
         );
         assert!(err.to_string().contains("2026-05-24"), "{err}");
+    }
+
+    /// The cost takes no period, so the bill is what supplies one and is read before anything that
+    /// needs it. With every path bad, the bill is still the failure reported.
+    #[test]
+    fn the_bill_is_read_first_because_it_is_what_names_the_period() {
+        let err = peak_power_cost(
+            Path::new("nothing.pdf"),
+            Path::new("nothing.XML"),
+            // Months that do not cover a period between them, so the report check would fire
+            // first if it could run at all. It cannot: it has no period to check against yet.
+            Path::new("Session_Report_April_1_2026-April_30_2026.csv"),
+            Path::new("Session_Report_June_1_2026-June_30_2026.csv"),
+        )
+        .err()
+        .expect("there is no such bill");
+        assert!(
+            matches!(err, ApiError::Read(ReadError::Bill { .. })),
+            "{err}"
+        );
+        // Named once, by the reader, as every other file in this module is.
+        assert!(err.to_string().contains("nothing.pdf"), "{err}");
     }
 }
