@@ -155,6 +155,12 @@ const COLUMNS: &[(&str, Source)] = &[
 /// Per-row judgement calls do not abort the conversion; they are collected in
 /// [`ConversionReport::anomalies`].
 pub fn session_csv_to_xlsx(path: &Path) -> Result<ConversionReport, Box<dyn Error>> {
+    // The path, once, for every way this can fail. See `csv::session_list` for why it is done here
+    // rather than at each site.
+    convert_session_csv(path).map_err(|e| format!("{}: {e}", path.display()).into())
+}
+
+fn convert_session_csv(path: &Path) -> Result<ConversionReport, Box<dyn Error>> {
     let rows = csv::session_rows(path)?;
 
     let output_path = path.with_extension("xlsx");
@@ -542,9 +548,15 @@ type SheetHeaders = HashMap<String, u32>;
 /// full is one whose peak numbers cannot be trusted, so no row is skipped quietly.
 /// Rows with no `Charge_Session_ID` at all are treated as trailing blanks and ignored.
 pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
+    // The path, once, for every way this can fail. See `csv::session_list` for why it is done here
+    // rather than at each site.
+    read_session_list(path).map_err(|e| format!("{}: {e}", path.display()).into())
+}
+
+fn read_session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
     let book = umya_spreadsheet::reader::xlsx::read(path)?;
     let sheet = book.sheet(0)?;
-    let headers = sheet_headers(sheet, path)?;
+    let headers = sheet_headers(sheet)?;
 
     let mut log = RunLog::new();
     // Counted rather than logged per row. Every formula column of a freshly written workbook is
@@ -564,7 +576,7 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
 
         let energy_use = number(sheet, &headers, "Energy_Use", row)?;
         let charge_time = duration_of_serial(number(sheet, &headers, "Active_Charge_Time", row)?);
-        let anomalies = anomaly_kinds(sheet, &headers, row, path)?;
+        let anomalies = anomaly_kinds(sheet, &headers, row)?;
         let session = Session {
             path: source.clone(),
             row: row as usize,
@@ -691,7 +703,6 @@ fn anomaly_kinds(
     sheet: &Worksheet,
     headers: &SheetHeaders,
     row: u32,
-    path: &Path,
 ) -> Result<Vec<AnomalyKind>, Box<dyn Error>> {
     sheet
         .value((headers["anomalies"], row))
@@ -700,17 +711,13 @@ fn anomaly_kinds(
         .filter(|token| !token.is_empty())
         .map(|token| {
             AnomalyKind::from_token(token).ok_or_else(|| -> Box<dyn Error> {
-                format!(
-                    "{}: row {row}, column `anomalies`: unknown anomaly {token:?}",
-                    path.display()
-                )
-                .into()
+                format!("row {row}, column `anomalies`: unknown anomaly {token:?}").into()
             })
         })
         .collect()
 }
 
-fn sheet_headers(sheet: &Worksheet, path: &Path) -> Result<SheetHeaders, Box<dyn Error>> {
+fn sheet_headers(sheet: &Worksheet) -> Result<SheetHeaders, Box<dyn Error>> {
     let mut headers = SheetHeaders::new();
     for col in 1..=sheet.highest_column() {
         let name = sheet.value((col, 1)).trim().to_owned();
@@ -722,7 +729,7 @@ fn sheet_headers(sheet: &Worksheet, path: &Path) -> Result<SheetHeaders, Box<dyn
 
     for required in REQUIRED_SHEET_HEADERS {
         if !headers.contains_key(*required) {
-            return Err(format!("{}: missing required column `{required}`", path.display()).into());
+            return Err(format!("missing required column `{required}`").into());
         }
     }
     Ok(headers)
@@ -1167,7 +1174,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
         let mut book = umya_spreadsheet::reader::xlsx::read(&xlsx).unwrap();
         let expected = {
             let sheet = book.sheet(0).unwrap();
-            let headers = sheet_headers(sheet, &xlsx).unwrap();
+            let headers = sheet_headers(sheet).unwrap();
             let col = headers["adj_conn_end_utc"];
             let stored: f64 = sheet.value((col, 2)).parse().unwrap();
             let moved = stored + 1.0 / 24.0;

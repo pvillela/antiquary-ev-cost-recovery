@@ -88,6 +88,15 @@ const REQUIRED_HEADERS: &[&str] = &[
 /// parse. Per-row judgement calls do not abort the read; they are carried on each
 /// [`Session::anomalies`] and summarised in the log.
 pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
+    // Every error out of this function names the file it concerns, and does so in one place rather
+    // than at each site that raises one. Some underlying errors carry the path and some do not --
+    // the `csv` crate's do not, a per-row parse failure knows only its row -- so a caller could
+    // rely on neither. It can now: the path is here, once, and a caller holding it should not add
+    // it again.
+    read_session_list(path).map_err(|e| format!("{}: {e}", path.display()).into())
+}
+
+fn read_session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
     let rows = session_rows(path)?;
     let log_path = rows
         .log
@@ -237,14 +246,9 @@ fn note_off_grid_rows(rows: &[Row], log: &mut RunLog) {
 type Headers = HashMap<String, usize>;
 
 fn read_csv(path: &Path) -> Result<(Headers, Vec<::csv::StringRecord>), Box<dyn Error>> {
-    // The `csv` crate's errors do not name the file -- a missing report reads as a bare "No such
-    // file or directory" -- so the path is added here. Every error out of this module names the
-    // file it concerns, which is why a caller holding the path should not add it again.
-    let named = |e: ::csv::Error| format!("{}: {e}", path.display());
-    let mut reader = ::csv::Reader::from_path(path).map_err(named)?;
+    let mut reader = ::csv::Reader::from_path(path)?;
     let headers: Headers = reader
-        .headers()
-        .map_err(named)?
+        .headers()?
         .iter()
         .enumerate()
         .map(|(i, h)| (h.trim().to_owned(), i))
@@ -252,7 +256,7 @@ fn read_csv(path: &Path) -> Result<(Headers, Vec<::csv::StringRecord>), Box<dyn 
 
     for required in REQUIRED_HEADERS {
         if !headers.contains_key(*required) {
-            return Err(format!("{}: missing required column `{required}`", path.display()).into());
+            return Err(format!("missing required column `{required}`").into());
         }
     }
 

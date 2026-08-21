@@ -80,8 +80,10 @@ fn main() -> ExitCode {
             print!("{report}");
             ExitCode::SUCCESS
         }
+        // No path prefix: `interval_estimates` reads the workbook through
+        // `sessions::excel::session_list`, which names the file in every error it returns.
         Err(e) => {
-            eprintln!("{}: {e}", path.display());
+            eprintln!("{e}");
             ExitCode::FAILURE
         }
     }

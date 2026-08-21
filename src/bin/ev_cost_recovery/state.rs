@@ -308,7 +308,8 @@ impl EstimateState {
                     report,
                 });
             }
-            Err(e) => self.error = Some(format!("{}: {e}", workbook.path.display())),
+            // No path prefix: the workbook reader names the file in every error it returns.
+            Err(e) => self.error = Some(e.to_string()),
         }
     }
 

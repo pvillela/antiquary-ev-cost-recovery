@@ -36,8 +36,9 @@ fn main() -> ExitCode {
                     eprintln!("{}: {anomaly}", path.display());
                 }
             }
+            // No path prefix: `session_csv_to_xlsx` names the file in every error it returns.
             Err(e) => {
-                eprintln!("{}: {e}", path.display());
+                eprintln!("{e}");
                 failed = true;
             }
         }
