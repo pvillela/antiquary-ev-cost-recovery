@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use crate::{
     session::Session,
     time::{Interval, Tou, tou_partition},
@@ -16,7 +18,7 @@ impl TouKwh {
     }
 }
 
-pub fn tou_kwh(time_range: Interval, sessions: &[Session]) -> TouKwh {
+pub fn tou_kwh(time_range: Interval, sessions: &[impl Deref<Target = Session>]) -> TouKwh {
     let mut on_peak_kwh = 0.0;
     let mut mid_peak_kwh = 0.0;
     let mut off_peak_kwh = 0.0;

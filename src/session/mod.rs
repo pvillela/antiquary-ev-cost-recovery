@@ -2,7 +2,6 @@ mod common;
 pub use common::*;
 
 mod energy;
-#[allow(unused)]
 pub use energy::*;
 
 pub mod csv;
