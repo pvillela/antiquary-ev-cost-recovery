@@ -5,17 +5,10 @@
 //! the feed does not reach that period rather than handed nothing. This module is that call.
 
 use crate::green_button::{PeriodValues, parse, period_values};
+use crate::hydro_bills::MAX_BILL_END_DAY;
 use crate::time::local_date;
 use jiff::civil::Date;
 use std::{error::Error, path::Path};
-
-/// The largest day of the month a billing period may close on.
-///
-/// A period starts the day *after* it closes, in the previous month — see
-/// [`bill_start_day`](crate::hydro_bills::bill_start_day) — so a closing day of 28 would put the
-/// start on February 29th, a date that does not exist in three years out of four. Capping at 27
-/// keeps every period's start a real date in every month.
-const MAX_BILL_END_DAY: i8 = 27;
 
 /// Reads the Green Button XML at `xml_path` and returns the values for the billing period ending
 /// on `period_ending`.

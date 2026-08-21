@@ -11,14 +11,16 @@
 //!
 //! The submodules are by subject, not by call. The API layer's other axis — reading versus
 //! computing — is already spent on the `io`/`pure` division, and spending it twice would leave
-//! every subject scattered. `peak_power` is one API operation today; `billing_period` and
-//! `session_report` are what it and every later operation are built from.
+//! every subject scattered. `peak_power` is one API operation today; `session_report` is what it
+//! and every later operation are built from.
+//!
+//! What a billing period *is* is not here. It is a fact about the bill, so it lives in
+//! [`hydro_bills::billing_period`](crate::hydro_bills) with [`BILL_END_DAY`](crate::hydro_bills::BILL_END_DAY)
+//! and [`BillingPeriod`](crate::hydro_bills::BillingPeriod), and this module reads it from there.
 
-pub mod billing_period;
 pub mod energy;
 pub mod peak_power;
 pub mod session_report;
 
-pub use billing_period::billing_period_dates;
 pub use peak_power::{peak_power, peak_power_cost};
 pub use session_report::{check_reports_cover_period, report_coverage, reports_cover};

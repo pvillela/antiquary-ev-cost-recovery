@@ -62,7 +62,7 @@ impl HydroBill {
     ///
     /// The bill states no period end of its own. The meter reading period is that period: it runs
     /// from the 23rd of one month to the 23rd of the next, which is the same division, and the
-    /// same label, that `green_button::BillingPeriod` uses.
+    /// same label, that [`BillingPeriod`](super::BillingPeriod) uses.
     pub fn period_end_date(&self) -> Date {
         self.meter_reading_period_to
     }

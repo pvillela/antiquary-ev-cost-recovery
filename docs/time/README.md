@@ -35,7 +35,7 @@ periods, the 07:00–19:00 demand window and the holiday calendar all run on it.
 
 One thing does not. A Toronto Hydro **billing period** is cut on **standard time**, at 00:00 EST all
 year round, and does not move when the clocks do. `standard_date` and `standard_midnight` are that
-clock, `BILLING_OFFSET` is the offset, and `green_button::BillingPeriod` is the only caller.
+clock, `BILLING_OFFSET` is the offset, and `hydro_bills::BillingPeriod` is the only caller.
 
 The two coincide from November to March and differ by an hour from March to November, which is what
 makes the distinction easy to lose and expensive to get wrong: a summer period cut on the wrong

@@ -4,7 +4,8 @@
 //! kVA happens once, in the sheet writer. The June 2026 invoice agrees with these figures to the
 //! digit, and it would not survive accumulating 744 floating-point divisions before summing them.
 
-use crate::green_button::{Anomaly, BillingPeriod, METER_INTERVAL, Reading, Readings};
+use crate::green_button::{Anomaly, METER_INTERVAL, Reading, Readings};
+use crate::hydro_bills::BillingPeriod;
 use crate::time::{Interval, Tou, is_off_peak, tou_of};
 use jiff::Timestamp;
 use std::collections::BTreeMap;

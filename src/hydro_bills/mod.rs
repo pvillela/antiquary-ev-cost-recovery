@@ -14,14 +14,16 @@
 //! last is a module of its own here, because reading a PDF is a job in its own right and its
 //! `Line` and `Fragment` read better with it named.
 //!
-//! Plural because a run reconciles a series of them — a billing period at a time, the way
-//! `green_button::BillingPeriod` already divides the meter data.
+//! Plural because a run reconciles a series of them — a billing period at a time. What a billing
+//! period is, `billing_period.rs` defines: [`BILL_END_DAY`], [`BillingPeriod`] and
+//! [`billing_period_dates`]. It is here because the period is the bill's, and the rest of the crate
+//! divides its data that way only because the bill does.
 
 mod bill_pdf;
 pub use bill_pdf::*;
 
-mod common;
-pub use common::*;
+mod billing_period;
+pub use billing_period::*;
 
 mod hydro_bill;
 pub use hydro_bill::*;

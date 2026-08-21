@@ -9,8 +9,8 @@
 //! same rules, and both refuse a period the meter data does not cover. Splitting them would leave
 //! two copies of that agreement to keep.
 
-use crate::api::pure::billing_period::{NotABillingPeriodEnding, billing_period_dates};
 use crate::green_button::{METER_INTERVAL, Peak};
+use crate::hydro_bills::{NotABillingPeriodEnding, billing_period_dates};
 use crate::sessions::{
     Bracket, EstimateSet, IntervalEstimates, SessionReport, estimates_from_report,
 };
@@ -513,8 +513,8 @@ fn peak_interval(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::green_button::BillingPeriod;
     use crate::hydro_bills::BILL_END_DAY;
+    use crate::hydro_bills::BillingPeriod;
     use crate::sessions::{AnomalyKind, IntervalEstimates, test_support::session};
     use crate::time::Tou;
     use jiff::Timestamp;
