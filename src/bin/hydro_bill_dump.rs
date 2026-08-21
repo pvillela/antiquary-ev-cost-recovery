@@ -1,8 +1,8 @@
 //! Reads a Toronto Hydro bill PDF and debug-prints the parsed
-//! [`HydroBill`](ev_cost_recovery::hydro_bills::HydroBill).
+//! [`HydroBill`](ev_cost_recovery::hydro_bill::HydroBill).
 
-use ev_cost_recovery::hydro_bills::pdf_text;
-use ev_cost_recovery::hydro_bills::{BillError, hydro_bill_from_pdf};
+use ev_cost_recovery::hydro_bill::pdf_text;
+use ev_cost_recovery::hydro_bill::{BillError, hydro_bill_from_pdf};
 use std::io;
 use std::path::Path;
 use std::process::ExitCode;

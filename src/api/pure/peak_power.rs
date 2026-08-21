@@ -10,7 +10,7 @@
 //! two copies of that agreement to keep.
 
 use crate::green_button::{METER_INTERVAL, Peak};
-use crate::hydro_bills::{NotABillingPeriodEnding, billing_period_dates};
+use crate::hydro_bill::{NotABillingPeriodEnding, billing_period_dates};
 use crate::sessions::{
     Bracket, EstimateSet, IntervalEstimates, SessionReport, estimates_from_report,
 };
@@ -20,7 +20,7 @@ use crate::time::Interval;
 // deliberately not: it is inside `PowerEstimates` rather than named by the signature, and a reader
 // who probes that far can go to `sessions` for it.
 pub use crate::green_button::PeriodValues;
-pub use crate::hydro_bills::HydroBill;
+pub use crate::hydro_bill::HydroBill;
 pub use crate::sessions::RSession;
 use jiff::civil::Date;
 use std::error::Error;
@@ -187,7 +187,7 @@ impl Error for PeakPowerError {
 ///
 /// # Arguments
 /// - `billing_period_ending` - the billing period, named by the date it closes on. Must be
-///   [`BILL_END_DAY`](crate::hydro_bills::BILL_END_DAY) of its month.
+///   [`BILL_END_DAY`](crate::hydro_bill::BILL_END_DAY) of its month.
 /// - `gb_period_values` - that period's figures, read from the meter export.
 /// - `sessions` - every session from every report covering the period, as read, in the order the
 ///   reports were read. Not merged: which records describe one session is decided here, since that
@@ -254,7 +254,7 @@ const BILLED_DAYS_PER_MONTH: f64 = 30.0;
 ///
 /// Pure throughout, as [`fn@peak_power`] is: this is everything the call does once the meter
 /// export, the session reports and the bill have been read. There is no `io` counterpart yet, so a
-/// caller reads the bill with [`hydro_bill_from_pdf`](crate::hydro_bills::hydro_bill_from_pdf) and
+/// caller reads the bill with [`hydro_bill_from_pdf`](crate::hydro_bill::hydro_bill_from_pdf) and
 /// the rest as [`io::peak_power`](crate::io::peak_power) does.
 ///
 /// # How the figure is arrived at
@@ -308,7 +308,7 @@ const BILLED_DAYS_PER_MONTH: f64 = 30.0;
 /// # Errors
 ///
 /// [`PeakPowerError::NotABillingPeriodEnding`] if the bill's meter reading period does not close on
-/// [`BILL_END_DAY`](crate::hydro_bills::BILL_END_DAY), and [`PeakPowerError::NoPeak`] if the period
+/// [`BILL_END_DAY`](crate::hydro_bill::BILL_END_DAY), and [`PeakPowerError::NoPeak`] if the period
 /// carries no reading in one of the three series.
 ///
 /// [`PeakPowerError::ValuesAreForAnotherPeriod`] if `gb_period_values` describes some other period,
@@ -513,8 +513,8 @@ fn peak_interval(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::hydro_bills::BILL_END_DAY;
-    use crate::hydro_bills::BillingPeriod;
+    use crate::hydro_bill::BILL_END_DAY;
+    use crate::hydro_bill::BillingPeriod;
     use crate::sessions::{AnomalyKind, IntervalEstimates, test_support::session};
     use crate::time::Tou;
     use jiff::Timestamp;

@@ -7,7 +7,7 @@
 
 use crate::api::pure;
 use crate::green_button::period_values_xml;
-use crate::hydro_bills::{BILL_END_DAY, hydro_bill_from_pdf};
+use crate::hydro_bill::{BILL_END_DAY, hydro_bill_from_pdf};
 use crate::sessions::{RSession, csv};
 use jiff::civil::Date;
 use std::error::Error;
@@ -44,8 +44,8 @@ pub enum ReadError {
 
     /// A Toronto Hydro bill PDF could not be read, or is not laid out the way one is read.
     ///
-    /// [`BillError::is_layout`](crate::hydro_bills::BillError::is_layout) tells those two apart,
-    /// and `cause` downcasts to [`BillError`](crate::hydro_bills::BillError) for a caller that
+    /// [`BillError::is_layout`](crate::hydro_bill::BillError::is_layout) tells those two apart,
+    /// and `cause` downcasts to [`BillError`](crate::hydro_bill::BillError) for a caller that
     /// wants to ask.
     Bill {
         path: PathBuf,

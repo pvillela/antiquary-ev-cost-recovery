@@ -32,7 +32,7 @@
 
 use super::{fixture, fixtures_dir};
 use ev_cost_recovery::green_button::{parse, write_workbook};
-use ev_cost_recovery::hydro_bills::BILL_END_DAY;
+use ev_cost_recovery::hydro_bill::BILL_END_DAY;
 use std::fmt::Write as _;
 use std::path::Path;
 use umya_spreadsheet::{Worksheet, reader};

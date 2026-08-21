@@ -1,4 +1,4 @@
-// No re-export: this module adds one inherent method to `hydro_bills::BillingPeriod` and defines
+// No re-export: this module adds one inherent method to `hydro_bill::BillingPeriod` and defines
 // nothing of its own. Declaring it is what puts the method on the type.
 mod billing;
 

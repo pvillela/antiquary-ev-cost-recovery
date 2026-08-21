@@ -4,7 +4,7 @@
 //! something to put on every `cargo test`. Run explicitly with:
 //!
 //! ```text
-//! cargo test --test integration -- hydro_bills::all_bills --ignored --nocapture
+//! cargo test --test integration -- hydro_bill::all_bills --ignored --nocapture
 //! ```
 //!
 //! Parsing without error is the weaker half of what this checks. The stronger half is that the
@@ -12,8 +12,8 @@
 //! dropped because a rate change printed it twice, still parses -- it just gives a total that no
 //! longer equals its parts.
 
-use ev_cost_recovery::hydro_bills::hydro_bill_from_pdf;
-use ev_cost_recovery::hydro_bills::pdf_text::{self, Line};
+use ev_cost_recovery::hydro_bill::hydro_bill_from_pdf;
+use ev_cost_recovery::hydro_bill::pdf_text::{self, Line};
 use std::path::PathBuf;
 
 /// Money is stated to the cent, and the sums here are of a handful of terms.

@@ -6,7 +6,7 @@
 //!
 //! Nothing here opens anything. A `&Path` is read as a string.
 
-use crate::hydro_bills::{NotABillingPeriodEnding, billing_period_dates};
+use crate::hydro_bill::{NotABillingPeriodEnding, billing_period_dates};
 use jiff::civil::Date;
 use std::error::Error;
 use std::fmt;

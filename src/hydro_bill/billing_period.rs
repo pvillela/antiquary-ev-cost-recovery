@@ -16,14 +16,14 @@
 //! the holiday calendar stay on prevailing local time, because those are stated in the clock a
 //! customer reads and the bills' on-peak and mid-peak energy confirms it.
 //!
-//! # Why this is in `hydro_bills`
+//! # Why this is in `hydro_bill`
 //!
 //! A billing period is a fact about the bill. Everything else divided by one — the meter readings
 //! `green_button` groups, the session reports `sessions` reads, the estimates `api` produces — is
 //! cut this way because the bill cuts it this way, so the rule belongs where the bill is and the
 //! rest of the crate reads it from here.
 //!
-//! It was in three places before it was here: [`BILL_END_DAY`] in `hydro_bills`, [`BillingPeriod`]
+//! It was in three places before it was here: [`BILL_END_DAY`] in `hydro_bill`, [`BillingPeriod`]
 //! in `green_button`, and [`billing_period_dates`] in `api::pure`. Each move outward was a small
 //! step, and together they meant that answering "what is a billing period" needed three files in
 //! three modules.
@@ -196,7 +196,7 @@ pub fn billing_period_dates(
     Ok((standard_date(period.start), billing_period_ending))
 }
 
-// cargo test --lib -- hydro_bills::billing_period::test --nocapture
+// cargo test --lib -- hydro_bill::billing_period::test --nocapture
 #[cfg(test)]
 mod test {
     use super::*;

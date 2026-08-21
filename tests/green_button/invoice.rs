@@ -8,7 +8,7 @@
 //! fixture carries in full.
 
 use ev_cost_recovery::green_button::{parse, period_values};
-use ev_cost_recovery::hydro_bills::BILL_END_DAY;
+use ev_cost_recovery::hydro_bill::BILL_END_DAY;
 use ev_cost_recovery::time::{Interval, Tou, tou_of};
 use jiff::civil::date;
 use std::collections::HashMap;

@@ -6,7 +6,7 @@
 //! row of zeroes.
 
 use ev_cost_recovery::green_button::{parse, period_values, period_values_xml};
-use ev_cost_recovery::hydro_bills::BILL_END_DAY;
+use ev_cost_recovery::hydro_bill::BILL_END_DAY;
 use jiff::civil::date;
 
 use super::fixture;

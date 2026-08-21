@@ -5,7 +5,7 @@
 //! the feed does not reach that period rather than handed nothing. This module is that call.
 
 use crate::green_button::{PeriodValues, parse, period_values};
-use crate::hydro_bills::MAX_BILL_END_DAY;
+use crate::hydro_bill::MAX_BILL_END_DAY;
 use crate::time::local_date;
 use jiff::civil::Date;
 use std::{error::Error, path::Path};
@@ -13,7 +13,7 @@ use std::{error::Error, path::Path};
 /// Reads the Green Button XML at `xml_path` and returns the values for the billing period ending
 /// on `period_ending`.
 ///
-/// `bill_end_day` is the day of the month the bill closes on — [`BILL_END_DAY`](crate::hydro_bills::BILL_END_DAY)
+/// `bill_end_day` is the day of the month the bill closes on — [`BILL_END_DAY`](crate::hydro_bill::BILL_END_DAY)
 /// for Toronto Hydro — and must be `period_ending`'s day. It is stated rather than inferred
 /// because which day a bill closes on belongs to the bill and not to the meter data; see
 /// `green_button::billing`.
@@ -103,7 +103,7 @@ fn coverage(readings: &crate::green_button::Readings) -> String {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::hydro_bills::BILL_END_DAY;
+    use crate::hydro_bill::BILL_END_DAY;
     use jiff::civil::date;
     use std::path::PathBuf;
 

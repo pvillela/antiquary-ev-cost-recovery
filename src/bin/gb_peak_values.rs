@@ -2,7 +2,7 @@
 
 use ev_cost_recovery::{
     green_button::{Feed, parse, write_workbook},
-    hydro_bills::{BILL_END_DAY, bill_start_day},
+    hydro_bill::{BILL_END_DAY, bill_start_day},
     time::holidays,
     time::local_date,
 };

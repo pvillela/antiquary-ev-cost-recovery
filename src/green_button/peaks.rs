@@ -5,7 +5,7 @@
 //! digit, and it would not survive accumulating 744 floating-point divisions before summing them.
 
 use crate::green_button::{Anomaly, METER_INTERVAL, Reading, Readings};
-use crate::hydro_bills::BillingPeriod;
+use crate::hydro_bill::BillingPeriod;
 use crate::time::{Interval, Tou, is_off_peak, tou_of};
 use jiff::Timestamp;
 use std::collections::BTreeMap;
@@ -133,7 +133,7 @@ fn peak(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::hydro_bills::BILL_END_DAY;
+    use crate::hydro_bill::BILL_END_DAY;
     use crate::time::local_hour;
     use jiff::civil::date;
 

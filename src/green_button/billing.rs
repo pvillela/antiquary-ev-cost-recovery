@@ -1,6 +1,6 @@
 //! How many meter readings a billing period is supposed to contain.
 //!
-//! What a billing period *is* lives in [`hydro_bills::billing_period`](crate::hydro_bills), because
+//! What a billing period *is* lives in [`hydro_bill::billing_period`](crate::hydro_bill), because
 //! it is a fact about the bill. This is the one thing about a period that is a fact about the feed
 //! instead, and it is here for that reason: the count is in [`METER_INTERVAL`]s, which is
 //! `green_button`'s unit and nothing the bill knows about.
@@ -9,7 +9,7 @@
 //! reads at the two call sites and the split is an artefact of where the constant lives.
 
 use crate::green_button::METER_INTERVAL;
-use crate::hydro_bills::BillingPeriod;
+use crate::hydro_bill::BillingPeriod;
 
 impl BillingPeriod {
     /// How many meter intervals a complete period contains.
@@ -33,7 +33,7 @@ impl BillingPeriod {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::hydro_bills::BILL_END_DAY;
+    use crate::hydro_bill::BILL_END_DAY;
     use jiff::civil::date;
 
     /// The interval counts the invoices state, as `Number of Days` times 24. The two
