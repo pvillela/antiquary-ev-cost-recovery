@@ -116,7 +116,7 @@ pub fn check_reports_cover_period(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    if !covers(period_start, period_ending, &coverage) {
+    if !reports_cover(period_start, period_ending, &coverage) {
         return Err(CoverageError::PeriodNotCovered {
             period_start,
             period_ending,
@@ -177,7 +177,7 @@ fn report_date(s: &str) -> Option<Date> {
 /// Order-insensitive, and tolerant of the reports overlapping, which they do whenever a session
 /// runs past midnight on the last of the month. What it will not accept is a gap between them, or a
 /// set that stops short at either end.
-pub fn covers(first: Date, last: Date, coverage: &[SessionReportCoverage]) -> bool {
+pub fn reports_cover(first: Date, last: Date, coverage: &[SessionReportCoverage]) -> bool {
     let mut ranges: Vec<(Date, Date)> = coverage.iter().map(|c| (c.from, c.to)).collect();
     ranges.sort();
 
@@ -257,12 +257,12 @@ mod test {
         let may = coverage("Session_Report_May_1_2026-May_31_2026.csv");
         let june = coverage("Session_Report_June_1_2026-June_30_2026.csv");
 
-        assert!(covers(first, last, &[may.clone(), june.clone()]));
+        assert!(reports_cover(first, last, &[may.clone(), june.clone()]));
         // Which one is named first is not a rule; the names say what each holds.
-        assert!(covers(first, last, &[june.clone(), may.clone()]));
+        assert!(reports_cover(first, last, &[june.clone(), may.clone()]));
         // Either alone falls short at one end.
-        assert!(!covers(first, last, &[may.clone(), may.clone()]));
-        assert!(!covers(first, last, &[june.clone(), june.clone()]));
+        assert!(!reports_cover(first, last, &[may.clone(), may.clone()]));
+        assert!(!reports_cover(first, last, &[june.clone(), june.clone()]));
     }
 
     /// A month missing from the middle is what handing in the wrong file looks like.
@@ -271,7 +271,7 @@ mod test {
         let (first, last) = (date(2026, 5, 24), date(2026, 6, 23));
         let april = coverage("Session_Report_April_1_2026-April_30_2026.csv");
         let june = coverage("Session_Report_June_1_2026-June_30_2026.csv");
-        assert!(!covers(first, last, &[april, june]));
+        assert!(!reports_cover(first, last, &[april, june]));
     }
 
     /// A report reaching back before the period covers its part of it, and one lying entirely
@@ -281,8 +281,12 @@ mod test {
         let (first, last) = (date(2026, 5, 24), date(2026, 6, 23));
         let spring = coverage("Session_Report_March_1_2026-June_30_2026.csv");
         let january = coverage("Session_Report_January_1_2026-January_31_2026.csv");
-        assert!(covers(first, last, &[spring.clone(), january.clone()]));
-        assert!(covers(first, last, &[january, spring]));
+        assert!(reports_cover(
+            first,
+            last,
+            &[spring.clone(), january.clone()]
+        ));
+        assert!(reports_cover(first, last, &[january, spring]));
     }
 
     /// The names alone settle whether the reports reach the period, so this answers without any of
