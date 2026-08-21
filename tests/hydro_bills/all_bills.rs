@@ -23,6 +23,11 @@ const CENT: f64 = 0.005;
 /// separately rounded figures, so they can differ in the last couple of those thousandths.
 const KWH_ROUNDING: f64 = 0.01;
 
+/// Demand is stated to a thousandth, truncated rather than rounded, and the proration below
+/// multiplies one such figure to compare it against another. Both truncations land the same way,
+/// so the product can sit up to a little over two thousandths above the printed adjusted figure.
+const DEMAND_PRORATION: f64 = 0.0025;
+
 fn bills_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/hydro_bills")
 }
@@ -119,8 +124,8 @@ fn every_bill_parses_and_its_figures_agree_with_each_other() {
         );
         // Every figure on these bills is positive; a sign that flips means a column was misread.
         for (what, value) in [
-            ("peak kW", bill.peak_7_7_kw),
-            ("adjusted peak kW", bill.adj_peak_7_7_kw),
+            ("peak kW 7-7", bill.peak_7_7_kw),
+            ("adjusted peak kW 7-7", bill.adj_peak_7_7_kw),
             ("demand kW", bill.demand_kw),
             ("demand kVA", bill.demand_kva),
             ("metering adjustment", bill.metering_adj),
@@ -141,6 +146,35 @@ fn every_bill_parses_and_its_figures_agree_with_each_other() {
             bill.demand_kva,
             bill.demand_kw
         );
+        // `Peak kW 7-7` is the maximum restricted to the 07:00-19:00 demand window, so it cannot
+        // exceed the unrestricted `Demand kW`. This is what tells the two columns apart: they are
+        // adjacent, they are both kW, and on many of these bills they are equal because the site
+        // peaked inside the window anyway.
+        assert!(
+            bill.peak_7_7_kw <= bill.demand_kw,
+            "{name}: peak kW 7-7 {} is above demand kW {}",
+            bill.peak_7_7_kw,
+            bill.demand_kw
+        );
+        // The three `Adj.` demand columns are the raw figure prorated to a 30-day month -- the
+        // delivery lines price demand "per kW per 30 Days". Nothing to do with the loss factor,
+        // which is the `Adj.` on the kilowatt-hours and on nothing else.
+        //
+        // Each column is pinned to the one it is an adjustment of, so a `Peak kW 7-7` read into
+        // `demand_kw` fails here even on a 30-day bill, where the proration alone proves nothing.
+        for (what, raw, adjusted) in [
+            ("peak kW 7-7", bill.peak_7_7_kw, bill.adj_peak_7_7_kw),
+            ("demand kW", bill.demand_kw, bill.adj_kw),
+            ("demand kVA", bill.demand_kva, bill.adj_kva),
+        ] {
+            close(
+                &name,
+                &format!("{what} prorated to 30 days vs. its adjusted column"),
+                raw * f64::from(bill.number_of_days) / 30.0,
+                adjusted,
+                DEMAND_PRORATION,
+            );
+        }
     }
 
     println!("{} bills read", paths.len());

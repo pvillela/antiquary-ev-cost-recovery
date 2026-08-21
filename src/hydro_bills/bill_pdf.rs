@@ -102,8 +102,8 @@ fn from_lines(lines: &[Line]) -> Result<HydroBill, Problem> {
         kwh_used: usage.kwh_used,
         loss_factor_adjustment: usage.loss_factor_adjustment,
         adjusted_kwh_used: usage.adjusted_kwh_used,
-        peak_7_7_kw: usage.peak_kw,
-        adj_peak_7_7_kw: usage.adj_peak_kw,
+        peak_7_7_kw: usage.peak_7_7_kw,
+        adj_peak_7_7_kw: usage.adj_peak_7_7_kw,
         demand_kw: usage.demand_kw,
         demand_kva: usage.demand_kva,
         metering_adj: usage.metering_adj,
@@ -389,8 +389,8 @@ struct Usage {
     kwh_used: f64,
     loss_factor_adjustment: f64,
     adjusted_kwh_used: f64,
-    peak_kw: f64,
-    adj_peak_kw: f64,
+    peak_7_7_kw: f64,
+    adj_peak_7_7_kw: f64,
     demand_kw: f64,
     demand_kva: f64,
     metering_adj: f64,
@@ -422,7 +422,13 @@ impl Usage {
 
         // Peak kW 7-7, Adj. Peak kW 7-7, Demand kW, Demand kVA, Metering Adj., Adj. kW, Adj. kVA.
         // The heading spans three lines of its own; the figures are the first row of seven
-        // numbers below it.
+        // numbers below it. The first two columns are the maximum within the 07:00-19:00 demand
+        // window and the second is that figure prorated to 30 days -- not the unrestricted maximum,
+        // which is `Demand kW`, two columns further right. `every_bill_parses_and_its_figures_agree_with_each_other`
+        // holds the seven to the relations that distinguish them, so a swap here is caught.
+        //
+        // Anchored on "Peak kW" rather than on the full column name because the heading is broken
+        // across those three lines, and "7-7" is on the next one.
         let header = lines
             .iter()
             .position(|line| line.fragments.iter().any(|f| f.text.trim() == "Peak kW"))
@@ -434,8 +440,8 @@ impl Usage {
             })
             .ok_or_else(|| missing("row of demand figures below the demand table heading"))?;
         let [
-            peak_kw,
-            adj_peak_kw,
+            peak_7_7_kw,
+            adj_peak_7_7_kw,
             demand_kw,
             demand_kva,
             metering_adj,
@@ -457,8 +463,8 @@ impl Usage {
             kwh_used: money(&used.text)?,
             loss_factor_adjustment: money(&loss_factor.text)?,
             adjusted_kwh_used: money(&adjusted.text)?,
-            peak_kw: money(&peak_kw.text)?,
-            adj_peak_kw: money(&adj_peak_kw.text)?,
+            peak_7_7_kw: money(&peak_7_7_kw.text)?,
+            adj_peak_7_7_kw: money(&adj_peak_7_7_kw.text)?,
             demand_kw: money(&demand_kw.text)?,
             demand_kva: money(&demand_kva.text)?,
             metering_adj: money(&metering_adj.text)?,
