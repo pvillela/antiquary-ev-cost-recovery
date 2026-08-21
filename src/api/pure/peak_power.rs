@@ -82,6 +82,30 @@ pub enum PeakPowerError {
         period_ending: Date,
         unit: &'static str,
     },
+
+    /// The meter figures given describe a different billing period.
+    ///
+    /// [`PeriodValues`] is one period's row, already picked out of an export that ordinarily spans
+    /// many. Which other periods the file holds is nothing to this; handing over the wrong row is.
+    ValuesAreForAnotherPeriod {
+        period_ending: Date,
+        values_period_ending: Date,
+    },
+
+    /// The meter figures do not cover the whole billing period.
+    ///
+    /// Every figure produced here is a maximum over the period, and a maximum over part of one is
+    /// not a smaller answer to the same question — it is an answer to a different one. The hour the
+    /// site actually peaked in may be among the missing ones, and nothing in the result would say
+    /// so.
+    ///
+    /// `intervals` counts the hours that carried data; placeholder rows standing in for a gap are
+    /// not among them. See [`PeriodValues::is_complete`].
+    PeriodNotFullyCovered {
+        period_ending: Date,
+        intervals: i64,
+        expected: i64,
+    },
 }
 
 impl From<NotABillingPeriodEnding> for PeakPowerError {
@@ -101,6 +125,23 @@ impl fmt::Display for PeakPowerError {
                 f,
                 "the billing period ending {period_ending} carries no {unit} reading, so it has no \
                  {unit} maximum to estimate against"
+            ),
+            Self::ValuesAreForAnotherPeriod {
+                period_ending,
+                values_period_ending,
+            } => write!(
+                f,
+                "the meter figures given are for the billing period ending \
+                 {values_period_ending}, not the one ending {period_ending}"
+            ),
+            Self::PeriodNotFullyCovered {
+                period_ending,
+                intervals,
+                expected,
+            } => write!(
+                f,
+                "the meter data covers {intervals} of the {expected} hours in the billing period \
+                 ending {period_ending}, so its maxima are not the period's"
             ),
         }
     }
@@ -179,6 +220,11 @@ const BILLED_DAYS_PER_MONTH: f64 = 30.0;
 /// [`PeakPowerError::NotABillingPeriodEnding`] if the bill's meter reading period does not close on
 /// [`BILL_END_DAY`](crate::hydro_bills::BILL_END_DAY), and [`PeakPowerError::NoPeak`] if the period
 /// carries no reading in one of the three series.
+///
+/// [`PeakPowerError::ValuesAreForAnotherPeriod`] if `gb_period_values` describes some other period,
+/// and [`PeakPowerError::PeriodNotFullyCovered`] if it is missing hours of the one the bill covers.
+/// Every figure here rests on a maximum over the whole period, so a partial one is refused rather
+/// than estimated from.
 pub fn peak_power_cost(
     bill: &HydroBill,
     gb_period_values: PeriodValues,
@@ -189,6 +235,7 @@ pub fn peak_power_cost(
     // model, so the proration below would be arithmetic on two different bases.
     let billing_period_ending = bill.period_end_date();
     billing_period_dates(billing_period_ending)?;
+    check_period_covered(billing_period_ending, &gb_period_values)?;
 
     let (sessions_report, sources) = one_report(sessions);
     let estimates = |peak, unit| {
@@ -327,8 +374,14 @@ fn energy_based(
 /// # Errors
 ///
 /// [`PeakPowerError::NotABillingPeriodEnding`] if `billing_period_ending` does not label a period,
-/// and [`PeakPowerError::NoPeak`] if the period carries no reading in one of the two series. There
-/// is no variant naming a file: nothing here reads one.
+/// and [`PeakPowerError::NoPeak`] if the period carries no reading in one of the two series.
+///
+/// [`PeakPowerError::ValuesAreForAnotherPeriod`] if `gb_period_values` describes some other period,
+/// and [`PeakPowerError::PeriodNotFullyCovered`] if it is missing hours of the one asked for. Both
+/// estimates rest on a maximum over the whole period, so a partial one is refused rather than
+/// estimated from.
+///
+/// There is no variant naming a file: nothing here reads one.
 pub fn peak_power(
     billing_period_ending: Date,
     gb_period_values: PeriodValues,
@@ -337,6 +390,7 @@ pub fn peak_power(
     // Re-checked rather than assumed. This is an entry point in its own right, and a caller
     // reaching it directly has not been through `io::peak_power`'s validation.
     billing_period_dates(billing_period_ending)?;
+    check_period_covered(billing_period_ending, &gb_period_values)?;
 
     let kw_ioi = peak_interval(gb_period_values.max_kw, "kW", billing_period_ending)?;
     let kva_ioi = peak_interval(gb_period_values.max_kva, "kVA", billing_period_ending)?;
@@ -348,6 +402,44 @@ pub fn peak_power(
         kw_estimates: estimates_from_report(kw_ioi, sources.clone(), &sessions_report),
         kva_estimates: estimates_from_report(kva_ioi, sources, &sessions_report),
     })
+}
+
+/// Whether the meter figures cover the whole of the billing period.
+///
+/// Coverage is the only question. An export ordinarily holds many periods — the one this project
+/// reads spans nineteen months — and [`PeriodValues`] is one period's row picked out of it, so the
+/// file carrying other periods is expected and means nothing here. What matters is that the row is
+/// this period's and that no hour of it is missing.
+///
+/// [`period_values_xml`](crate::green_button::period_values_xml) returns a period the feed covers
+/// only partly rather than refusing it, on the grounds that which discrepancies matter is the
+/// caller's judgement. This is that judgement, for both entry points: nothing here can be estimated
+/// from a partial period.
+///
+/// Every figure either function produces is a maximum over the billing period — the hour the site
+/// peaked in, and the EV share of that hour. A gap in the feed does not make the maximum smaller
+/// but still true; it makes it a maximum over some other set of hours, and the real peak may be in
+/// the gap. Nothing downstream could detect that, because the estimate is drawn from the sessions
+/// and the sessions are complete.
+fn check_period_covered(
+    billing_period_ending: Date,
+    gb_period_values: &PeriodValues,
+) -> Result<(), PeakPowerError> {
+    let values_period_ending = gb_period_values.period.ending;
+    if values_period_ending != billing_period_ending {
+        return Err(PeakPowerError::ValuesAreForAnotherPeriod {
+            period_ending: billing_period_ending,
+            values_period_ending,
+        });
+    }
+    if !gb_period_values.is_complete() {
+        return Err(PeakPowerError::PeriodNotFullyCovered {
+            period_ending: billing_period_ending,
+            intervals: gb_period_values.interval_count,
+            expected: gb_period_values.period.expected_intervals(),
+        });
+    }
+    Ok(())
 }
 
 /// The files' sessions as one report, with the files they came from.
@@ -435,7 +527,7 @@ mod test {
         s.parse().expect("an RFC 3339 timestamp")
     }
 
-    fn period_ending() -> Date {
+    fn period_ending_date() -> Date {
         date(PERIOD_ENDING.0, PERIOD_ENDING.1, PERIOD_ENDING.2)
     }
 
@@ -463,7 +555,7 @@ mod test {
             tou,
         };
         PeriodValues {
-            period: BillingPeriod::ending_on(period_ending(), BILL_END_DAY),
+            period: BillingPeriod::ending_on(period_ending_date(), BILL_END_DAY),
             interval_count: 744,
             kwh_total: 0,
             max_kw: kw_at.map(|at| peak(at, Tou::OnPeak)),
@@ -502,7 +594,7 @@ mod test {
             hst: 1300.0,
             ontario_electricity_rebate: 1000.0,
             meter_reading_period_from: date(2026, 5, 23),
-            meter_reading_period_to: period_ending(),
+            meter_reading_period_to: period_ending_date(),
             number_of_days: 31,
             kwh_used: 70000.0,
             loss_factor_adjustment: 1.0295,
@@ -572,7 +664,7 @@ mod test {
     #[test]
     fn each_estimate_covers_the_hour_its_own_maximum_fell_in() {
         let estimates = peak_power(
-            period_ending(),
+            period_ending_date(),
             period_values(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR)),
             &two_reports(),
         )
@@ -609,7 +701,7 @@ mod test {
     #[test]
     fn the_report_names_the_files_its_sessions_came_from() {
         let estimates = peak_power(
-            period_ending(),
+            period_ending_date(),
             period_values(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR)),
             &two_reports(),
         )
@@ -637,7 +729,7 @@ mod test {
 
         let estimate = |sessions: &[RSession]| {
             peak_power(
-                period_ending(),
+                period_ending_date(),
                 period_values(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR)),
                 sessions,
             )
@@ -674,7 +766,7 @@ mod test {
         ));
 
         let estimates = peak_power(
-            period_ending(),
+            period_ending_date(),
             period_values(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR)),
             &sessions,
         )
@@ -700,7 +792,7 @@ mod test {
     #[test]
     fn a_period_missing_a_series_has_no_estimate_for_it() {
         let err = peak_power(
-            period_ending(),
+            period_ending_date(),
             period_values(Some(KW_PEAK_HOUR), None),
             &two_reports(),
         )
@@ -712,7 +804,7 @@ mod test {
         );
 
         let err = peak_power(
-            period_ending(),
+            period_ending_date(),
             period_values(None, Some(KVA_PEAK_HOUR)),
             &two_reports(),
         )
@@ -733,7 +825,7 @@ mod test {
     fn each_bill_line_is_priced_on_the_hour_it_was_charged_for() {
         let cost = cost();
         let estimates = peak_power(
-            period_ending(),
+            period_ending_date(),
             period_values(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR)),
             &two_reports(),
         )
@@ -846,30 +938,92 @@ mod test {
     /// Every figure is a proportion of a bill line, so a bill from another month would give a
     /// plausible number resting on nothing.
     #[test]
-    fn the_cost_is_for_the_period_the_bill_covers() {
-        // The same sessions and the same meter figures, against a bill for the month before. The
-        // period is not a parameter, so this is a different call and not a mismatch: it prices May's
-        // rates over the hours June peaked in, and says so.
+    fn the_period_comes_from_the_bill() {
+        // May's bill against June's figures. The period is not a parameter, so the only thing that
+        // can disagree with the figures is the bill -- and it is the bill that decides, which is
+        // what the refusal naming June as the *figures'* period shows. Were the period taken from
+        // the figures instead, there would be nothing here to catch.
         let mut may = bill();
         may.meter_reading_period_from = date(2026, 4, 23);
         may.meter_reading_period_to = date(2026, 5, 23);
         may.number_of_days = 30;
-        may.distribution_charges = 775.0;
 
-        let june = cost();
-        let cost = peak_power_cost(
+        let err = peak_power_cost(
             &may,
             period_values_with_nop(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR), Some(NOP_PEAK_HOUR)),
             &two_reports(),
         )
-        .expect("May closes a billing period too");
+        .err()
+        .expect("the figures are June's and the bill is May's");
+        assert!(
+            matches!(
+                err,
+                PeakPowerError::ValuesAreForAnotherPeriod {
+                    period_ending,
+                    values_period_ending,
+                } if period_ending == date(2026, 5, 23) && values_period_ending == period_ending_date()
+            ),
+            "{err}"
+        );
+    }
 
-        assert_eq!(cost.days_in_period, 30);
-        assert!(close(cost.days_adj_factor, 1.0));
-        // The EV demand is the same -- it comes off the meter and the sessions, which did not
-        // change -- and only the money moved, so the bill is the only thing that period selects.
-        assert_eq!(cost.demand_kva, june.demand_kva);
-        assert!(cost.distribution_charges < june.distribution_charges);
+    /// A maximum over part of a period is not the period's maximum, and the hour the site actually
+    /// peaked in may be among the missing ones. Neither entry point can tell, because the estimate
+    /// comes from the sessions and the sessions are complete.
+    #[test]
+    fn meter_data_that_does_not_cover_the_whole_period_is_refused() {
+        let mut gappy =
+            period_values_with_nop(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR), Some(NOP_PEAK_HOUR));
+        // One hour short of the 744 the period holds -- the smallest gap there is.
+        gappy.interval_count -= 1;
+
+        let err = peak_power(period_ending_date(), gappy.clone(), &two_reports())
+            .err()
+            .expect("an hour of the period is missing");
+        assert!(
+            matches!(
+                err,
+                PeakPowerError::PeriodNotFullyCovered {
+                    intervals: 743,
+                    expected: 744,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+
+        // Both entry points make the same judgement; neither leaves it to the other.
+        let err = peak_power_cost(&bill(), gappy, &two_reports())
+            .err()
+            .expect("an hour of the period is missing");
+        assert!(
+            matches!(err, PeakPowerError::PeriodNotFullyCovered { .. }),
+            "{err}"
+        );
+    }
+
+    /// The previous period's row carries maxima of its own, complete and sound, and they are not
+    /// this period's. Coverage of the period asked for is nil, so the count of hours it does carry
+    /// would say nothing.
+    #[test]
+    fn meter_figures_for_a_different_period_are_refused() {
+        let mut may = period_values(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR));
+        may.period = BillingPeriod::ending_on(date(2026, 5, 23), BILL_END_DAY);
+        may.interval_count = may.period.expected_intervals();
+
+        let err = peak_power(period_ending_date(), may, &two_reports())
+            .err()
+            .expect("the figures are May's");
+        assert!(
+            matches!(
+                err,
+                PeakPowerError::ValuesAreForAnotherPeriod {
+                    period_ending,
+                    values_period_ending,
+                } if period_ending == period_ending_date() && values_period_ending == date(2026, 5, 23)
+            ),
+            "{err}"
+        );
     }
 
     /// Reached directly rather than through `io::peak_power`, this still checks its own arguments.
