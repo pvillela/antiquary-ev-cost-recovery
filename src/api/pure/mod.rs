@@ -19,5 +19,5 @@ pub mod peak_power;
 pub mod session_report;
 
 pub use billing_period::billing_period_dates;
-pub use peak_power::peak_power;
+pub use peak_power::{peak_power, peak_power_cost};
 pub use session_report::{check_reports_cover_period, report_coverage, reports_cover};
