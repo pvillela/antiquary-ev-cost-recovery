@@ -119,8 +119,8 @@ fn every_bill_parses_and_its_figures_agree_with_each_other() {
         );
         // Every figure on these bills is positive; a sign that flips means a column was misread.
         for (what, value) in [
-            ("peak kW", bill.peak_kw),
-            ("adjusted peak kW", bill.adj_peak_kw),
+            ("peak kW", bill.peak_7_7_kw),
+            ("adjusted peak kW", bill.adj_peak_7_7_kw),
             ("demand kW", bill.demand_kw),
             ("demand kVA", bill.demand_kva),
             ("metering adjustment", bill.metering_adj),

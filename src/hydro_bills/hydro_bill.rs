@@ -48,8 +48,8 @@ pub struct HydroBill {
     pub kwh_used: f64,
     pub loss_factor_adjustment: f64,
     pub adjusted_kwh_used: f64,
-    pub peak_kw: f64,
-    pub adj_peak_kw: f64,
+    pub peak_7_7_kw: f64,
+    pub adj_peak_7_7_kw: f64,
     pub demand_kw: f64,
     pub demand_kva: f64,
     pub metering_adj: f64,
@@ -135,8 +135,8 @@ impl fmt::Debug for Pretty<'_> {
             .field("kwh_used", &bill.kwh_used)
             .field("loss_factor_adjustment", &bill.loss_factor_adjustment)
             .field("adjusted_kwh_used", &bill.adjusted_kwh_used)
-            .field("peak_kw", &bill.peak_kw)
-            .field("adj_peak_kw", &bill.adj_peak_kw)
+            .field("peak_kw", &bill.peak_7_7_kw)
+            .field("adj_peak_kw", &bill.adj_peak_7_7_kw)
             .field("demand_kw", &bill.demand_kw)
             .field("demand_kva", &bill.demand_kva)
             .field("metering_adj", &bill.metering_adj)
@@ -176,8 +176,8 @@ mod test {
             kwh_used: 69175.078,
             loss_factor_adjustment: 1.0295,
             adjusted_kwh_used: 71215.743,
-            peak_kw: 140.639,
-            adj_peak_kw: 140.639,
+            peak_7_7_kw: 140.639,
+            adj_peak_7_7_kw: 140.639,
             demand_kw: 140.639,
             demand_kva: 170.879,
             metering_adj: 1.0,
