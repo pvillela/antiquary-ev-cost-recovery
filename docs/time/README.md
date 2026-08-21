@@ -42,7 +42,7 @@ makes the distinction easy to lose and expensive to get wrong: a summer period c
 clock is an hour out at each end, and a period containing a clock change is an hour out overall.
 Cutting on prevailing local time reproduced 6 of 19 invoices; cutting on standard time reproduces
 all 19 to the milli-kWh. The derivation is in
-[`../hydro_bills/archive/dst-energy-anomaly-pre-fix.md`](../hydro_bills/archive/dst-energy-anomaly-pre-fix.md).
+[`../hydro_bill/archive/dst-energy-anomaly-pre-fix.md`](../hydro_bill/archive/dst-energy-anomaly-pre-fix.md).
 
 Two consequences worth knowing:
 

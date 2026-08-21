@@ -45,7 +45,7 @@ that hour's anomalies.
 Standard time, not prevailing local time — the boundary sits at 00:00 EST all year and does not move
 when the clocks do. From March to November that is 01:00 by the wall clock. Getting this wrong is a
 one-hour error at each end of every summer period, and
-[`../hydro_bills/archive/dst-energy-anomaly-pre-fix.md`](../hydro_bills/archive/dst-energy-anomaly-pre-fix.md) is what it cost: a
+[`../hydro_bill/archive/dst-energy-anomaly-pre-fix.md`](../hydro_bill/archive/dst-energy-anomaly-pre-fix.md) is what it cost: a
 prevailing-local boundary reproduced 6 of 19 invoices, a standard-time one reproduces all 19 to the
 milli-kWh. The feed agrees — its own `IntervalBlock`s start at 05:00 UTC year-round, "a permanent
 midnight-EST day boundary", as [`Toronto_Hydro_Object_Model.md`](Toronto_Hydro_Object_Model.md)
@@ -115,7 +115,7 @@ meter read a few minutes off midnight: the missing hour was 00:00–01:00 EDT on
 midnight is off-peak, which is why it hid there.
 
 The reconciliation now covers all 19 billing periods the export and the bills share, not this one
-invoice alone — see [`../hydro_bills/green-button-vs-bills.md`](../hydro_bills/green-button-vs-bills.md).
+invoice alone — see [`../hydro_bill/green-button-vs-bills.md`](../hydro_bill/green-button-vs-bills.md).
 
 Output was also compared against the workbook the previous Python implementation produced, over all
 21 billing periods and every shared column: no differences. See `../maintenance-manual.md`,

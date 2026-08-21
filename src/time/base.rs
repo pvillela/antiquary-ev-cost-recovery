@@ -75,7 +75,7 @@ pub(crate) fn local_midnight(d: Date) -> Timestamp {
 // keep `local_date` and `local_hour` above.
 //
 // The evidence for the rule, and for that division, is in
-// `docs/hydro_bills/archive/dst-energy-anomaly-pre-fix.md`: an EST-fixed window reproduces all 19
+// `docs/hydro_bill/archive/dst-energy-anomaly-pre-fix.md`: an EST-fixed window reproduces all 19
 // invoices to the milli-kWh, while a prevailing-local one matches 6, and the on-peak and mid-peak
 // energy the bills state is reproduced only by TOU periods left on prevailing time.
 
@@ -214,7 +214,7 @@ mod test {
     }
 
     /// The hour between the two midnights belongs to the previous day on a standard-time clock.
-    /// This is the hour every billing-period difference in `docs/hydro_bills/` came down to.
+    /// This is the hour every billing-period difference in `docs/hydro_bill/` came down to.
     #[test]
     fn the_midnight_hour_belongs_to_the_previous_standard_day() {
         let t = ts("2026-06-24T04:30:00Z"); // 00:30 EDT on the 24th
