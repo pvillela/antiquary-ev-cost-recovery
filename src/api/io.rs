@@ -139,7 +139,7 @@ fn read_sessions(paths: &[&Path]) -> Result<Vec<RSession>, ReadError> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::api::pure::session_reports::CoverageError;
+    use crate::api::error::CoverageError;
     use jiff::civil::date;
 
     /// A date that is not a closing date is the caller's mistake, and is reported as such rather

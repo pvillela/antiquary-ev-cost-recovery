@@ -10,11 +10,16 @@
 //! of the API and neither depends on it; putting it beside the narrow types would have pointed that
 //! arrow the wrong way.
 
-use crate::api::io::ReadError;
-use crate::api::pure::peak_power::PeakPowerError;
-use crate::api::pure::session_reports::CoverageError;
 use std::error::Error;
 use std::fmt;
+
+// Re-exported, not merely imported. Matching on `ApiError` past its first level -- which is the
+// ordinary thing to do with an error union -- forces a caller to name the payload types, so a
+// module that hands out the union has to hand out what its variants carry. Nothing deeper: the
+// fields inside those payloads can be read without being named.
+pub use crate::api::io::ReadError;
+pub use crate::api::pure::peak_power::PeakPowerError;
+pub use crate::api::pure::session_reports::CoverageError;
 
 /// Every way an API call can fail, in one type, by the stage that failed.
 #[derive(Debug)]
