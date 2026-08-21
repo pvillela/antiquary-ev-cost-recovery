@@ -82,7 +82,7 @@ pub(crate) fn local_midnight(d: Date) -> Timestamp {
 /// The offset a billing period is cut on, under the name a bill reader will recognise.
 ///
 /// The standard-time entry of [`TZ_OFFSETS`], named rather than indexed so that the reason is
-/// visible at the use site. [`test::the_billing_offset_is_the_standard_time_one`] pins it to the
+/// visible at the use site. `test::the_billing_offset_is_the_standard_time_one` pins it to the
 /// entry it is meant to be, so reordering that array cannot silently move every period boundary.
 pub const BILLING_OFFSET: (&str, i8) = TZ_OFFSETS[0];
 
@@ -124,7 +124,7 @@ pub(crate) fn standard_midnight(d: Date) -> Timestamp {
 
 /// Rounds a `Timestamp` down to the nearest multiple of `step`, counting from the Unix epoch.
 ///
-/// The defining property, which [`test::truncation_brackets_its_input`] states and everything
+/// The defining property, which `test::truncation_brackets_its_input` states and everything
 /// built on this relies on:
 ///
 /// ```text
@@ -339,7 +339,7 @@ mod test {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
-/// Time interval. Must be on the time grid defined by [`TIME_GRID_STEP`].
+/// Time interval. Must be on the time grid defined by [`crate::sessions::TIME_GRID_STEP`].
 pub struct Interval {
     pub start: Timestamp,
     pub duration: Duration,

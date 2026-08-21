@@ -15,7 +15,7 @@
 //! where Toronto Hydro's generator writes `/CMapName/Adobe-Identity-UCS` and `>>def` -- and,
 //! worse, reports the rejection as a successful fall back to StandardEncoding. That turns every
 //! glyph into the wrong character while still returning `Ok`, which is exactly the failure a bill
-//! parser must not have. [`ToUnicode`] below reads the same CMaps and returns an error when it
+//! parser must not have. `ToUnicode` below reads the same CMaps and returns an error when it
 //! cannot.
 
 use std::collections::{BTreeMap, HashMap};

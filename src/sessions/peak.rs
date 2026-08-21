@@ -14,7 +14,7 @@ pub struct IntervalEstimates {
     /// produced it.
     ///
     /// More than one when the estimate spans a billing period, which needs the two monthly session
-    /// reports covering its ends. See [`api::pure::peak_power`](crate::pure::peak_power).
+    /// reports covering its ends. See [`api::pure::peak_power`](mod@crate::pure::peak_power).
     pub sources: Vec<PathBuf>,
     /// Interval of interest.
     pub interval: Interval,
@@ -35,7 +35,7 @@ pub struct IntervalEstimates {
     /// [`Self::excluded_sessions`].
     pub session_anomalies: Vec<Anomaly>,
     /// Every session excluded from the estimates for
-    /// [`crate::AnomalyKind::InconsistentDuration`] — the whole workbook's worth, not only those
+    /// [`crate::sessions::AnomalyKind::InconsistentDuration`] — the whole workbook's worth, not only those
     /// intersecting this interval.
     ///
     /// Unfiltered on purpose. Such a record's own fields contradict each other, so asking whether

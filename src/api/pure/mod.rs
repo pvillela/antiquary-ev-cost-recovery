@@ -6,13 +6,13 @@
 //! without a filesystem in the way.
 //!
 //! Taking a `&Path` is not I/O.
-//! [`session_reports`](session_reports::report_coverage) reads a *name*, which is a string that
+//! [`session_report`](session_report::report_coverage) reads a *name*, which is a string that
 //! happens to be spelled as a path; it never asks whether the file exists.
 //!
 //! The submodules are by subject, not by call. The API layer's other axis — reading versus
 //! computing — is already spent on the `io`/`pure` division, and spending it twice would leave
 //! every subject scattered. `peak_power` is one API operation today; `billing_period` and
-//! `session_reports` are what it and every later operation are built from.
+//! `session_report` are what it and every later operation are built from.
 
 pub mod billing_period;
 pub mod peak_power;

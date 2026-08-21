@@ -35,7 +35,7 @@ use std::{
 ///
 /// - Added to the reported session end to give `adj_conn_end`, the session's exclusive end.
 /// - The width of the window a sound record's `Conn_start + Conn_Duration` must land in — one step
-///   early, one step and a second late. See [`duration_is_consistent`].
+///   early, one step and a second late. See `duration_is_consistent`.
 ///
 /// `Conn_Duration` and `Active_Charge_Time` are *not* truncated; they carry seconds. That asymmetry
 /// is what makes the DST fold inference possible, and it is why the window above has a width at all.
@@ -46,13 +46,13 @@ pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
 /// The width of the [`Segment`]s an interval of interest is partitioned into.
 ///
 /// The duration of the interval of interest **must** be a positive multiple of this, and
-/// [`crate::interval_estimates`] panics otherwise. Not a convention: rounding the segment count up
+/// [`crate::sessions::interval_estimates`] panics otherwise. Not a convention: rounding the segment count up
 /// would tile past the interval's end and count sessions falling outside it, and rounding down
 /// would leave part of it unestimated. Neither error would show in any figure the report prints,
 /// which is why the check is an assertion rather than an accommodation.
 ///
 /// The two legal interval lengths — 15 minutes and 1 hour — are both multiples, so nothing coming
-/// through [`crate::checked_interval`] can trip it.
+/// through [`crate::sessions::checked_interval`] can trip it.
 pub const SEGMENT_DURATION: Duration = Duration::from_mins(15);
 
 /// Continuous use breaker kW rating.
@@ -168,12 +168,12 @@ pub struct Session {
 }
 
 impl Session {
-    /// `adj_conn_start_utc`: see [`adj_conn_start_of`], which this defers to.
+    /// `adj_conn_start_utc`: see `adj_conn_start_of`, which this defers to.
     pub fn adj_conn_start(&self) -> Timestamp {
         adj_conn_start_of(self.conn_start)
     }
 
-    /// `adj_conn_end_utc`: see [`adj_conn_end_of`], which this defers to.
+    /// `adj_conn_end_utc`: see `adj_conn_end_of`, which this defers to.
     ///
     /// This is the end the estimating logic uses throughout, so that
     /// `[adj_conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the
@@ -657,7 +657,7 @@ pub enum AnomalyKind {
     /// [`TIME_GRID_STEP`] or more, in one direction or the other, so the reported
     /// start, end and duration are mutually inconsistent.
     ///
-    /// The test is [`duration_is_consistent`], which carries the derivation. Three checks, and any
+    /// The test is `duration_is_consistent`, which carries the derivation. Three checks, and any
     /// failure raises this:
     ///
     /// ```text
@@ -875,7 +875,7 @@ pub struct SessionReport {
     /// report — see their docs.
     ///
     /// A vector because a report can be built from several files at once — see
-    /// [`SessionReport::from_session_lists`] — and each source file has a log of its own, written
+    /// `SessionReport::from_session_lists` — and each source file has a log of its own, written
     /// beside it.
     pub log_paths: Vec<PathBuf>,
 }

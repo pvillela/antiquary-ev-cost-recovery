@@ -8,12 +8,12 @@
 //!
 //! - [`session_list`] buckets the sessions for the peak power contribution logic, straight from
 //!   the CSV. No workbook is involved.
-//! - [`session_rows`] hands the rows over in report order, with the pass-through CSV fields still
+//! - `session_rows` hands the rows over in report order, with the pass-through CSV fields still
 //!   reachable, which is what [`super::excel::session_csv_to_xlsx`] needs to render them.
 //!
 //! Bucketing is lossy — it sorts sessions into three vectors and drops report order, the link back
 //! to the CSV record, and the reported wall times — so the writer cannot be built on
-//! [`session_list`]. Both sit on [`session_rows`] instead.
+//! [`session_list`]. Both sit on `session_rows` instead.
 //!
 //! The module is named for what it reads, so the `csv` crate is written `::csv` throughout to keep
 //! the two apart.
@@ -74,7 +74,7 @@ const REQUIRED_HEADERS: &[&str] = &[
 /// `docs/time/README.md` under "Time zone" and in `docs/sessions/README.md` under "Other".
 ///
 /// Sessions are sorted into the three buckets of [`SessionReport`] by
-/// [`SessionReport::from_session_lists`],
+/// `SessionReport::from_session_lists`,
 /// which carries the rules. Every session in the report reaches one of them; none is dropped.
 ///
 /// A `<stem>.csv.read.log` is written beside the input, holding the anomalies found and the

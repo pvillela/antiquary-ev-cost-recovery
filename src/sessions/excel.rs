@@ -115,7 +115,7 @@ const COLUMNS: &[(&str, Source)] = &[
 /// directory, and transforms it into a `.xlsx` file saved to the same directory as the input file,
 /// with the extension replaced.
 ///
-/// The parse is [`csv::session_rows`]; nothing about the session report is interpreted here. The
+/// The parse is `csv::session_rows`; nothing about the session report is interpreted here. The
 /// domain rules — the UTC conversion and its DST policy, the definitions of `adj_conn_end` and
 /// `adj_conn_duration`, and the treatment of zero-`Energy_Use` sessions — are specified in
 /// `docs/time/README.md` under "Time zone" and in `docs/sessions/README.md` under "Excel workbook"
@@ -529,7 +529,7 @@ type SheetHeaders = HashMap<String, u32>;
 ///
 /// Sorting into the three buckets of [`SessionReport`] happens here rather than at conversion time,
 /// because the workbook is meant to be a faithful rendering of the session report. The rules are
-/// [`SessionReport::from_session_lists`]'s, shared with [`csv::session_list`] so the two readers
+/// `SessionReport::from_session_lists`'s, shared with [`csv::session_list`] so the two readers
 /// cannot disagree.
 ///
 /// `avg_kw` is recomputed here rather than read from the sheet's `avg_kw` column, which
