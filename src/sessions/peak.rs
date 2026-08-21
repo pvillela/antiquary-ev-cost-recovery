@@ -14,7 +14,7 @@ pub struct IntervalEstimates {
     /// produced it.
     ///
     /// More than one when the estimate spans a billing period, which needs the two monthly session
-    /// reports covering its ends. See [`crate::peak_power`].
+    /// reports covering its ends. See [`api::pure::peak_power`](crate::pure::peak_power).
     pub sources: Vec<PathBuf>,
     /// Interval of interest.
     pub interval: Interval,

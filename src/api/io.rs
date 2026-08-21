@@ -9,15 +9,63 @@ use crate::api::pure;
 use crate::green_button::period_values_xml;
 use crate::hydro_bills::BILL_END_DAY;
 use crate::sessions::{RSession, csv};
-use crate::{ApiError, PowerEstimates, ReadError};
 use jiff::civil::Date;
-use std::path::Path;
+use std::error::Error;
+use std::fmt;
+use std::path::{Path, PathBuf};
+
+// Re-exported rather than merely imported: both name what `peak_power` returns, and a caller
+// should not have to know which module the call delegates to in order to spell that.
+pub use crate::api::error::ApiError;
+pub use crate::api::pure::peak_power::PowerEstimates;
+
+/// A source file could not be read.
+///
+/// The only error kind this module raises on its own. Everything else it returns comes from a pure
+/// function it delegated to.
+///
+/// `path` is held for a caller that wants to act on which file failed rather than print it. It is
+/// deliberately *not* written into the message: both readers name the file they concern, so adding
+/// it here produced `data/x.XML: data/x.XML: ...`.
+#[derive(Debug)]
+pub enum ReadError {
+    /// The Green Button export could not be read, could not be parsed, or carries no reading in
+    /// the billing period asked for.
+    GreenButton {
+        path: PathBuf,
+        cause: Box<dyn Error>,
+    },
+
+    /// A session report could not be read.
+    SessionReport {
+        path: PathBuf,
+        cause: Box<dyn Error>,
+    },
+}
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::GreenButton { cause, .. } | Self::SessionReport { cause, .. } => cause.fmt(f),
+        }
+    }
+}
+
+impl Error for ReadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::GreenButton { cause, .. } | Self::SessionReport { cause, .. } => {
+                Some(cause.as_ref())
+            }
+        }
+    }
+}
 
 /// Returns peak power estimates for the intervals of interest that maximize kW and kVA in the
 /// specified billing period.
 ///
 /// Reads the meter export and the two session reports, and hands them to
-/// [`pure::peak_power`](super::pure::peak_power), which states what is done with them and returns
+/// [`pure::peak_power`](fn@super::pure::peak_power), which states what is done with them and returns
 /// the figures. The two intervals are the hours the *building* peaked in, and each estimate says
 /// how much of that hour's demand the chargers can account for.
 ///
@@ -69,7 +117,7 @@ pub fn peak_power(
 ///
 /// Flattened rather than kept per file, and deliberately not merged. Which records describe one
 /// session is a question about the records, so it belongs to
-/// [`pure::peak_power`](super::pure::peak_power); this only fetches them.
+/// [`pure::peak_power`](fn@super::pure::peak_power); this only fetches them.
 ///
 /// All three of each report's buckets are taken. Bucketing is a function of a session's own
 /// anomalies, so it is redone identically on the other side, and dropping the excluded ones here
@@ -91,7 +139,7 @@ fn read_sessions(paths: &[&Path]) -> Result<Vec<RSession>, ReadError> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::CoverageError;
+    use crate::api::pure::session_reports::CoverageError;
     use jiff::civil::date;
 
     /// A date that is not a closing date is the caller's mistake, and is reported as such rather

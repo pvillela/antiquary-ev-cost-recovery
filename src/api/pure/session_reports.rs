@@ -6,10 +6,89 @@
 //!
 //! Nothing here opens anything. A `&Path` is read as a string.
 
-use crate::api::pure::billing_period::billing_period_dates;
-use crate::{CoverageError, SessionReportCoverage};
+use crate::api::pure::billing_period::{NotABillingPeriodEnding, billing_period_dates};
 use jiff::civil::Date;
-use std::path::Path;
+use std::error::Error;
+use std::fmt;
+use std::path::{Path, PathBuf};
+
+/// What a session report's file name says it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionReportCoverage {
+    pub path: PathBuf,
+    /// First calendar date the report covers.
+    pub from: Date,
+    /// Last calendar date the report covers, inclusive.
+    pub to: Date,
+}
+
+/// Why the session reports named cannot be checked against a billing period, or do not cover it.
+///
+/// Every variant is settled from the file *names*. Nothing here has opened anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoverageError {
+    NotABillingPeriodEnding(NotABillingPeriodEnding),
+
+    /// A session report's file name does not state the dates it covers, so it cannot be checked
+    /// against the billing period. See [`report_coverage`].
+    UndatedSessionReport {
+        path: PathBuf,
+    },
+
+    /// The session reports given do not cover the whole billing period between them.
+    ///
+    /// Almost always the wrong months handed in. The alternative is an estimate that reads as a
+    /// small or zero EV contribution, which is a figure someone may go on to argue a bill from.
+    PeriodNotCovered {
+        period_start: Date,
+        period_ending: Date,
+        coverage: Vec<SessionReportCoverage>,
+    },
+}
+
+impl From<NotABillingPeriodEnding> for CoverageError {
+    fn from(e: NotABillingPeriodEnding) -> Self {
+        Self::NotABillingPeriodEnding(e)
+    }
+}
+
+impl fmt::Display for CoverageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotABillingPeriodEnding(e) => e.fmt(f),
+            Self::UndatedSessionReport { path } => write!(
+                f,
+                "{}: the file name does not say what the report covers; expected a name of the \
+                 form Session_Report_June_1_2026-June_30_2026.csv",
+                path.display()
+            ),
+            Self::PeriodNotCovered {
+                period_start,
+                period_ending,
+                coverage,
+            } => {
+                write!(
+                    f,
+                    "the session reports do not cover the billing period {period_start} to \
+                     {period_ending}:"
+                )?;
+                for c in coverage {
+                    write!(f, "\n  {} covers {} to {}", c.path.display(), c.from, c.to)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl Error for CoverageError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::NotABillingPeriodEnding(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// Checks that the named session reports cover the billing period completely between them, and
 /// returns what each one covers.

@@ -4,11 +4,35 @@
 //! boundary is defined. This is the API layer's view of it: the two calendar dates a caller states
 //! a period by, and the check that the date it was given labels a period at all.
 
-use crate::NotABillingPeriodEnding;
 use crate::green_button::BillingPeriod;
 use crate::hydro_bills::BILL_END_DAY;
 use crate::time::standard_date;
 use jiff::civil::Date;
+use std::error::Error;
+use std::fmt;
+
+/// The date given does not label a billing period: it is not [`BILL_END_DAY`] of its month.
+///
+/// A struct rather than a one-variant enum, so a function that can fail only this way says exactly
+/// that and a caller has nothing to match on. The error enums of operations that call
+/// [`billing_period_dates`] embed it rather than restating it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotABillingPeriodEnding {
+    pub ending: Date,
+}
+
+impl fmt::Display for NotABillingPeriodEnding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ending = self.ending;
+        write!(
+            f,
+            "{ending} does not name a billing period: one is labelled by day {BILL_END_DAY} of the \
+             month it ends in"
+        )
+    }
+}
+
+impl Error for NotABillingPeriodEnding {}
 
 /// The first and last calendar dates the billing period labelled by `billing_period_ending` spans,
 /// both inclusive.

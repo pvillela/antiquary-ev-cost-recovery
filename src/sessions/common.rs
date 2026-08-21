@@ -119,7 +119,13 @@ pub(crate) fn duration_is_consistent(
 // Session
 // ---------------------------------------------------------------------------
 
-pub(crate) type RSession = Rc<Session>;
+/// A shared [`Session`].
+///
+/// Public because it appears in public signatures — [`Segment::sessions`],
+/// [`SessionReport::sessions`], and the API's estimating calls — and naming the type a caller has
+/// to write is the point of an alias. The sharing is what lets one session belong to several
+/// segments, and to an [`Anomaly`], without being copied.
+pub type RSession = Rc<Session>;
 
 #[derive(Debug)]
 /// Charging session
@@ -562,7 +568,7 @@ impl Add for Load {
 
 /// A shared [`Segment`].
 ///
-/// [`crate::IntervalEstimates`] names the same segment three times over — once in the full listing,
+/// [`IntervalEstimates`](super::IntervalEstimates) names the same segment three times over — once in the full listing,
 /// and again as the maximum of each derivation — so sharing rather than copying is what keeps those
 /// references *the same segment* rather than three equal ones. A reader can then ask whether the
 /// two derivations peaked together with [`std::rc::Rc::ptr_eq`], instead of comparing clock times

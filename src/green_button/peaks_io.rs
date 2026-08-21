@@ -44,6 +44,9 @@ pub fn period_values_xml(
 ) -> Result<PeriodValues, Box<dyn Error>> {
     check_calendar(period_ending, bill_end_day)?;
 
+    // Every error out of this function names the file it concerns, including the ones below where
+    // the underlying error would not: a bare "No such file or directory" says nothing a reader can
+    // act on. A caller that has the path already should therefore not add it again.
     let xml =
         std::fs::read_to_string(xml_path).map_err(|e| format!("{}: {e}", xml_path.display()))?;
     let feed = parse(&xml).map_err(|e| format!("{}: {e}", xml_path.display()))?;

@@ -1,12 +1,72 @@
 //! The EV share of the two hours a billing period peaked in.
 
-use crate::api::pure::billing_period::billing_period_dates;
-use crate::green_button::{METER_INTERVAL, Peak, PeriodValues};
-use crate::sessions::{RSession, SessionReport, estimates_from_report};
+use crate::api::pure::billing_period::{NotABillingPeriodEnding, billing_period_dates};
+use crate::green_button::{METER_INTERVAL, Peak};
+use crate::sessions::{IntervalEstimates, SessionReport, estimates_from_report};
 use crate::time::Interval;
-use crate::{PeakPowerError, PowerEstimates};
+
+// Re-exported because `peak_power` takes them. `IntervalEstimates` is deliberately not: it is
+// inside `PowerEstimates` rather than named by the signature, and a reader who probes that far can
+// go to `sessions` for it.
+pub use crate::green_button::PeriodValues;
+pub use crate::sessions::RSession;
 use jiff::civil::Date;
+use std::error::Error;
+use std::fmt;
 use std::path::PathBuf;
+
+/// Peak power estimates for a billing period.
+pub struct PowerEstimates {
+    pub kw_estimates: IntervalEstimates,
+    pub kva_estimates: IntervalEstimates,
+}
+
+/// Why a billing period's figures cannot be turned into peak power estimates.
+///
+/// No variant names a file. Producing this is a computation, and a computation cannot fail to read
+/// something.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeakPowerError {
+    NotABillingPeriodEnding(NotABillingPeriodEnding),
+
+    /// The billing period carries no reading in one of the two power series, so it has no maximum
+    /// to estimate against. The feed is expected to carry hourly kW *and* kVA.
+    NoPeak {
+        period_ending: Date,
+        unit: &'static str,
+    },
+}
+
+impl From<NotABillingPeriodEnding> for PeakPowerError {
+    fn from(e: NotABillingPeriodEnding) -> Self {
+        Self::NotABillingPeriodEnding(e)
+    }
+}
+
+impl fmt::Display for PeakPowerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotABillingPeriodEnding(e) => e.fmt(f),
+            Self::NoPeak {
+                period_ending,
+                unit,
+            } => write!(
+                f,
+                "the billing period ending {period_ending} carries no {unit} reading, so it has no \
+                 {unit} maximum to estimate against"
+            ),
+        }
+    }
+}
+
+impl Error for PeakPowerError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::NotABillingPeriodEnding(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// Returns peak power estimates for the intervals of interest that maximize kW and kVA in the
 /// specified billing period.
@@ -21,7 +81,7 @@ use std::path::PathBuf;
 ///
 /// Each interval is a whole metering hour, because that is the resolution the Green Button feed
 /// states demand at. The estimate within it is still a 15-minute figure: an
-/// [`IntervalEstimates`](crate::IntervalEstimates) reports the highest of the hour's four segments,
+/// [`IntervalEstimates`](crate::sessions::IntervalEstimates) reports the highest of the hour's four segments,
 /// which is the basis the demand charge is billed on. See docs/sessions/README.md, "Interval of
 /// interest boundaries".
 ///
@@ -45,7 +105,7 @@ use std::path::PathBuf;
 /// A `Charge_Session_ID` carried by two records that are *not* identical does not collapse. Such
 /// records are kept and estimated from, both of them, and each is flagged
 /// [`AnomalyKind::DuplicateId`](crate::sessions::AnomalyKind::DuplicateId) in the returned
-/// [`IntervalEstimates::session_anomalies`](crate::IntervalEstimates::session_anomalies) — subject
+/// [`IntervalEstimates::session_anomalies`](crate::sessions::IntervalEstimates::session_anomalies) — subject
 /// to the same scoping as every other anomaly there, so one is listed only if its session reaches
 /// that estimate's interval.
 ///
@@ -99,7 +159,7 @@ pub fn peak_power(
 /// report says it was built from cannot disagree with what it was actually built from.
 ///
 /// A file that contributed no session is therefore not named. That is the intended reading of
-/// [`IntervalEstimates::sources`](crate::IntervalEstimates::sources) — the files the sessions were
+/// [`IntervalEstimates::sources`](crate::sessions::IntervalEstimates::sources) — the files the sessions were
 /// read from — and a month in which nobody charged contributed nothing to any figure.
 fn sources_of(sessions: &[RSession]) -> Vec<PathBuf> {
     let mut sources: Vec<PathBuf> = Vec::new();

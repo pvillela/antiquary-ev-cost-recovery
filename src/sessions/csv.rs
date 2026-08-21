@@ -237,9 +237,14 @@ fn note_off_grid_rows(rows: &[Row], log: &mut RunLog) {
 type Headers = HashMap<String, usize>;
 
 fn read_csv(path: &Path) -> Result<(Headers, Vec<::csv::StringRecord>), Box<dyn Error>> {
-    let mut reader = ::csv::Reader::from_path(path)?;
+    // The `csv` crate's errors do not name the file -- a missing report reads as a bare "No such
+    // file or directory" -- so the path is added here. Every error out of this module names the
+    // file it concerns, which is why a caller holding the path should not add it again.
+    let named = |e: ::csv::Error| format!("{}: {e}", path.display());
+    let mut reader = ::csv::Reader::from_path(path).map_err(named)?;
     let headers: Headers = reader
-        .headers()?
+        .headers()
+        .map_err(named)?
         .iter()
         .enumerate()
         .map(|(i, h)| (h.trim().to_owned(), i))
