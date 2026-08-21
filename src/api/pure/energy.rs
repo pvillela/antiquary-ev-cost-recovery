@@ -5,17 +5,60 @@
 //! kilowatt-hour at a rate that depends on when it was drawn.
 
 use crate::{
-    hydro_bill::{BILL_END_DAY, BillingPeriod, NotABillingPeriodEnding, billing_period_dates},
+    hydro_bill::{
+        BILL_END_DAY, BillingPeriod, HydroBill, NotABillingPeriodEnding, billing_period_dates,
+    },
     session::{SessionReport, tou_kwh},
     time::Interval,
 };
+use jiff::civil::Date;
+use std::{error::Error, fmt};
 
 // Re-exported because `energy` takes one and returns the other, and a caller should not have to
 // know which module they come from in order to spell the call.
 pub use crate::session::{RSession, TouKwh};
-use jiff::civil::Date;
-use std::error::Error;
-use std::fmt;
+
+/// EV cost-recovery TOU rates.
+pub struct CostRecoveryRates {
+    pub on_peak: f64,
+    pub mid_peak: f64,
+    pub off_peak: f64,
+}
+
+/// Breakdown of enegy costs attributable to EV sessions in a billing period.
+pub struct EnergyCost {
+    /// EV energy used by TOU.
+    pub kwh: TouKwh,
+    /// Loss factor adjustment from bill.
+    pub loss_factor_adjustment: f64,
+    /// EV energy used by TOU, multiplied by loss factor adjustment.
+    pub adjusted_kwh: TouKwh,
+
+    /// Totonto Hydro blended nominal on-peak rate.
+    pub th_on_peak_rate: f64,
+    /// Totonto Hydro blended nominal mid-peak rate.
+    pub th_mid_peak_rate: f64,
+    /// Totonto Hydro blended nominal off-peak rate.
+    pub th_off_peak_rate: f64,
+
+    /// On-peak energy cost attributable to EV sessions:
+    /// `adjusted_kwh.on_peak * th_on_peak_rate`.
+    pub on_peak_cost: f64,
+    /// Mid-peak energy cost attributable to EV sessions:
+    /// `adjusted_kwh.mid_peak * th_mid_peak_rate`.
+    pub mid_peak_cost: f64,
+    /// Off-peak energy cost attributable to EV sessions:
+    /// `adjusted_kwh.off_peak * th_off_peak_rate`.
+    pub off_peak_cost: f64,
+
+    /// HST on delivery charges attributable to EV sessions, before OER.
+    pub hst: f64,
+    /// Onario Electricity Rebate
+    pub ontario_electricity_rebate: f64,
+
+    /// Total energy cost attributable to EV sessions, net of HST and OER.
+    pub energy_cost: f64,
+}
 
 /// Why a billing period's sessions cannot be turned into an energy attribution.
 ///
@@ -104,6 +147,11 @@ pub fn energy(billing_period_ending: Date, sessions: &[RSession]) -> Result<TouK
         .collect();
 
     Ok(tou_kwh(time_range, &counted))
+}
+
+/// Energy cost attributable to EV sessions during the billing period.
+pub fn energy_cost(bill: &HydroBill, sessions: &[RSession]) -> Result<EnergyCost, EnergyError> {
+    todo!()
 }
 
 // cargo test --lib -- api::pure::energy::test
