@@ -156,6 +156,87 @@ impl Error for PeakPowerError {
     }
 }
 
+/// Returns peak power estimates for the intervals of interest that maximize kW and kVA in the
+/// specified billing period.
+///
+/// The reading half of the same call is [`io::peak_power`](crate::io::peak_power), which is where
+/// these arguments come from. This is everything that call does once the meter export and the
+/// session reports have been read.
+///
+/// The two intervals are the hours the *building* peaked in, taken from `gb_period_values`, and
+/// each estimate says how much of that hour's demand the chargers can account for. They are usually
+/// different hours, and occasionally the same one.
+///
+/// Each interval is a whole metering hour, because that is the resolution the Green Button feed
+/// states demand at. The estimate within it is still a 15-minute figure: an
+/// [`IntervalEstimates`](crate::sessions::IntervalEstimates) reports the highest of the hour's four segments,
+/// which is the basis the demand charge is billed on. See docs/sessions/README.md, "Interval of
+/// interest boundaries".
+///
+/// The maxima used are the period's unrestricted ones — what an invoice bills as `Demand kW` and
+/// `Demand kVA` — not the 07:00-19:00 figures it reports as `Peak kW 7-7`.
+///
+/// # Arguments
+/// - `billing_period_ending` - the billing period, named by the date it closes on. Must be
+///   [`BILL_END_DAY`](crate::hydro_bills::BILL_END_DAY) of its month.
+/// - `gb_period_values` - that period's figures, read from the meter export.
+/// - `sessions` - every session from every report covering the period, as read, in the order the
+///   reports were read. Not merged: which records describe one session is decided here, since that
+///   is a question about the records rather than about the files they came from.
+///
+/// # Sessions the reports share
+///
+/// Monthly reports overlap at the month boundary, so a session near it appears in both. A record
+/// the two state identically is one session and is counted once; counting it twice would inflate
+/// every figure drawn from it.
+///
+/// A `Charge_Session_ID` carried by two records that are *not* identical does not collapse. Such
+/// records are kept and estimated from, both of them, and each is flagged
+/// [`AnomalyKind::DuplicateId`](crate::sessions::AnomalyKind::DuplicateId) in the returned
+/// [`IntervalEstimates::session_anomalies`](crate::sessions::IntervalEstimates::session_anomalies) — subject
+/// to the same scoping as every other anomaly there, so one is listed only if its session reaches
+/// that estimate's interval.
+///
+/// A flag rather than an error, because a shared id is not necessarily a fault.
+/// `Charge_Session_ID` is not unique in Evolute's reports — the June 2026 report carries `S37487`
+/// on two sessions a week apart, within the one file — so refusing would make that month
+/// unestimatable. The flag also cannot tell a reused id from two reports genuinely disagreeing
+/// about one session, which is why both records are kept and the judgement is left to a reader who
+/// can go back to the source rows.
+///
+/// # Errors
+///
+/// [`PeakPowerError::NotABillingPeriodEnding`] if `billing_period_ending` does not label a period,
+/// and [`PeakPowerError::NoPeak`] if the period carries no reading in one of the two series.
+///
+/// [`PeakPowerError::ValuesAreForAnotherPeriod`] if `gb_period_values` describes some other period,
+/// and [`PeakPowerError::PeriodNotFullyCovered`] if it is missing hours of the one asked for. Both
+/// estimates rest on a maximum over the whole period, so a partial one is refused rather than
+/// estimated from.
+///
+/// There is no variant naming a file: nothing here reads one.
+pub fn peak_power(
+    billing_period_ending: Date,
+    gb_period_values: PeriodValues,
+    sessions: &[RSession],
+) -> Result<PowerEstimates, PeakPowerError> {
+    // Re-checked rather than assumed. This is an entry point in its own right, and a caller
+    // reaching it directly has not been through `io::peak_power`'s validation.
+    billing_period_dates(billing_period_ending)?;
+    check_period_covered(billing_period_ending, &gb_period_values)?;
+
+    let kw_ioi = peak_interval(gb_period_values.max_kw, "kW", billing_period_ending)?;
+    let kva_ioi = peak_interval(gb_period_values.max_kva, "kVA", billing_period_ending)?;
+
+    // Both estimates come off the one report, so the two figures cannot be drawn from different
+    // session data.
+    let (sessions_report, sources) = one_report(sessions);
+    Ok(PowerEstimates {
+        kw_estimates: estimates_from_report(kw_ioi, sources.clone(), &sessions_report),
+        kva_estimates: estimates_from_report(kva_ioi, sources, &sessions_report),
+    })
+}
+
 /// The month the delivery lines are priced against: they are levied "per kW per 30 Days", which is
 /// where the bill's `Adj.` proration of the demand figures comes from.
 const BILLED_DAYS_PER_MONTH: f64 = 30.0;
@@ -321,87 +402,6 @@ fn energy_based(
     which: impl Fn(&EstimateSet) -> Bracket<f64>,
 ) -> f64 {
     which(&estimates.energy_based_seg_estimate.1).mid()
-}
-
-/// Returns peak power estimates for the intervals of interest that maximize kW and kVA in the
-/// specified billing period.
-///
-/// The reading half of the same call is [`io::peak_power`](crate::io::peak_power), which is where
-/// these arguments come from. This is everything that call does once the meter export and the
-/// session reports have been read.
-///
-/// The two intervals are the hours the *building* peaked in, taken from `gb_period_values`, and
-/// each estimate says how much of that hour's demand the chargers can account for. They are usually
-/// different hours, and occasionally the same one.
-///
-/// Each interval is a whole metering hour, because that is the resolution the Green Button feed
-/// states demand at. The estimate within it is still a 15-minute figure: an
-/// [`IntervalEstimates`](crate::sessions::IntervalEstimates) reports the highest of the hour's four segments,
-/// which is the basis the demand charge is billed on. See docs/sessions/README.md, "Interval of
-/// interest boundaries".
-///
-/// The maxima used are the period's unrestricted ones — what an invoice bills as `Demand kW` and
-/// `Demand kVA` — not the 07:00-19:00 figures it reports as `Peak kW 7-7`.
-///
-/// # Arguments
-/// - `billing_period_ending` - the billing period, named by the date it closes on. Must be
-///   [`BILL_END_DAY`](crate::hydro_bills::BILL_END_DAY) of its month.
-/// - `gb_period_values` - that period's figures, read from the meter export.
-/// - `sessions` - every session from every report covering the period, as read, in the order the
-///   reports were read. Not merged: which records describe one session is decided here, since that
-///   is a question about the records rather than about the files they came from.
-///
-/// # Sessions the reports share
-///
-/// Monthly reports overlap at the month boundary, so a session near it appears in both. A record
-/// the two state identically is one session and is counted once; counting it twice would inflate
-/// every figure drawn from it.
-///
-/// A `Charge_Session_ID` carried by two records that are *not* identical does not collapse. Such
-/// records are kept and estimated from, both of them, and each is flagged
-/// [`AnomalyKind::DuplicateId`](crate::sessions::AnomalyKind::DuplicateId) in the returned
-/// [`IntervalEstimates::session_anomalies`](crate::sessions::IntervalEstimates::session_anomalies) — subject
-/// to the same scoping as every other anomaly there, so one is listed only if its session reaches
-/// that estimate's interval.
-///
-/// A flag rather than an error, because a shared id is not necessarily a fault.
-/// `Charge_Session_ID` is not unique in Evolute's reports — the June 2026 report carries `S37487`
-/// on two sessions a week apart, within the one file — so refusing would make that month
-/// unestimatable. The flag also cannot tell a reused id from two reports genuinely disagreeing
-/// about one session, which is why both records are kept and the judgement is left to a reader who
-/// can go back to the source rows.
-///
-/// # Errors
-///
-/// [`PeakPowerError::NotABillingPeriodEnding`] if `billing_period_ending` does not label a period,
-/// and [`PeakPowerError::NoPeak`] if the period carries no reading in one of the two series.
-///
-/// [`PeakPowerError::ValuesAreForAnotherPeriod`] if `gb_period_values` describes some other period,
-/// and [`PeakPowerError::PeriodNotFullyCovered`] if it is missing hours of the one asked for. Both
-/// estimates rest on a maximum over the whole period, so a partial one is refused rather than
-/// estimated from.
-///
-/// There is no variant naming a file: nothing here reads one.
-pub fn peak_power(
-    billing_period_ending: Date,
-    gb_period_values: PeriodValues,
-    sessions: &[RSession],
-) -> Result<PowerEstimates, PeakPowerError> {
-    // Re-checked rather than assumed. This is an entry point in its own right, and a caller
-    // reaching it directly has not been through `io::peak_power`'s validation.
-    billing_period_dates(billing_period_ending)?;
-    check_period_covered(billing_period_ending, &gb_period_values)?;
-
-    let kw_ioi = peak_interval(gb_period_values.max_kw, "kW", billing_period_ending)?;
-    let kva_ioi = peak_interval(gb_period_values.max_kva, "kVA", billing_period_ending)?;
-
-    // Both estimates come off the one report, so the two figures cannot be drawn from different
-    // session data.
-    let (sessions_report, sources) = one_report(sessions);
-    Ok(PowerEstimates {
-        kw_estimates: estimates_from_report(kw_ioi, sources.clone(), &sessions_report),
-        kva_estimates: estimates_from_report(kva_ioi, sources, &sessions_report),
-    })
 }
 
 /// Whether the meter figures cover the whole of the billing period.
