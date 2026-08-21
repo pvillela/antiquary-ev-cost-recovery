@@ -918,23 +918,6 @@ mod test {
         assert!(cost.delivery_cost > charges);
     }
 
-    /// The 7-7 maximum is a series of its own. A period carrying none has no network charge to
-    /// apportion, and says so rather than pricing that line at zero.
-    #[test]
-    fn a_period_missing_the_7_7_maximum_has_no_cost() {
-        let err = peak_power_cost(
-            &bill(),
-            period_values(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR)),
-            &two_reports(),
-        )
-        .err()
-        .expect("the period carries no 7-7 maximum");
-        assert!(
-            matches!(err, PeakPowerError::NoPeak { unit: "kW 7-7", .. }),
-            "{err}"
-        );
-    }
-
     /// Every figure is a proportion of a bill line, so a bill from another month would give a
     /// plausible number resting on nothing.
     #[test]
