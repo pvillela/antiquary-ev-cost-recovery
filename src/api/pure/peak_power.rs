@@ -451,17 +451,11 @@ fn check_period_covered(
     Ok(())
 }
 
-/// The files' sessions as one report, with the files they came from.
+/// The sessions as one report, with the files they came from.
 ///
-/// They become one report here rather than arriving as one. Deciding which records are the same
-/// session, and what each surviving session is fit for, are both functions of the sessions alone,
-/// which is why they sit on this side of the split.
-///
-/// One list rather than one per file: `merge_sessions` compares each session against everything
-/// already kept and never looks at list boundaries, so concatenating the files first gives the same
-/// answer as handing them over separately.
-///
-/// No log paths, because nothing here writes a log. That field records where a *reader* put one.
+/// `sessions` may state the same session more than once, and this is what counts it once. It also
+/// decides what each surviving session is fit for — both questions about the records alone, which
+/// is why they are settled on this side of the `io`/`pure` split rather than by a reader.
 ///
 /// Shared by both entry points so that a [`DeliveryCost`] and the [`PowerEstimates`] for the same
 /// period cannot be built from different readings of the same records.

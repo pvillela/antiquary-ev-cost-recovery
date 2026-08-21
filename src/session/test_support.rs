@@ -45,6 +45,68 @@ pub(crate) fn session(
     })
 }
 
+/// A session whose reported end precedes its reported start, flagged as such.
+///
+/// [`session`] cannot express this: it derives the end from a positive elapsed time. The
+/// inversion has to be built by hand, and it is worth having because such a record is the one shape
+/// that no calculation may be handed --
+/// [`Session::adj_duration`](super::Session::adj_duration) panics on it rather than returning a
+/// negative span, so a caller that forgets to drop it brings the call down instead of reporting a
+/// wrong figure.
+///
+/// Carries [`AnomalyKind::InconsistentDuration`] because that is what the readers attach to it, and
+/// what [`SessionReport`](super::SessionReport) sorts on. See
+/// [`duration_is_consistent`](super::duration_is_consistent), check 1.
+pub(crate) fn inverted_session(
+    path: &str,
+    row: usize,
+    id: &str,
+    conn_start: &str,
+    minutes_before_start: i64,
+    energy_use: f64,
+) -> RSession {
+    let conn_start: Timestamp = conn_start.parse().expect("an RFC 3339 timestamp");
+    let backwards = Duration::from_secs(minutes_before_start.unsigned_abs() * 60);
+    Rc::new(Session {
+        path: Rc::new(PathBuf::from(path)),
+        row,
+        id: id.to_owned(),
+        conn_start,
+        conn_end: conn_start - backwards,
+        conn_duration: backwards,
+        charge_time: backwards,
+        energy_use,
+        anomalies: vec![AnomalyKind::InconsistentDuration],
+    })
+}
+
+/// A session with real energy and zero `Active_Charge_Time` — what the readers call a spike.
+///
+/// `energy_use / charge_time` is infinite, which is why the peak estimates hold these apart. The
+/// connection itself is sound and `minutes` long, so anything derived from connection time rather
+/// than charge time is well defined.
+pub(crate) fn spike_session(
+    path: &str,
+    row: usize,
+    id: &str,
+    conn_start: &str,
+    minutes: i64,
+    energy_use: f64,
+) -> RSession {
+    let sound = session(path, row, id, conn_start, minutes, energy_use);
+    Rc::new(Session {
+        path: sound.path.clone(),
+        row: sound.row,
+        id: sound.id.clone(),
+        conn_start: sound.conn_start,
+        conn_end: sound.conn_end,
+        conn_duration: sound.conn_duration,
+        charge_time: Duration::ZERO,
+        energy_use: sound.energy_use,
+        anomalies: sound.anomalies.clone(),
+    })
+}
+
 /// A row's anomalies with [`AnomalyKind::ExcessiveAvgKw`] removed.
 ///
 /// Nearly every test in [`super::csv`] and [`super::excel`] is about *timestamps* — DST

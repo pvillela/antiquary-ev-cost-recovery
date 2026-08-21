@@ -18,6 +18,7 @@ use std::fmt;
 // module that hands out the union has to hand out what its variants carry. Nothing deeper: the
 // fields inside those payloads can be read without being named.
 pub use crate::api::io::ReadError;
+pub use crate::api::pure::energy::EnergyError;
 pub use crate::api::pure::peak_power::PeakPowerError;
 pub use crate::api::pure::session_report::CoverageError;
 
@@ -31,6 +32,8 @@ pub enum ApiError {
     Read(ReadError),
     /// The figures were read but do not yield estimates.
     PeakPower(PeakPowerError),
+    /// The figures were read but do not yield an energy attribution.
+    Energy(EnergyError),
 }
 
 impl From<CoverageError> for ApiError {
@@ -51,6 +54,12 @@ impl From<PeakPowerError> for ApiError {
     }
 }
 
+impl From<EnergyError> for ApiError {
+    fn from(e: EnergyError) -> Self {
+        Self::Energy(e)
+    }
+}
+
 // No `From<NotABillingPeriodEnding>`. It would have to choose between `Coverage` and `PeakPower`
 // arbitrarily, and the choice would be invisible at the call site. Convert through whichever of the
 // two the calling function actually reports.
@@ -61,6 +70,7 @@ impl fmt::Display for ApiError {
             Self::Coverage(e) => e.fmt(f),
             Self::Read(e) => e.fmt(f),
             Self::PeakPower(e) => e.fmt(f),
+            Self::Energy(e) => e.fmt(f),
         }
     }
 }
@@ -71,6 +81,7 @@ impl Error for ApiError {
             Self::Coverage(e) => Some(e),
             Self::Read(e) => Some(e),
             Self::PeakPower(e) => Some(e),
+            Self::Energy(e) => Some(e),
         }
     }
 }
