@@ -8,7 +8,7 @@
 use crate::api::pure;
 use crate::green_button::period_values_xml;
 use crate::hydro_bill::{BILL_END_DAY, hydro_bill_from_pdf};
-use crate::sessions::{RSession, csv};
+use crate::session::{RSession, csv};
 use jiff::civil::Date;
 use std::error::Error;
 use std::fmt;

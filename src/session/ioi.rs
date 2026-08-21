@@ -3,7 +3,7 @@
 //! The library core stays permissive on purpose: [`interval_estimates`](crate::interval_estimates)
 //! is happy with any interval, and exploratory callers and tests rely on that. What must not happen
 //! is a *bill* being argued from an off-spec window, so every front-end that produces a quotable
-//! figure comes through [`checked_interval`]. See docs/sessions/README.md, "Interval of interest boundaries".
+//! figure comes through [`checked_interval`]. See docs/session/README.md, "Interval of interest boundaries".
 //!
 //! The command line and the GUI ask the same questions in different orders — the one parses text
 //! and reports what is wrong with it, the other offers only choices that are right — so what is
@@ -19,7 +19,7 @@ use jiff::{
     tz::{Offset, TimeZone},
 };
 
-/// The four legal start minutes. See docs/sessions/README.md, "Interval of interest boundaries".
+/// The four legal start minutes. See docs/session/README.md, "Interval of interest boundaries".
 pub const LEGAL_START_MINUTES: [i8; 4] = [0, 15, 30, 45];
 
 /// The two lengths an interval of interest may have.

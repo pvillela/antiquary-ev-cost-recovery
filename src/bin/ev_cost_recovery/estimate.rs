@@ -4,7 +4,7 @@ use crate::state::{EstimateState, WorkingDir, report_sections};
 use crate::{theme, widgets};
 use eframe::egui;
 use egui_extras::DatePickerButton;
-use ev_cost_recovery::sessions::{
+use ev_cost_recovery::session::{
     Bracket, IntervalEstimates, IoiLength, LEGAL_START_MINUTES, Segment,
 };
 use ev_cost_recovery::time::time_zone;
@@ -113,7 +113,7 @@ fn interval_controls(ui: &mut egui::Ui, state: &mut EstimateState) {
 
                 ui.label("Length");
                 // An hour-long interval is legal only from HH:00, so off the hour the button is
-                // simply not on offer. See docs/sessions/README.md, "Interval of interest boundaries".
+                // simply not on offer. See docs/session/README.md, "Interval of interest boundaries".
                 let options = [
                     (IoiLength::FifteenMinutes, "15 minutes", true),
                     (

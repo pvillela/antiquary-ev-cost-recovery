@@ -146,7 +146,7 @@ Notes on reading these:
 - Check 1 is not implied by the other two. A record with `rep_start` one `OUR_STEP` after `rep_end`
   and `conn_duration == 0` satisfies both of them.
 
-Implemented by `duration_is_consistent` in `src/sessions/common.rs`, which is the single place the
+Implemented by `duration_is_consistent` in `src/session/common.rs`, which is the single place the
 three appear in code and the only caller-facing statement of them.
 
 ## Appendix: Other bounds on `adj_end`

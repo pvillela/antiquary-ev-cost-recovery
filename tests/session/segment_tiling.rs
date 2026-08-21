@@ -28,7 +28,7 @@
 //! times and session counts, which are properties of the fixture rather than of the site model.
 
 use ev_cost_recovery::{
-    sessions::{
+    session::{
         AnomalyKind, BREAKER_RATING_KW, IntervalEstimates, excel::session_csv_to_xlsx,
         interval_estimates,
     },

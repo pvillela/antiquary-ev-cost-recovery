@@ -23,11 +23,11 @@
 //! To regenerate after an intended change, having read the diff:
 //!
 //! ```sh
-//! UPDATE_REPORT_GOLDEN=1 cargo test --test integration -- sessions::report_rendering
+//! UPDATE_REPORT_GOLDEN=1 cargo test --test integration -- session::report_rendering
 //! ```
 
 use ev_cost_recovery::{
-    sessions::{excel::session_csv_to_xlsx, interval_estimates, site_load_report},
+    session::{excel::session_csv_to_xlsx, interval_estimates, site_load_report},
     time::Interval,
 };
 use jiff::Timestamp;

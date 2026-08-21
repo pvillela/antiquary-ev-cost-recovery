@@ -1,5 +1,5 @@
 //! Toronto Hydro bills: the charges themselves, as distinct from the metered consumption that
-//! `green_button` reads and the charging sessions that `sessions` reads.
+//! `green_button` reads and the charging sessions that `session` reads.
 //!
 //! The two older modules answer *how much* — kilowatt-hours, kilowatts, kilovolt-amperes, and
 //! which quarter-hour the site peaked in. Neither answers *what it cost*, and the project exists

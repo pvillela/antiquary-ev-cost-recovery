@@ -11,17 +11,17 @@
 
 use crate::green_button::{METER_INTERVAL, Peak};
 use crate::hydro_bill::{NotABillingPeriodEnding, billing_period_dates};
-use crate::sessions::{
+use crate::session::{
     Bracket, EstimateSet, IntervalEstimates, SessionReport, estimates_from_report,
 };
 use crate::time::Interval;
 
 // Re-exported because `peak_power` and `peak_power_cost` take them. `IntervalEstimates` is
 // deliberately not: it is inside `PowerEstimates` rather than named by the signature, and a reader
-// who probes that far can go to `sessions` for it.
+// who probes that far can go to `session` for it.
 pub use crate::green_button::PeriodValues;
 pub use crate::hydro_bill::HydroBill;
-pub use crate::sessions::RSession;
+pub use crate::session::RSession;
 use jiff::civil::Date;
 use std::error::Error;
 use std::fmt;
@@ -178,8 +178,8 @@ impl Error for PeakPowerError {
 ///
 /// Each interval is a whole metering hour, because that is the resolution the Green Button feed
 /// states demand at. The estimate within it is still a 15-minute figure: an
-/// [`IntervalEstimates`](crate::sessions::IntervalEstimates) reports the highest of the hour's four segments,
-/// which is the basis the demand charge is billed on. See docs/sessions/README.md, "Interval of
+/// [`IntervalEstimates`](crate::session::IntervalEstimates) reports the highest of the hour's four segments,
+/// which is the basis the demand charge is billed on. See docs/session/README.md, "Interval of
 /// interest boundaries".
 ///
 /// The maxima used are the period's unrestricted ones — what an invoice bills as `Demand kW` and
@@ -201,8 +201,8 @@ impl Error for PeakPowerError {
 ///
 /// A `Charge_Session_ID` carried by two records that are *not* identical does not collapse. Such
 /// records are kept and estimated from, both of them, and each is flagged
-/// [`AnomalyKind::DuplicateId`](crate::sessions::AnomalyKind::DuplicateId) in the returned
-/// [`IntervalEstimates::session_anomalies`](crate::sessions::IntervalEstimates::session_anomalies) — subject
+/// [`AnomalyKind::DuplicateId`](crate::session::AnomalyKind::DuplicateId) in the returned
+/// [`IntervalEstimates::session_anomalies`](crate::session::IntervalEstimates::session_anomalies) — subject
 /// to the same scoping as every other anomaly there, so one is listed only if its session reaches
 /// that estimate's interval.
 ///
@@ -478,7 +478,7 @@ fn one_report(sessions: &[RSession]) -> (SessionReport, Vec<PathBuf>) {
 /// report says it was built from cannot disagree with what it was actually built from.
 ///
 /// A file that contributed no session is therefore not named. That is the intended reading of
-/// [`IntervalEstimates::sources`](crate::sessions::IntervalEstimates::sources) — the files the sessions were
+/// [`IntervalEstimates::sources`](crate::session::IntervalEstimates::sources) — the files the sessions were
 /// read from — and a month in which nobody charged contributed nothing to any figure.
 fn sources_of(sessions: &[RSession]) -> Vec<PathBuf> {
     let mut sources: Vec<PathBuf> = Vec::new();
@@ -515,7 +515,7 @@ mod test {
     use super::*;
     use crate::hydro_bill::BILL_END_DAY;
     use crate::hydro_bill::BillingPeriod;
-    use crate::sessions::{AnomalyKind, IntervalEstimates, test_support::session};
+    use crate::session::{AnomalyKind, IntervalEstimates, test_support::session};
     use crate::time::Tou;
     use jiff::Timestamp;
     use jiff::civil::date;

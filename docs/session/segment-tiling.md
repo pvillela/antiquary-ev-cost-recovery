@@ -3,7 +3,7 @@
 How charging sessions land on the 15-minute segments that an interval of interest is divided
 into, walked through on the seven-session example in `tests/fixtures/Session_Report_Diagram.csv`.
 
-The same example is asserted, session by session, in `tests/sessions/segment_tiling.rs`, and rendered in
+The same example is asserted, session by session, in `tests/session/segment_tiling.rs`, and rendered in
 full in `tests/fixtures/sessions/Session_Report_Diagram.report.md`. This document is the prose; those two
 are the machine-checked versions of the same claims.
 

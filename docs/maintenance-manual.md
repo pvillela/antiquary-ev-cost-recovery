@@ -51,7 +51,7 @@ Regenerating without reading the diff turns them into a rubber stamp.
 
 | What | Regenerate with |
 |---|---|
-| Session reports and the site-load table | `UPDATE_REPORT_GOLDEN=1 cargo test --test integration -- sessions::report_rendering` |
+| Session reports and the site-load table | `UPDATE_REPORT_GOLDEN=1 cargo test --test integration -- session::report_rendering` |
 | Green Button fixture dumps and the committed standard workbook | `UPDATE_GOLDEN=1 cargo test --test integration -- green_button::fixtures_golden` |
 
 Test binaries were consolidated into `tests/integration.rs` when the two projects merged, so
@@ -114,7 +114,7 @@ totals are not decoration: they are what catches a change in the 780-odd rows th
 ## Which constants are free, and which are derived
 
 
-The electrical model lives in `src/sessions/site_load.rs`. Its constants fall into two groups, and the
+The electrical model lives in `src/session/site_load.rs`. Its constants fall into two groups, and the
 distinction matters because it decides what may be changed and what will follow.
 
 **Free constants** — declared outright. Change any of them to describe a different installation:
@@ -136,7 +136,7 @@ distinction matters because it decides what may be changed and what will follow.
 **Derived values** — computed from the free ones, never declared. Do not edit these to a literal;
 edit the constant behind them. `ev_pilot_current_a()`, `ev_apparent_power_kva()`,
 `ev_real_power_kw()`, `max_true_power_factor()`, `ev_load()`, `transformer_load()`, `site_load()`,
-`loading_ratio()`, and `BREAKER_RATING_KW` in `src/sessions/common.rs`, which is `ev_real_power_kw()` under
+`loading_ratio()`, and `BREAKER_RATING_KW` in `src/session/common.rs`, which is `ev_real_power_kw()` under
 the name the rest of the crate uses.
 
 #### The rule the tests are written to
@@ -153,9 +153,9 @@ break by accident:
 - **Fixture energy figures.** A CSV fixture states `Energy_Use` and `Active_Charge_Time` as fixed
   text, so whether the average power they imply clears `BREAKER_RATING_KW` depends on
   `BREAKER_RATING_A`. Lower the breaker rating and every fixture session starts picking up an
-  `ExcessiveAvgKw` flag. This is why the timestamp tests in `src/sessions/csv.rs` and
-  `src/sessions/excel.rs` filter their anomaly lists through `timing_anomalies`
-  (`src/sessions/test_support.rs`) rather than asserting on them whole. If you add a test in either
+  `ExcessiveAvgKw` flag. This is why the timestamp tests in `src/session/csv.rs` and
+  `src/session/excel.rs` filter their anomaly lists through `timing_anomalies`
+  (`src/session/test_support.rs`) rather than asserting on them whole. If you add a test in either
   that reads a whole anomaly list, filter it the same way.
 - **Two constants read against each other.** `full_occupancy_stays_within_nameplate` does this on
   purpose: it asserts that `BREAKER_COUNT` vehicles do not exceed `XFMR_RATING_KVA`. That is a
@@ -169,11 +169,11 @@ break by accident:
 Change one free constant, run the suite, and confirm only the golden-fixture tests fail:
 
 ```sh
-# In src/sessions/site_load.rs, temporarily: BREAKER_RATING_A = 40.0 -> 32.0
+# In src/session/site_load.rs, temporarily: BREAKER_RATING_A = 40.0 -> 32.0
 cargo test
 # Expect exactly three failures, all golden-file comparisons:
-#   sessions::report_rendering::rendered_reports_match_their_golden_files
-#   sessions::report_rendering::the_site_load_table_matches_its_golden_file
+#   session::report_rendering::rendered_reports_match_their_golden_files
+#   session::report_rendering::the_site_load_table_matches_its_golden_file
 #   ev_cost_recovery state::test::the_app_produces_the_same_report_as_the_command_line
 # Then revert.
 ```
@@ -222,7 +222,7 @@ minute-resolution and second-resolution reports are processed together, and no s
 is right for both; it has to stay at the coarsest resolution in scope. Once every report in scope
 reports seconds, that constraint lifts and moving the grid becomes a real option.
 
-If you do move it to one second, update `docs/sessions/README.md`, "Boundaries and the time grid".
+If you do move it to one second, update `docs/session/README.md`, "Boundaries and the time grid".
 That section describes the padding in terms of whole minutes — a session reported to end at `16:34`
 ending somewhere in `[16:34:00, 16:35:00)` — and states the divisibility rule against 15 minutes.
 Both go stale the moment `R` changes.
@@ -248,7 +248,7 @@ That still holds for the figures. It does not hold for the file.
 ## Adding an `AnomalyKind`
 
 
-`AnomalyKind` in `src/sessions/common.rs` classifies rows that need review. Adding a variant touches three
+`AnomalyKind` in `src/session/common.rs` classifies rows that need review. Adding a variant touches three
 things, and deliberately not a fourth.
 
 **The wire format.** `as_str` writes the variant name into the workbook's `anomalies` column, and
@@ -268,13 +268,13 @@ informational: the session still counts towards every figure. If a new kind shou
 a decision to make explicitly and to record in README's "Other" section — not something that
 follows from adding the variant.
 
-**What you do *not* have to wire up:** `collect_session_anomalies` in `src/sessions/peak.rs` matches on
+**What you do *not* have to wire up:** `collect_session_anomalies` in `src/session/peak.rs` matches on
 nothing. It is deliberately blind to the kind, so a variant added here surfaces in the report
 without anyone having to remember it. Keep it that way — the moment it grows a `match`, adding a
 kind acquires a step that is easy to forget and silent when forgotten.
 
 If the new kind is *about a figure* — as `ExcessiveAvgKw` is about average power — the figure
-goes in the report cell, via `anomaly_cell` in `src/sessions/report.rs`, and not on the enum. That is what
+goes in the report cell, via `anomaly_cell` in `src/session/report.rs`, and not on the enum. That is what
 keeps the workbook column a list of bare tokens `from_token` can read back.
 
 ## Strict and lenient overlap tests
@@ -301,14 +301,14 @@ That listing covers the whole workbook by design, so it has to say whether a con
 yourself wanting the lenient test somewhere new, the question to ask first is how an excluded
 session reached that code.
 
-Both are pinned by tests in `src/sessions/peak.rs`:
+Both are pinned by tests in `src/session/peak.rs`:
 `the_strict_intersection_test_refuses_an_inverted_span` and
 `an_inverted_span_is_answered_only_by_the_lenient_test`.
 
 ## Where the rendering lives
 
 
-`src/sessions/report.rs` is the crate's single rendering module. Both the interval report and the site-load
+`src/session/report.rs` is the crate's single rendering module. Both the interval report and the site-load
 table are rendered there, and `examples/site_load_report.rs` is one `print!` over
 `site_load_report()`.
 

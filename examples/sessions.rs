@@ -1,4 +1,4 @@
-use ev_cost_recovery::sessions::{Session, excel::session_list};
+use ev_cost_recovery::session::{Session, excel::session_list};
 use std::{path::PathBuf, process::ExitCode};
 
 const USAGE: &str = "\

@@ -97,7 +97,7 @@ fn log_path(output: &Path, suffix: &str) -> PathBuf {
     output.with_file_name(format!("{stem}.{suffix}.log"))
 }
 
-// cargo test --lib -- sessions::log::test --nocapture
+// cargo test --lib -- session::log::test --nocapture
 #[cfg(test)]
 mod test {
     use super::*;

@@ -18,7 +18,7 @@ pub const TIME_ZONE_NAME: &str = "America/Toronto";
 /// The offsets [`TIME_ZONE_NAME`] uses, under the names a reader of a Toronto Hydro bill will
 /// recognise. Naming one resolves a wall time that occurs twice.
 ///
-/// Here rather than in `sessions` because it is a property of the zone, and the zone is shared.
+/// Here rather than in `session` because it is a property of the zone, and the zone is shared.
 pub const TZ_OFFSETS: [(&str, i8); 2] = [("EST", -5), ("EDT", -4)];
 
 static TIME_ZONE: LazyLock<TimeZone> = LazyLock::new(|| {
@@ -118,7 +118,7 @@ pub(crate) fn standard_midnight(d: Date) -> Timestamp {
 // ---------------------------------------------------------------------------
 //
 // A grid is a step, and these two functions are everything the crate does with one. The step
-// itself belongs to whichever module has a reason for its value: `sessions::TIME_GRID_STEP` is
+// itself belongs to whichever module has a reason for its value: `session::TIME_GRID_STEP` is
 // the resolution session boundaries are reported at, `green_button::METER_INTERVAL` the interval
 // the meter records. Neither is a property of time.
 
@@ -131,7 +131,7 @@ pub(crate) fn standard_midnight(d: Date) -> Timestamp {
 /// truncate_to(ts, step) <= ts < truncate_to(ts, step) + step
 /// ```
 ///
-/// That is the `Givens` line of `docs/sessions/time-reporting-uncertainty.md`, and it is what
+/// That is the `Givens` line of `docs/session/time-reporting-uncertainty.md`, and it is what
 /// makes `adj_conn_start <= real_start` true.
 ///
 /// # Panics
@@ -339,7 +339,7 @@ mod test {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
-/// Time interval. Must be on the time grid defined by [`crate::sessions::TIME_GRID_STEP`].
+/// Time interval. Must be on the time grid defined by [`crate::session::TIME_GRID_STEP`].
 pub struct Interval {
     pub start: Timestamp,
     pub duration: Duration,

@@ -61,7 +61,7 @@ The two DST transitions are treated differently, because they are different prob
 - On the night DST **ends**, an hour of wall time occurs twice. That is a question the caller can answer, so `ev_peak_cli` asks it: a bare `"2026-11-01 01:30"` is refused, and `"2026-11-01 01:30 EST"` or `"... EDT"` resolves it. The designator is accepted on any date and **checked against it** — `"2026-06-01 16:00 EST"` is an error, not a silently ignored hint — so naming the wrong one cannot produce a figure for the wrong hour.
 - On the night DST **begins**, an hour of wall time never happens. There is nothing to choose between, so such a start is refused outright and no designator helps.
 
-These rules live in one place, `src/sessions/ioi.rs`, and both front-ends come through it, so the app and the command line cannot disagree about what interval a bill may be argued from.
+These rules live in one place, `src/session/ioi.rs`, and both front-ends come through it, so the app and the command line cannot disagree about what interval a bill may be argued from.
 
 ## Excel workbook
 
@@ -154,7 +154,7 @@ The padding is a full `R` rather than one tick less for the same reason. A sessi
 The two formulas above — a per-EV kW rating and a division by a power factor — are a fair
 description of the *shape* of the estimates, and a defensible approximation of their values. They
 are not what the software computes. Both figures come out of a small electrical model of the site,
-described in [Power Factor and kVA Allocation — Level 2 EV Chargers on a 75 kVA, 600–208 V Transformer](ev-charger-power-factor-and-kva-allocation.md), and implemented in `src/sessions/site_load.rs`. It is worth knowing where the model and the shorthand part company.
+described in [Power Factor and kVA Allocation — Level 2 EV Chargers on a 75 kVA, 600–208 V Transformer](ev-charger-power-factor-and-kva-allocation.md), and implemented in `src/session/site_load.rs`. It is worth knowing where the model and the shorthand part company.
 
 **The per-EV kW figure is an average, not a constant.** A charging station is current-limited rather than
 power-limited: the pilot signal caps it at 32 A, so it draws about 6.59 kW whatever else is
@@ -195,7 +195,7 @@ Evolute's own description of how the installation behaves when several vehicles 
 ### Other
 
 - Every session in the report is written to the workbook, anomalous ones included: the sheet is a faithful rendering of the session report, and which sessions take part in an estimate is decided on the reading side.
-- Each session is checked for internal consistency, and the test is *derived* rather than chosen. `docs/sessions/time-reporting-uncertainty.md` carries the derivation; its **Result** section states the three checks together, and `duration_is_consistent` in `src/sessions/common.rs` is the one place they appear in code. Any failure raises the anomaly:
+- Each session is checked for internal consistency, and the test is *derived* rather than chosen. `docs/session/time-reporting-uncertainty.md` carries the derivation; its **Result** section states the three checks together, and `duration_is_consistent` in `src/session/common.rs` is the one place they appear in code. Any failure raises the anomaly:
 
   ```
   1.  Conn_start <= Conn_end

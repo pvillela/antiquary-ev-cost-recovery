@@ -1,6 +1,6 @@
 //! The `InconsistentDuration` band, exercised end to end through the public API.
 //!
-//! Unit tests in `sessions::excel` already pin the predicate. This pins the *consequence*: which
+//! Unit tests in `session::excel` already pin the predicate. This pins the *consequence*: which
 //! sessions reach an estimate and which are put aside. Nothing did that before, which is how commit
 //! `1d99e29` moved the band by a whole `TIME_GRID_STEP` — excluding 116 of the 238 sessions in the
 //! real June report — with the whole suite green. See `docs/merger-review-findings.md`, finding 1.
@@ -25,7 +25,7 @@
 //! `ZeroActiveChargeTime` — the two travel together by arithmetic, not coincidence.
 
 use ev_cost_recovery::{
-    sessions::{
+    session::{
         AnomalyKind,
         excel::{session_csv_to_xlsx, session_list},
         interval_estimates,

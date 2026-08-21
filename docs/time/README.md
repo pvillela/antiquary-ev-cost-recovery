@@ -24,7 +24,7 @@ because both use it, but neither step is a property of time.
 ## Boundaries and the time grid
 
 `TIME_GRID_STEP` and the way segments tile an interval of interest are documented in
-[`docs/sessions/README.md`](../sessions/README.md), under "Boundaries and the time grid". They
+[`docs/session/README.md`](../session/README.md), under "Boundaries and the time grid". They
 belong there: the grid is the session report's reporting resolution, and only `sessions` has one.
 
 ## Two clocks, and which is which
@@ -129,7 +129,7 @@ truncate_to(ts, step) <= ts < truncate_to(ts, step) + step
 ```
 
 which is what makes `adj_conn_start <= real_start` true in
-[`docs/sessions/time-reporting-uncertainty.md`](../sessions/time-reporting-uncertainty.md).
+[`docs/session/time-reporting-uncertainty.md`](../session/time-reporting-uncertainty.md).
 
 Truncation is always **backwards**, including before 1970. The implementation uses `rem_euclid`
 rather than `%` for that reason: `%` gives a negative remainder for a negative timestamp, which
@@ -140,10 +140,10 @@ would round towards zero — forwards — and break the bound above.
 Two functions resolve an ambiguous local time, and they must not be merged. They are asked
 different questions:
 
-- **`map_local`** (`sessions::ioi`) is asked *what could this wall time mean?* by a user choosing an
+- **`map_local`** (`session::ioi`) is asked *what could this wall time mean?* by a user choosing an
   interval of interest. It has nothing but the wall time, so it reports every candidate and lets the
   caller choose, or name `EST`/`EDT`.
-- **`CsvSession::resolve`** (`sessions::csv`) is asked *which offset was this session actually
+- **`CsvSession::resolve`** (`session::csv`) is asked *which offset was this session actually
   at?* and has evidence the other lacks: `Conn_Duration`, untruncated elapsed time. That usually
   settles it; duplication is the fallback when it does not.
 

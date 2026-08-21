@@ -19,7 +19,7 @@
 //! # Why this is in `hydro_bill`
 //!
 //! A billing period is a fact about the bill. Everything else divided by one — the meter readings
-//! `green_button` groups, the session reports `sessions` reads, the estimates `api` produces — is
+//! `green_button` groups, the session reports `session` reads, the estimates `api` produces — is
 //! cut this way because the bill cuts it this way, so the rule belongs where the bill is and the
 //! rest of the crate reads it from here.
 //!

@@ -7,7 +7,7 @@
 //! The rendering itself lives in the library, beside the one that renders an interval's estimates,
 //! so this example is the invocation and nothing else. That also lets a golden file pin the table.
 
-use ev_cost_recovery::sessions::site_load_report;
+use ev_cost_recovery::session::site_load_report;
 
 fn main() {
     print!("{}", site_load_report());

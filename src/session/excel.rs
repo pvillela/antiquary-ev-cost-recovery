@@ -118,14 +118,14 @@ const COLUMNS: &[(&str, Source)] = &[
 /// The parse is `csv::session_rows`; nothing about the session report is interpreted here. The
 /// domain rules — the UTC conversion and its DST policy, the definitions of `adj_conn_end` and
 /// `adj_conn_duration`, and the treatment of zero-`Energy_Use` sessions — are specified in
-/// `docs/time/README.md` under "Time zone" and in `docs/sessions/README.md` under "Excel workbook"
+/// `docs/time/README.md` under "Time zone" and in `docs/session/README.md` under "Excel workbook"
 /// and "Other". They are shared with the peak power contribution logic and are not restated here.
 ///
 /// What this function adds on top of those rules:
 ///
 /// - Column order is given by the private `COLUMNS` table: the session report's own columns first,
 ///   in the order it states them, then everything this software derives. See
-///   `docs/sessions/README.md`, "Excel workbook".
+///   `docs/session/README.md`, "Excel workbook".
 /// - Timestamp columns are Excel date/time numbers formatted `yyyy-mm-dd hh:mm:ss ddd`, left-
 ///   justified; duration columns are Excel durations formatted `[h]:mm:ss`, which does not wrap
 ///   past 24 hours, and are centered.
@@ -618,7 +618,7 @@ fn read_session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
 /// **The recomputed value always wins.** Nothing here changes a `Session`, and nothing here raises
 /// an [`AnomalyKind`]. A disagreement means the sheet is stale or was edited by hand, which is a
 /// fact about the file and not about the session — and letting it feed the estimates would make an
-/// edited cell silently change which sessions count. See `sessions::log`.
+/// edited cell silently change which sessions count. See `session::log`.
 ///
 /// `adj_conn_duration` and `avg_kw` hold formulas. This crate writes the formula and no cached
 /// value, so Excel has to have opened and saved the workbook for one to be there. A missing cached
@@ -751,11 +751,11 @@ fn number(
 }
 
 #[cfg(test)]
-// cargo test --lib -- sessions::excel::test --nocapture
+// cargo test --lib -- session::excel::test --nocapture
 mod test {
     use super::*;
-    use crate::sessions::BREAKER_RATING_KW;
-    use crate::sessions::test_support::{timing_anomalies, timing_anomalies_in_cell};
+    use crate::session::BREAKER_RATING_KW;
+    use crate::session::test_support::{timing_anomalies, timing_anomalies_in_cell};
     use jiff::{civil, tz::TimeZone};
     use std::fs;
     use std::time::Duration;
@@ -1233,7 +1233,7 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
         );
 
         // A zero-Energy_Use session with a real charge time is an ordinary session: its average
-        // power is legitimately zero and it still occupies a breaker. See docs/sessions/README.md, "Other".
+        // power is legitimately zero and it still occupies a breaker. See docs/session/README.md, "Other".
         assert!(report.spikes.is_empty());
         assert!(report.excluded.is_empty());
         assert_eq!(report.sessions.len(), 2);

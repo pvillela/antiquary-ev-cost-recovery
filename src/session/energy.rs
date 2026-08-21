@@ -1,5 +1,5 @@
 use crate::{
-    sessions::Session,
+    session::Session,
     time::{Interval, Tou, tou_partition},
 };
 

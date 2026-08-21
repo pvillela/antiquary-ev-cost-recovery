@@ -34,7 +34,7 @@
 //!
 //! Field types are excluded, because reading or destructuring a field never requires naming it. Probing *into* a returned type may well lead elsewhere in the
 //! crate — the two halves of [`PowerEstimates`](pure::peak_power::PowerEstimates) are
-//! [`sessions::IntervalEstimates`](crate::sessions::IntervalEstimates), and reading about them
+//! [`session::IntervalEstimates`](crate::session::IntervalEstimates), and reading about them
 //! means going there. Re-exporting transitively would put the whole crate in every module.
 //!
 //! There is deliberately no roster of every type here, and no module of shared ones. Either would

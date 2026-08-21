@@ -35,7 +35,7 @@ pub struct IntervalEstimates {
     /// [`Self::excluded_sessions`].
     pub session_anomalies: Vec<Anomaly>,
     /// Every session excluded from the estimates for
-    /// [`crate::sessions::AnomalyKind::InconsistentDuration`] — the whole workbook's worth, not only those
+    /// [`crate::session::AnomalyKind::InconsistentDuration`] — the whole workbook's worth, not only those
     /// intersecting this interval.
     ///
     /// Unfiltered on purpose. Such a record's own fields contradict each other, so asking whether
@@ -98,7 +98,7 @@ pub(crate) fn estimates_from_report(
     // Spikes take part in the estimates on the same footing as any other session. A spike's raw
     // energy over charge time is infinite or NaN, either of which would swamp or poison any
     // segment it entered, and [`Session::avg_kw`] substitutes a finite figure for exactly that
-    // reason — so nothing has to be done to a spike here. See docs/sessions/README.md, "Other".
+    // reason — so nothing has to be done to a spike here. See docs/session/README.md, "Other".
     let rsessions: Vec<RSession> = report
         .sessions
         .iter()
@@ -123,7 +123,7 @@ pub(crate) fn estimates_from_report(
         session_anomalies,
         // `excluded` sessions contradict themselves and take no part in any estimate, but they are
         // still reported: a caller judging an estimate needs to know what was left out. See
-        // docs/sessions/README.md, "Other".
+        // docs/session/README.md, "Other".
         excluded_sessions: report.excluded.clone(),
     }
 }
@@ -263,7 +263,7 @@ fn collect_session_anomalies(
 
 #[cfg(test)]
 mod test {
-    use crate::sessions::TIME_GRID_STEP;
+    use crate::session::TIME_GRID_STEP;
 
     use super::super::{
         SEGMENT_DURATION,
@@ -304,7 +304,7 @@ mod test {
         let conn_start = ts(start);
         let adj_conn_end = ts(end);
         let charge_time = Duration::from_secs(3600);
-        let session = crate::sessions::Session {
+        let session = crate::session::Session {
             path: std::rc::Rc::new(PathBuf::from("Session_Report_Test.csv")),
             row: 2,
             id: id.to_owned(),

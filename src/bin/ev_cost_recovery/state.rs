@@ -6,7 +6,7 @@
 //! and tested here.
 
 use ev_cost_recovery::{
-    sessions::{
+    session::{
         ConversionReport, HourEntry, IntervalEstimates, IoiLength, SessionReport, checked_interval,
         excel::{session_csv_to_xlsx, session_list},
         hours_of, interval_estimates,

@@ -43,7 +43,7 @@ use std::{
 /// [`duration_is_consistent`]'s checks 2 and 3 with the reported end subtracted from each side.
 /// The extra second on the late side is there because the reported end is not only truncated —
 /// it is also unknown whether the reporting includes or excludes its last second. See
-/// `docs/sessions/time-reporting-uncertainty.md`.
+/// `docs/session/time-reporting-uncertainty.md`.
 ///
 /// Derived from [`TIME_GRID_STEP`] rather than written out, so a change to the grid moves this
 /// with it.
@@ -71,7 +71,7 @@ const REQUIRED_HEADERS: &[&str] = &[
 ///
 /// The domain rules — the UTC conversion and its DST policy, the definitions of `adj_conn_end` and
 /// `adj_conn_duration`, and the treatment of zero-`Energy_Use` sessions — are specified in
-/// `docs/time/README.md` under "Time zone" and in `docs/sessions/README.md` under "Other".
+/// `docs/time/README.md` under "Time zone" and in `docs/session/README.md` under "Other".
 ///
 /// Sessions are sorted into the three buckets of [`SessionReport`] by
 /// `SessionReport::from_session_lists`,
@@ -183,7 +183,7 @@ pub(crate) fn session_rows(path: &Path) -> Result<SessionRows, Box<dyn Error>> {
     }
 
     // Anomalies only: there is nothing to compare against on this side, since this is what
-    // produces the values in the first place. See `sessions::log` for why discrepancies are a
+    // produces the values in the first place. See `session::log` for why discrepancies are a
     // separate channel.
     let mut log = RunLog::new();
     note_off_grid_rows(&rows, &mut log);
@@ -397,7 +397,7 @@ impl CsvSession {
     /// cannot tell the two offsets apart — see docs/time/README.md, "Time zone", for why duplication is the
     /// policy and why the copies get distinct ids.
     ///
-    /// # Not the same problem as [`crate::sessions::map_local`]
+    /// # Not the same problem as [`crate::session::map_local`]
     ///
     /// Both resolve an ambiguous local time, and the two must **not** be merged. They are asked
     /// different questions and are right to answer differently:
@@ -551,10 +551,10 @@ impl CsvSession {
 }
 
 #[cfg(test)]
-// cargo test --lib -- sessions::csv::test --nocapture
+// cargo test --lib -- session::csv::test --nocapture
 mod test {
     use super::*;
-    use crate::sessions::test_support::timing_anomalies;
+    use crate::session::test_support::timing_anomalies;
     use crate::time::serial_of_civil;
     use std::fs;
     use std::path::PathBuf;
@@ -850,7 +850,7 @@ mod test {
     ///
     /// The window is asymmetric: one second wider late than early. That second is not slack, it is
     /// the reporting's uncertainty about whether the last second of the end minute is included.
-    /// See `docs/sessions/time-reporting-uncertainty.md`.
+    /// See `docs/session/time-reporting-uncertainty.md`.
     #[test]
     fn inconsistent_duration_is_reported() {
         let kinds = |start, end, conn| {

@@ -1,6 +1,6 @@
 use crate::{
     hydro_bill::HydroBill,
-    sessions::{RSession, TouKwh},
+    session::{RSession, TouKwh},
 };
 
 pub enum EnergyError {}

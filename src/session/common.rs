@@ -17,7 +17,7 @@ use std::{
 /// **Ours, not Evolute's.** Evolute currently reports `Conn_DateTime_Start` and `Conn_DateTime_End`
 /// truncated to whole minutes, and this is set to match; but the two are different quantities, and
 /// the document that derives everything built on this calls them `EV_STEP` and `OUR_STEP` for that
-/// reason. See `docs/sessions/time-reporting-uncertainty.md`.
+/// reason. See `docs/session/time-reporting-uncertainty.md`.
 ///
 /// The distinction decides what to do if Evolute ever reports seconds. **Do not follow them down
 /// to 1 second while reports of both resolutions are still processed together.** This constant is
@@ -40,19 +40,19 @@ use std::{
 /// `Conn_Duration` and `Active_Charge_Time` are *not* truncated; they carry seconds. That asymmetry
 /// is what makes the DST fold inference possible, and it is why the window above has a width at all.
 ///
-/// See docs/sessions/README.md, "Boundaries and the time grid".
+/// See docs/session/README.md, "Boundaries and the time grid".
 pub const TIME_GRID_STEP: Duration = Duration::from_secs(60);
 
 /// The width of the [`Segment`]s an interval of interest is partitioned into.
 ///
 /// The duration of the interval of interest **must** be a positive multiple of this, and
-/// [`crate::sessions::interval_estimates`] panics otherwise. Not a convention: rounding the segment count up
+/// [`crate::session::interval_estimates`] panics otherwise. Not a convention: rounding the segment count up
 /// would tile past the interval's end and count sessions falling outside it, and rounding down
 /// would leave part of it unestimated. Neither error would show in any figure the report prints,
 /// which is why the check is an assertion rather than an accommodation.
 ///
 /// The two legal interval lengths — 15 minutes and 1 hour — are both multiples, so nothing coming
-/// through [`crate::sessions::checked_interval`] can trip it.
+/// through [`crate::session::checked_interval`] can trip it.
 pub const SEGMENT_DURATION: Duration = Duration::from_mins(15);
 
 /// Continuous use breaker kW rating.
@@ -63,7 +63,7 @@ pub const BREAKER_RATING_KW: f64 = ev_real_power_kw();
 // ---------------------------------------------------------------------------
 //
 // The three functions below are the code counterpart of
-// `docs/sessions/time-reporting-uncertainty.md`, which derives all of them. They are free
+// `docs/session/time-reporting-uncertainty.md`, which derives all of them. They are free
 // functions rather than methods so the write path, which has a CSV record and not yet a
 // [`Session`], calls the same code the read path does. Two definitions of `adj_conn_end` is how
 // the two drifted apart last time.
@@ -177,7 +177,7 @@ impl Session {
     ///
     /// This is the end the estimating logic uses throughout, so that
     /// `[adj_conn_start, adj_conn_end)` is the tightest half-open span guaranteed to contain the
-    /// real connection. See docs/sessions/README.md, "Sessions and segments".
+    /// real connection. See docs/session/README.md, "Sessions and segments".
     pub fn adj_conn_end(&self) -> Timestamp {
         adj_conn_end_of(self.conn_end)
     }
@@ -678,7 +678,7 @@ pub enum AnomalyKind {
     /// record's own fields disagree by more than the reporting can explain, neither its duration
     /// nor the span the estimating logic would place it on can be relied on.
     ///
-    /// See `docs/sessions/time-reporting-uncertainty.md` and docs/sessions/README.md, "Other".
+    /// See `docs/session/time-reporting-uncertainty.md` and docs/session/README.md, "Other".
     InconsistentDuration,
     /// The start fell in the DST fold and both offsets reproduce the reported end,
     /// so the record was duplicated. See docs/time/README.md, "Time zone".
@@ -714,7 +714,7 @@ pub enum AnomalyKind {
     ///
     /// It matters because the count-based figures are an aggregate session count times a single
     /// rating, so a session drawing more than that rating breaks the assumption they rest on — see
-    /// docs/sessions/README.md, "Assumptions". A reader ordinarily finds the energy-based figures at or below the
+    /// docs/session/README.md, "Assumptions". A reader ordinarily finds the energy-based figures at or below the
     /// count-based ones, and that ordering inverts exactly when a segment's `agg_kw` exceeds its
     /// `agg_count` times the rating.
     ///
@@ -774,7 +774,7 @@ impl AnomalyKind {
 
 /// A session that needs review. Never fatal: the conversion still writes the row, and the
 /// estimating logic still produces a figure. Used by both sides — see
-/// [`crate::sessions::ConversionReport`] and [`crate::sessions::IntervalEstimates`].
+/// [`crate::session::ConversionReport`] and [`crate::session::IntervalEstimates`].
 ///
 /// Holds the session itself rather than a copy of a field or two off it. Copying `id` and `row` out
 /// meant every consumer that wanted anything else — the average power beside the flag, the file the
@@ -836,10 +836,10 @@ impl fmt::Display for Anomaly {
 /// The sessions one session report describes, grouped by how the peak power contribution logic
 /// must treat them.
 ///
-/// Returned by both readers — [`crate::sessions::csv::session_list`] from the CSV and
-/// [`crate::sessions::excel::session_list`] from a workbook written from it — because the grouping
+/// Returned by both readers — [`crate::session::csv::session_list`] from the CSV and
+/// [`crate::session::excel::session_list`] from a workbook written from it — because the grouping
 /// is a property of the sessions, not of the file they were read out of. The writing direction
-/// returns a [`crate::sessions::ConversionReport`] instead.
+/// returns a [`crate::session::ConversionReport`] instead.
 #[derive(Debug)]
 pub struct SessionReport {
     /// Sessions with a finite average power. This is what the peak power contribution logic
@@ -847,7 +847,7 @@ pub struct SessionReport {
     /// legitimately zero, and it still occupies a breaker.
     pub sessions: Vec<RSession>,
     /// Sessions with zero `Active_Charge_Time`, so [`Session::charge_time`] is zero and energy
-    /// over charge time is infinite or `NaN`. Kept out of `sessions` because those values would
+    /// over charge time is infinite or `NaN`. Kept out of `session` because those values would
     /// swamp or poison any segment they entered.
     ///
     /// Surfaced rather than dropped because such a row is almost certainly a **reporting fault**
@@ -857,11 +857,11 @@ pub struct SessionReport {
     /// track the same thing to within about a second and are not measured separately, so a zero
     /// beside a non-zero `Energy_Use` is a contradiction in the report rather than an event. See
     /// `Questions_for_Evolute.md`, "Answers received". [`Session::avg_kw`] substitutes a finite
-    /// figure so the row can still be listed. See docs/sessions/README.md, "Other".
+    /// figure so the row can still be listed. See docs/session/README.md, "Other".
     pub spikes: Vec<RSession>,
     /// Sessions flagged [`AnomalyKind::InconsistentDuration`]: their reported start, end and
     /// duration contradict each other, so they cannot be placed on a timeline at all. Excluded
-    /// from the estimates and returned only for review. See docs/sessions/README.md, "Other".
+    /// from the estimates and returned only for review. See docs/session/README.md, "Other".
     pub excluded: Vec<RSession>,
     /// Anomalies that are not properties of any single record, and so are not reachable through
     /// [`Session::anomalies`]. Currently [`AnomalyKind::DuplicateId`] only.
@@ -933,7 +933,7 @@ impl SessionReport {
     }
 }
 
-// cargo test --lib -- sessions::common::test
+// cargo test --lib -- session::common::test
 #[cfg(test)]
 mod test {
     use super::*;
