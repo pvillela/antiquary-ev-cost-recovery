@@ -15,6 +15,7 @@
 //! `session_report` are what it and every later operation are built from.
 
 pub mod billing_period;
+pub mod energy;
 pub mod peak_power;
 pub mod session_report;
 
