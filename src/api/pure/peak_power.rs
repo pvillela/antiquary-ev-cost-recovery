@@ -32,9 +32,9 @@ pub struct DeliveryCost {
     /// `'Distribution Charges' / 'Adj. kVA'` from bill.
     pub blended_distribution_rate: f64,
     /// `'Transmission Connection Charge' / 'Adj. kW'` from bill.
-    pub blended_connection_rate: f64,
+    pub blended_transmission_connection_rate: f64,
     /// `'Transmission Network Charge' / 'Adj. Peak kW 7-7'` from bill.
-    pub blended_network_rate: f64,
+    pub blended_transmission_network_rate: f64,
 
     /// Mid-point of energy-based bracket of EV kVA from sessions
     /// for Demand kVA interval of interest.
@@ -54,9 +54,9 @@ pub struct DeliveryCost {
     /// Distribution charges attributable to EV sessions.
     pub distribution_charges: f64,
     /// Transmission Connection Charge attributable to EV sessions.
-    pub connection_charge: f64,
+    pub transmission_connection_charge: f64,
     /// Transmission Network Charge attributable to EV sessions.
-    pub network_charge: f64,
+    pub transmission_network_charge: f64,
 
     /// HST on delivery charges attributable to EV sessions, before OER.
     pub hst: f64,
@@ -233,15 +233,18 @@ pub fn peak_power_cost(
     // Each rate is the line as billed over the demand it was billed on, so it carries whatever the
     // bill actually did -- two rate schedules added together, a corrected figure, a rounding.
     let blended_distribution_rate = bill.distribution_charges / bill.adj_kva;
-    let blended_connection_rate = bill.transmission_connection_charge / bill.adj_kw;
-    let blended_network_rate = bill.transmission_network_charge / bill.adj_peak_7_7_kw;
+    let blended_transmission_connection_rate = bill.transmission_connection_charge / bill.adj_kw;
+    let blended_transmission_network_rate = bill.transmission_network_charge / bill.adj_peak_7_7_kw;
 
     // The EV demand is prorated before pricing because the rate is per adjusted kW or kVA, which is
     // the prorated figure. Pricing the raw figure at that rate would mix the two bases.
     let distribution_charges = blended_distribution_rate * demand_kva * days_adj_factor;
-    let connection_charge = blended_connection_rate * demand_kw * days_adj_factor;
-    let network_charge = blended_network_rate * peak_7_7_kw * days_adj_factor;
-    let charges = distribution_charges + connection_charge + network_charge;
+    let transmission_connection_charge =
+        blended_transmission_connection_rate * demand_kw * days_adj_factor;
+    let transmission_network_charge =
+        blended_transmission_network_rate * peak_7_7_kw * days_adj_factor;
+    let charges =
+        distribution_charges + transmission_connection_charge + transmission_network_charge;
 
     // Both as fractions of the bill's own charges rather than as rates of their own. The rebate in
     // particular is a policy percentage that has been changed more than once, and reading it off
@@ -252,16 +255,16 @@ pub fn peak_power_cost(
 
     Ok(DeliveryCost {
         blended_distribution_rate,
-        blended_connection_rate,
-        blended_network_rate,
+        blended_transmission_connection_rate,
+        blended_transmission_network_rate,
         demand_kva,
         demand_kw,
         peak_7_7_kw,
         days_in_period,
         days_adj_factor,
         distribution_charges,
-        connection_charge,
-        network_charge,
+        transmission_connection_charge,
+        transmission_network_charge,
         hst,
         ontario_electricity_rebate,
         // The bill states its own total the same way -- see `HydroBill::bill_total_amount`. The
@@ -791,8 +794,8 @@ mod test {
     fn the_rates_are_the_bills_own_lines_over_the_demand_they_were_charged_on() {
         let cost = cost();
         assert!(close(cost.blended_distribution_rate, 10.0));
-        assert!(close(cost.blended_connection_rate, 3.0));
-        assert!(close(cost.blended_network_rate, 5.0));
+        assert!(close(cost.blended_transmission_connection_rate, 3.0));
+        assert!(close(cost.blended_transmission_network_rate, 5.0));
         assert_eq!(cost.days_in_period, 31);
         assert!(close(cost.days_adj_factor, 31.0 / 30.0));
     }
@@ -811,11 +814,11 @@ mod test {
             bill.distribution_charges * cost.demand_kva / bill.demand_kva
         ));
         assert!(close(
-            cost.connection_charge,
+            cost.transmission_connection_charge,
             bill.transmission_connection_charge * cost.demand_kw / bill.demand_kw
         ));
         assert!(close(
-            cost.network_charge,
+            cost.transmission_network_charge,
             bill.transmission_network_charge * cost.peak_7_7_kw / bill.peak_7_7_kw
         ));
     }
@@ -825,7 +828,9 @@ mod test {
     #[test]
     fn tax_and_rebate_follow_the_bills_own_proportions() {
         let cost = cost();
-        let charges = cost.distribution_charges + cost.connection_charge + cost.network_charge;
+        let charges = cost.distribution_charges
+            + cost.transmission_connection_charge
+            + cost.transmission_network_charge;
         // 1300 / 10000 and 1000 / 10000 on the fixture bill.
         assert!(close(cost.hst, charges * 0.13));
         assert!(close(cost.ontario_electricity_rebate, charges * 0.10));
