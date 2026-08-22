@@ -91,16 +91,17 @@ pub struct CostRecovery {
     /// kilowatt-hour is counted twice and none is lost between them.
     pub kwh: TouKwh,
 
-    /// On-peak recovery over the whole period, summed across the stretches.
-    pub on_peak_recovery: f64,
-    /// Mid-peak recovery over the whole period, summed across the stretches.
-    pub mid_peak_recovery: f64,
-    /// Off-peak recovery over the whole period, summed across the stretches.
-    pub off_peak_recovery: f64,
-
     /// Total cost recovery allocated to the billing period.
     pub cost_recovery: f64,
 }
+
+// No per-band recovery for the whole period. A band's kilowatt-hours were charged at one rate in
+// each stretch and at a different rate in the next, so their sum is money recovered under two
+// schedules at once -- a figure no table here shows and no invoice would state. The bands are
+// reported per stretch, on [`AtRates`], where each has a single rate behind it.
+//
+// [`Self::kwh`] and [`Self::cost_recovery`] are summable in the same way and are kept, because
+// both are figures the report itself states.
 
 /// Why a billing period's sessions cannot be turned into a cost recovery.
 ///
@@ -279,9 +280,6 @@ pub fn cost_recovery(
     };
 
     let sum = |f: fn(&AtRates) -> f64| at_rates.iter().map(f).sum::<f64>();
-    let on_peak_recovery = sum(|a| a.on_peak_recovery);
-    let mid_peak_recovery = sum(|a| a.mid_peak_recovery);
-    let off_peak_recovery = sum(|a| a.off_peak_recovery);
 
     Ok(CostRecovery {
         billing_period_ending,
@@ -290,10 +288,7 @@ pub fn cost_recovery(
             mid_peak: sum(|a| a.kwh.mid_peak),
             off_peak: sum(|a| a.kwh.off_peak),
         },
-        on_peak_recovery,
-        mid_peak_recovery,
-        off_peak_recovery,
-        cost_recovery: on_peak_recovery + mid_peak_recovery + off_peak_recovery,
+        cost_recovery: sum(AtRates::recovery),
         at_rates,
     })
 }
@@ -562,9 +557,12 @@ mod test {
         .expect("23 June closes a billing period");
 
         assert!((r.kwh.off_peak - 10.0).abs() < 1e-9, "{:?}", r.kwh);
-        assert_eq!(r.on_peak_recovery, 0.0);
-        assert_eq!(r.mid_peak_recovery, 0.0);
-        assert!((r.off_peak_recovery - 30.0).abs() < 1e-9, "{r:?}");
+        // Per stretch, which is the only level a band has one rate behind it.
+        let at = &r.at_rates[0];
+        assert_eq!(at.on_peak_recovery, 0.0);
+        assert_eq!(at.mid_peak_recovery, 0.0);
+        assert!((at.off_peak_recovery - 30.0).abs() < 1e-9, "{at:?}");
+        assert!((r.cost_recovery - 30.0).abs() < 1e-9, "{}", r.cost_recovery);
     }
 
     /// A date that closes no billing period is the caller's mistake, and is reported as such rather
