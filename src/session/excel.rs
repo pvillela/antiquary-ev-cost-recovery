@@ -562,9 +562,8 @@ fn read_session_list(path: &Path) -> Result<Sessions, Box<dyn Error>> {
     // One allocation for the workbook, shared by every session read from it.
     let source = Rc::new(path.to_path_buf());
     let mut sessions: Vec<RSession> = Vec::new();
-    // Held apart from `Session::anomalies` because a disagreement belongs to this reading of this
-    // sheet, not to the record. On the session it would be written into the `anomalies` column and
-    // read back on the next pass, still asserting a disagreement that had since been corrected.
+    // Held apart from `Session::anomalies` because a stale cell is a fact about this workbook, not
+    // about the record: the CSV it was written from disagrees with nothing.
     let mut discrepancies: Vec<Anomaly> = Vec::new();
     for row in 2..=sheet.highest_row() {
         let id = sheet
@@ -1228,8 +1227,8 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
             log.contains("using the recomputed value"),
             "the log does not say what was done:\n{log}"
         );
-        // Raised against the session, but on the context rather than on the record. The record is
-        // unchanged: the CSV this workbook was written from disagrees with nothing.
+        // Raised against the session, but on the context rather than on the record: a stale cell
+        // is a fact about this workbook, and the CSV it was written from disagrees with nothing.
         assert!(
             report
                 .anomalies
@@ -1243,8 +1242,8 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
             !session
                 .anomalies
                 .contains(&AnomalyKind::WorkbookDiscrepancy),
-            "a discrepancy reached Session::anomalies, from where it would be written into the \
-             next workbook: {:?}",
+            "a discrepancy reached Session::anomalies, which describes the record rather than the \
+             file it was read from: {:?}",
             session.anomalies
         );
 

@@ -761,11 +761,10 @@ pub enum AnomalyKind {
     /// The sheet is stale or was edited. The recomputed value always wins and no figure changes;
     /// this only says the stored one no longer matches.
     ///
-    /// A property of *this reading of this workbook* rather than of the session — the CSV the
-    /// workbook was written from has no such disagreement — so it lives on
-    /// [`Sessions::anomalies`] and is never written into a sheet. Were it on
-    /// [`Session::anomalies`] it would be serialised into the `anomalies` column, read back on the
-    /// next pass, and go on asserting a disagreement that had been corrected.
+    /// A fact about the workbook rather than about the session: the CSV that workbook was written
+    /// from disagrees with nothing, and a second workbook of the same sessions need not disagree
+    /// either. So it lives on [`Sessions::anomalies`], where the findings that belong to a file
+    /// rather than to a record go.
     ///
     /// Says only that a column disagreed. Which one, what it held and what was recomputed are not
     /// carried: an [`AnomalyKind`] is a bare token, and [`Anomaly`] is a session and a kind.
@@ -885,10 +884,9 @@ impl fmt::Display for Anomaly {
 /// [`Readings`](crate::green_button::Readings) is, so the two sources read the same way.
 ///
 /// This is where a finding goes when it is not a property of any one session: a relation between
-/// records, a property of a particular *reading* rather than of the record, or a fact about the
-/// file. What is true of a record itself goes on [`Session::anomalies`] instead, and travels with
-/// it — including out to a workbook and back, which is why nothing that describes one reading may
-/// live there.
+/// records, or a fact about the file they were read from. What is true of a record itself goes on
+/// [`Session::anomalies`] instead, and travels with it — including out to a workbook and back
+/// through the `anomalies` column.
 ///
 /// Returned by both readers — [`crate::session::csv::session_list`] from the CSV and
 /// [`crate::session::excel::session_list`] from a workbook written from it — because the grouping
