@@ -11,8 +11,8 @@
 
 use crate::{
     hydro_bill::{
-        BILL_END_DAY, BillingPeriod, NotABillingPeriodEnding, billing_period_dates,
-        billing_period_span,
+        BILL_END_DAY, BillingPeriod, NotABillingPeriodEnding, ZeroDenominator,
+        billing_period_dates, billing_period_span,
     },
     markdown::{Left, Right, amounts, field, h1, h2, rounding_note, table},
     session::{SessionReport, tou_kwh},
@@ -42,6 +42,7 @@ pub struct Energy {
 }
 
 /// Breakdown of energy costs attributable to EV sessions in a billing period.
+#[derive(Debug)]
 pub struct EnergyCost {
     /// The billing period these figures are for, named by the date it closes on. The bill's own,
     /// since every figure below is a proportion of one of its lines.
@@ -99,11 +100,23 @@ pub enum EnergyError {
     /// so a bill saying otherwise disagrees with the reports, and neither figure can be trusted
     /// over the other.
     NoRate { period_ending: Date, tou: Tou },
+
+    /// A bill figure the cost divides by is zero. See [`ZeroDenominator`].
+    ///
+    /// Distinct from [`Self::NoRate`], which is the same arithmetic on a time-of-use band and
+    /// carries the band it happened in.
+    ZeroDenominator(ZeroDenominator),
 }
 
 impl From<NotABillingPeriodEnding> for EnergyError {
     fn from(e: NotABillingPeriodEnding) -> Self {
         Self::NotABillingPeriodEnding(e)
+    }
+}
+
+impl From<ZeroDenominator> for EnergyError {
+    fn from(e: ZeroDenominator) -> Self {
+        Self::ZeroDenominator(e)
     }
 }
 
@@ -119,6 +132,7 @@ impl fmt::Display for EnergyError {
                      consumption, so it states no {band} rate to price the EV share at"
                 )
             }
+            Self::ZeroDenominator(e) => e.fmt(f),
         }
     }
 }
@@ -127,6 +141,7 @@ impl Error for EnergyError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::NotABillingPeriodEnding(e) => Some(e),
+            Self::ZeroDenominator(e) => Some(e),
             Self::NoRate { .. } => None,
         }
     }
@@ -266,9 +281,10 @@ pub fn energy_cost(bill: &HydroBill, sessions: &[RSession]) -> Result<EnergyCost
     // Both as fractions of the bill's own charges rather than as rates of their own. The rebate in
     // particular is a policy percentage that has been changed more than once, and reading it off
     // the bill means a change needs no code.
-    let hst = charges * bill.hst / bill.total_electricity_charges;
-    let ontario_electricity_rebate =
-        charges * bill.ontario_electricity_rebate / bill.total_electricity_charges;
+    let total_charges =
+        bill.divisor("Total Electricity Charges", bill.total_electricity_charges)?;
+    let hst = charges * bill.hst / total_charges;
+    let ontario_electricity_rebate = charges * bill.ontario_electricity_rebate / total_charges;
 
     Ok(EnergyCost {
         billing_period_ending,
@@ -531,6 +547,26 @@ mod test {
     ///
     /// The lines the cost does not read carry figures too, so a test cannot pass by reading one of
     /// them: nothing here is zero.
+    /// The energy cost divides by the bill's total charges to take HST and the rebate in the bill's
+    /// own proportions. Zero is refused rather than divided by.
+    #[test]
+    fn a_bill_stating_no_total_charges_is_refused() {
+        let mut b = bill();
+        b.total_electricity_charges = 0.0;
+        let err = energy_cost(&b, &sessions()).expect_err("a zero divisor");
+        let EnergyError::ZeroDenominator(z) = &err else {
+            panic!("expected a ZeroDenominator, got {err}");
+        };
+        assert_eq!(z.figure, "Total Electricity Charges", "{err}");
+
+        // A band stating no consumption keeps its own kind, which carries the band rather than the
+        // bill figure. The two are the same arithmetic read two ways and stay apart.
+        let mut b = bill();
+        b.on_peak_kwh = 0.0;
+        let err = energy_cost(&b, &sessions()).expect_err("no on-peak rate");
+        assert!(matches!(err, EnergyError::NoRate { .. }), "{err}");
+    }
+
     fn bill() -> HydroBill {
         HydroBill {
             statement_date: date(2026, 6, 28),
@@ -724,8 +760,7 @@ mod test {
         off_cycle.meter_reading_period_to = date(2026, 6, 30);
 
         let err = energy_cost(&off_cycle, &sessions())
-            .err()
-            .expect("30 June does not close a billing period");
+            .expect_err("30 June does not close a billing period");
         assert!(
             matches!(err, EnergyError::NotABillingPeriodEnding(_)),
             "{err}"

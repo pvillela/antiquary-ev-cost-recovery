@@ -10,7 +10,9 @@
 //! two copies of that agreement to keep.
 
 use crate::green_button::{METER_INTERVAL, Peak};
-use crate::hydro_bill::{NotABillingPeriodEnding, billing_period_dates, billing_period_span};
+use crate::hydro_bill::{
+    NotABillingPeriodEnding, ZeroDenominator, billing_period_dates, billing_period_span,
+};
 use crate::markdown::{Left, Right, amounts, field, h1, h2, rounding_note, table};
 use crate::session::{
     Bracket, EstimateSet, IntervalEstimates, SessionReport, estimates_from_report,
@@ -38,6 +40,7 @@ pub struct PowerEstimates {
 ///
 /// Every field is stated rather than left to be recomputed, because the point of the breakdown is
 /// to be checked against the bill line by line.
+#[derive(Debug)]
 pub struct DeliveryCost {
     /// The billing period these figures are for, named by the date it closes on. The bill's own,
     /// since every figure below is a proportion of one of its lines.
@@ -120,6 +123,15 @@ pub enum PeakPowerError {
         intervals: i64,
         expected: i64,
     },
+
+    /// A bill figure the cost divides by is zero. See [`ZeroDenominator`].
+    ZeroDenominator(ZeroDenominator),
+}
+
+impl From<ZeroDenominator> for PeakPowerError {
+    fn from(e: ZeroDenominator) -> Self {
+        Self::ZeroDenominator(e)
+    }
 }
 
 impl From<NotABillingPeriodEnding> for PeakPowerError {
@@ -157,6 +169,7 @@ impl fmt::Display for PeakPowerError {
                 "the meter data covers {intervals} of the {expected} hours in the billing period \
                  ending {period_ending}, so its maxima are not the period's"
             ),
+            Self::ZeroDenominator(e) => e.fmt(f),
         }
     }
 }
@@ -165,6 +178,7 @@ impl Error for PeakPowerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::NotABillingPeriodEnding(e) => Some(e),
+            Self::ZeroDenominator(e) => Some(e),
             _ => None,
         }
     }
@@ -359,9 +373,12 @@ pub fn peak_power_cost(
 
     // Each rate is the line as billed over the demand it was billed on, so it carries whatever the
     // bill actually did -- two rate schedules added together, a corrected figure, a rounding.
-    let blended_distribution_rate = bill.distribution_charges / bill.adj_kva;
-    let blended_transmission_connection_rate = bill.transmission_connection_charge / bill.adj_kw;
-    let blended_transmission_network_rate = bill.transmission_network_charge / bill.adj_peak_7_7_kw;
+    let blended_distribution_rate =
+        bill.distribution_charges / bill.divisor("Adj. kVA", bill.adj_kva)?;
+    let blended_transmission_connection_rate =
+        bill.transmission_connection_charge / bill.divisor("Adj. kW", bill.adj_kw)?;
+    let blended_transmission_network_rate = bill.transmission_network_charge
+        / bill.divisor("Adj. Peak kW 7-7", bill.adj_peak_7_7_kw)?;
 
     // The EV demand is prorated before pricing because the rate is per adjusted kW or kVA, which is
     // the prorated figure. Pricing the raw figure at that rate would mix the two bases.
@@ -376,9 +393,10 @@ pub fn peak_power_cost(
     // Both as fractions of the bill's own charges rather than as rates of their own. The rebate in
     // particular is a policy percentage that has been changed more than once, and reading it off
     // the bill means a change needs no code.
-    let hst = charges * bill.hst / bill.total_electricity_charges;
-    let ontario_electricity_rebate =
-        charges * bill.ontario_electricity_rebate / bill.total_electricity_charges;
+    let total_charges =
+        bill.divisor("Total Electricity Charges", bill.total_electricity_charges)?;
+    let hst = charges * bill.hst / total_charges;
+    let ontario_electricity_rebate = charges * bill.ontario_electricity_rebate / total_charges;
 
     Ok(DeliveryCost {
         billing_period_ending,
@@ -616,6 +634,41 @@ mod test {
     use crate::hydro_bill::{BILL_END_DAY, BillingPeriod};
     use crate::session::{AnomalyKind, IntervalEstimates, test_support::session};
     use jiff::civil::date;
+
+    /// A bill figure of zero is refused rather than divided by. Every one of the four is checked,
+    /// because they are four separate divisions and three of them went unguarded until this test.
+    #[test]
+    fn a_bill_figure_of_zero_is_refused() {
+        let peaks =
+            || period_values_with_nop(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR), Some(NOP_PEAK_HOUR));
+        let zeroed = |set: fn(&mut HydroBill)| {
+            let mut b = bill();
+            set(&mut b);
+            peak_power_cost(&b, peaks(), &two_reports()).expect_err("a zero divisor")
+        };
+
+        for (figure, set) in [
+            (
+                "Adj. kVA",
+                (|b: &mut HydroBill| b.adj_kva = 0.0) as fn(&mut HydroBill),
+            ),
+            ("Adj. kW", |b: &mut HydroBill| b.adj_kw = 0.0),
+            ("Adj. Peak kW 7-7", |b: &mut HydroBill| {
+                b.adj_peak_7_7_kw = 0.0
+            }),
+            ("Total Electricity Charges", |b: &mut HydroBill| {
+                b.total_electricity_charges = 0.0
+            }),
+        ] {
+            let err = zeroed(set);
+            let PeakPowerError::ZeroDenominator(z) = &err else {
+                panic!("{figure} should give a ZeroDenominator, got {err}");
+            };
+            assert_eq!(z.figure, figure, "{err}");
+            // The message names the figure, so a reader knows which line of the bill to look at.
+            assert!(err.to_string().contains(figure), "{err}");
+        }
+    }
 
     /// The fixture period's maxima, with no 7-7 hour: the estimate does not read one.
     fn period_values(kw_at: Option<&str>, kva_at: Option<&str>) -> PeriodValues {
@@ -953,8 +1006,7 @@ mod test {
             period_values_with_nop(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR), Some(NOP_PEAK_HOUR)),
             &two_reports(),
         )
-        .err()
-        .expect("the figures are June's and the bill is May's");
+        .expect_err("the figures are June's and the bill is May's");
         assert!(
             matches!(
                 err,
@@ -994,8 +1046,7 @@ mod test {
 
         // Both entry points make the same judgement; neither leaves it to the other.
         let err = peak_power_cost(&bill(), gappy, &two_reports())
-            .err()
-            .expect("an hour of the period is missing");
+            .expect_err("an hour of the period is missing");
         assert!(
             matches!(err, PeakPowerError::PeriodNotFullyCovered { .. }),
             "{err}"
@@ -1051,8 +1102,7 @@ mod test {
             period_values_with_nop(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR), Some(NOP_PEAK_HOUR)),
             &two_reports(),
         )
-        .err()
-        .expect("30 June does not label a billing period");
+        .expect_err("30 June does not label a billing period");
         assert!(
             matches!(err, PeakPowerError::NotABillingPeriodEnding(_)),
             "{err}"

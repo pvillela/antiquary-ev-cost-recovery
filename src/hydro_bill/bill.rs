@@ -82,7 +82,68 @@ impl HydroBill {
     pub fn print(&self) -> String {
         format!("{:#?}", Pretty(self))
     }
+
+    /// `Ok(divisor)` when the named bill figure can be divided by, `Err` when it is zero.
+    ///
+    /// Every EV cost is a proportion: a bill line over the demand or consumption it was levied on,
+    /// or a charge over the total it forms part of. Each such division needs its divisor checked,
+    /// and checking them one at a time in each cost function is how one gets missed -- three of
+    /// them were, until the `Adj. kVA` of a bill with no demand made a rate of `inf` and carried it
+    /// silently into a total.
+    ///
+    /// # Errors
+    ///
+    /// [`ZeroDenominator`], naming the figure, for a caller to report as its own error kind.
+    pub fn divisor(&self, name: &'static str, value: f64) -> Result<f64, ZeroDenominator> {
+        if value == 0.0 {
+            return Err(ZeroDenominator {
+                period_ending: self.period_end_date(),
+                figure: name,
+            });
+        }
+        Ok(value)
+    }
 }
+
+/// A bill figure that a cost has to divide by is zero, so the quotient is undefined.
+///
+/// A struct rather than a one-variant enum, so a function that can fail only this way says exactly
+/// that and a caller has nothing to match on. The error enums of the operations that divide embed
+/// it rather than restating it, which is what they do with
+/// [`NotABillingPeriodEnding`](super::NotABillingPeriodEnding).
+///
+/// Refused rather than carried. A quotient over zero is undefined, not large: it yields `inf` or
+/// `NaN`, and either propagates through every figure downstream without ever failing a test.
+/// A `NaN` total in particular compares false against everything, so a report choosing between
+/// "covered" and "fell short" on `total < 0.0` would state the first for a figure that is not a
+/// number at all.
+///
+/// [`EnergyError::NoRate`](crate::pure::energy::EnergyError) is the same arithmetic seen through a
+/// domain reading -- a band the site drew nothing in is a band the chargers cannot have drawn from
+/// either -- and is kept separate for that reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZeroDenominator {
+    /// The billing period the bill covers, named by the date it closes on.
+    pub period_ending: Date,
+    /// The bill figure that is zero, named as this crate names it.
+    pub figure: &'static str,
+}
+
+impl fmt::Display for ZeroDenominator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            period_ending,
+            figure,
+        } = self;
+        write!(
+            f,
+            "the bill for the billing period ending {period_ending} states {figure} as zero, so \
+             the EV share of the charge levied on it cannot be worked out"
+        )
+    }
+}
+
+impl std::error::Error for ZeroDenominator {}
 
 /// The bill as `Debug` renders it, with the two worked-out values put back where the fields they
 /// replaced used to sit.

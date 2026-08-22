@@ -118,6 +118,7 @@ pub struct CostRecovery {
 /// [`cost_recovery_surplus`] takes a period from, and all three parts are built against it. There
 /// is no separate `billing_period_ending` field because each part already carries one, and a fourth
 /// copy could only agree with them.
+#[derive(Debug)]
 pub struct CostRecoverySurplus {
     /// What the drivers are charged, at our own rates.
     pub recovery: CostRecovery,
@@ -635,11 +636,7 @@ impl fmt::Display for CostRecoverySurplus {
                 ("Surplus", self.surplus),
             ])
         )?;
-        writeln!(
-            f,
-            "{}\n",
-            wrap(VERDICT[usize::from(self.surplus < 0.0)], "")
-        )?;
+        writeln!(f, "{}\n", wrap(verdict(self.surplus), ""))?;
         // Not the standard rounding note: this column does add. The surplus is computed from the
         // three amounts as printed, precisely so that it can be checked on a calculator.
         writeln!(
@@ -661,16 +658,29 @@ impl fmt::Display for CostRecoverySurplus {
     }
 }
 
-/// What the sign of the surplus means, indexed by `surplus < 0.0`.
+/// What the surplus means, in words.
 ///
 /// Spelled out because the sign alone is read the wrong way about as often as the right way: money
 /// coming in is positive here, so a shortfall is the negative number.
-const VERDICT: [&str; 2] = [
+///
+/// Three outcomes rather than two. A surplus that is not a number has no sign to read -- every
+/// comparison against `NaN` is false, `self.surplus < 0.0` included -- so choosing on that test
+/// alone would print "covered" for a figure that says nothing at all. That cannot arise while every
+/// divisor is checked, which [`ZeroDenominator`](crate::hydro_bill::ZeroDenominator) now sees to;
+/// this is the guard that keeps a bad figure from being narrated as good news if one ever gets
+/// through again.
+fn verdict(surplus: f64) -> &'static str {
+    if !surplus.is_finite() {
+        return "The surplus could not be worked out from the figures above. Do not read the \
+                amount as either an excess or a shortfall.";
+    }
+    if surplus < 0.0 {
+        return "The cost-recovery rates fell short of the chargers' share of the bill for this \
+                period, by the amount above.";
+    }
     "The cost-recovery rates covered the chargers' share of the bill for this period, with the \
-     surplus above left over.",
-    "The cost-recovery rates fell short of the chargers' share of the bill for this period, by the \
-     amount above.",
-];
+     surplus above left over."
+}
 
 // cargo test --lib -- api::pure::recovery::test --nocapture
 #[cfg(test)]
@@ -1058,8 +1068,7 @@ mod test {
             flat(date(2026, 6, 1), 0.10),
             None,
         )
-        .err()
-        .expect("1 June is after the period starts on 24 May");
+        .expect_err("1 June is after the period starts on 24 May");
         assert!(
             matches!(
                 err,
@@ -1077,8 +1086,7 @@ mod test {
             flat(date(2026, 5, 1), 0.10),
             None,
         )
-        .err()
-        .expect("no kVA maximum to estimate against");
+        .expect_err("no kVA maximum to estimate against");
         assert!(
             matches!(
                 err,
@@ -1098,8 +1106,7 @@ mod test {
             flat(date(2026, 5, 1), 0.10),
             None,
         )
-        .err()
-        .expect("the bill states no on-peak rate");
+        .expect_err("the bill states no on-peak rate");
         assert!(
             matches!(
                 err,
@@ -1144,6 +1151,25 @@ mod test {
         ] {
             assert!(s.contains(heading), "{heading:?} missing from\n{s}");
         }
+    }
+
+    /// A surplus with no sign to read must not be narrated as either outcome. Every comparison
+    /// against `NaN` is false, so a verdict chosen on `surplus < 0.0` alone would call it "covered".
+    #[test]
+    fn a_surplus_that_is_not_a_number_reads_as_neither_outcome() {
+        let neither = verdict(f64::NAN);
+        assert!(neither.contains("could not be worked out"), "{neither}");
+        assert!(!neither.contains("covered"), "{neither}");
+        assert!(!neither.contains("fell short"), "{neither}");
+
+        // An infinite surplus is the same case: it arrives from a division, not from money.
+        assert_eq!(verdict(f64::INFINITY), neither);
+        assert_eq!(verdict(f64::NEG_INFINITY), neither);
+
+        // The two real outcomes are unchanged, zero counting as covered.
+        assert!(verdict(1.0).contains("covered"));
+        assert!(verdict(0.0).contains("covered"));
+        assert!(verdict(-1.0).contains("fell short"));
     }
 
     /// Every report says whether its columns can be checked by eye. The summary's own note is the

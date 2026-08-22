@@ -419,7 +419,10 @@ fn surplus_source(
 /// is at fault.
 fn gb_source(cause: &PeakPowerError, bill_pdf: Option<&Path>, gb_xml: &Path) -> Option<PathBuf> {
     match cause {
-        PeakPowerError::NotABillingPeriodEnding(_) => bill_pdf.map(Path::to_path_buf),
+        // Both are the bill's: it supplied the date, and it states the figure that is zero.
+        PeakPowerError::NotABillingPeriodEnding(_) | PeakPowerError::ZeroDenominator(_) => {
+            bill_pdf.map(Path::to_path_buf)
+        }
         PeakPowerError::NoPeak { .. }
         | PeakPowerError::ValuesAreForAnotherPeriod { .. }
         | PeakPowerError::PeriodNotFullyCovered { .. } => Some(gb_xml.to_path_buf()),
@@ -432,9 +435,9 @@ fn gb_source(cause: &PeakPowerError, bill_pdf: Option<&Path>, gb_xml: &Path) -> 
 /// `None` for [`energy`], which takes no bill and gets its date from the caller.
 fn bill_source(cause: &EnergyError, bill_pdf: Option<&Path>) -> Option<PathBuf> {
     match cause {
-        EnergyError::NotABillingPeriodEnding(_) | EnergyError::NoRate { .. } => {
-            bill_pdf.map(Path::to_path_buf)
-        }
+        EnergyError::NotABillingPeriodEnding(_)
+        | EnergyError::NoRate { .. }
+        | EnergyError::ZeroDenominator(_) => bill_pdf.map(Path::to_path_buf),
     }
 }
 
@@ -523,8 +526,7 @@ mod test {
             Path::new("Session_Report_April_1_2026-April_30_2026.csv"),
             Path::new("Session_Report_June_1_2026-June_30_2026.csv"),
         )
-        .err()
-        .expect("there is no such bill");
+        .expect_err("there is no such bill");
         assert!(
             matches!(err, ApiError::Read(ReadError::Bill { .. })),
             "{err}"
@@ -663,8 +665,7 @@ mod test {
             rates,
             None,
         )
-        .err()
-        .expect("there is no such bill");
+        .expect_err("there is no such bill");
         assert!(
             matches!(err, ApiError::Read(ReadError::Bill { .. })),
             "{err}"
@@ -713,8 +714,7 @@ mod test {
             Path::new("Session_Report_April_1_2026-April_30_2026.csv"),
             Path::new("Session_Report_June_1_2026-June_30_2026.csv"),
         )
-        .err()
-        .expect("there is no such bill");
+        .expect_err("there is no such bill");
         assert!(
             matches!(err, ApiError::Read(ReadError::Bill { .. })),
             "{err}"
