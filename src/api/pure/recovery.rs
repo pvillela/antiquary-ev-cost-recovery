@@ -127,10 +127,17 @@ pub struct CostRecoverySurplus {
     /// What the chargers' share of the three time-of-use consumption lines cost, after HST and the
     /// rebate.
     pub energy: EnergyCost,
-    /// `recovery.cost_recovery - delivery.delivery_cost - energy.energy_cost`.
+    /// `recovery.cost_recovery - delivery.delivery_cost - energy.energy_cost`, each term rounded to
+    /// the cent before the subtraction, and the result rounded again.
     ///
     /// Positive when the rates over-recover and negative when they fall short, so the sign is the
     /// answer the figure exists to give.
+    ///
+    /// Rounded, unlike every other figure in this module, because this one is an accounting total
+    /// and the column above it has to add down. Subtracting the unrestrained values gave a surplus
+    /// a cent away from what the three printed amounts come to, which in a report whose whole point
+    /// is a subtraction reads as an arithmetic error. The three parts keep their own unrounded
+    /// totals; only the difference taken here is to the cent.
     pub surplus: f64,
 }
 
@@ -450,11 +457,29 @@ pub fn cost_recovery_surplus(
     let energy = energy_cost(bill, sessions)?;
 
     Ok(CostRecoverySurplus {
-        surplus: recovery.cost_recovery - delivery.delivery_cost - energy.energy_cost,
+        surplus: to_the_cent(
+            to_the_cent(recovery.cost_recovery)
+                - to_the_cent(delivery.delivery_cost)
+                - to_the_cent(energy.energy_cost),
+        ),
         recovery,
         delivery,
         energy,
     })
+}
+
+/// An amount rounded to the cent, as the reports state it.
+///
+/// Through the formatter rather than by arithmetic on the value. `(x * 100.0).round() / 100.0`
+/// rounds a half away from zero while `{:.2}` rounds it to even, so the two disagree on an amount
+/// landing exactly on half a cent -- and a surplus that disagreed with its own column in that case
+/// would be the one defect this rounding exists to prevent. The round trip through a string is what
+/// makes the result the printed figure by construction rather than by an argument that the two
+/// rules coincide.
+fn to_the_cent(amount: f64) -> f64 {
+    format!("{amount:.2}")
+        .parse()
+        .expect("a decimal written by this formatter parses back")
 }
 
 /// One stretch of the period priced at one schedule of rates.
@@ -638,7 +663,7 @@ const VERDICT: [&str; 2] = [
 mod test {
     use super::*;
     use crate::api::pure::test_support::{
-        KVA_PEAK_HOUR, KW_PEAK_HOUR, NOP_PEAK_HOUR, bill, close, period_ending_date,
+        KVA_PEAK_HOUR, KW_PEAK_HOUR, NOP_PEAK_HOUR, bill, period_ending_date,
         period_values_with_nop, two_reports,
     };
     use crate::session::test_support::session;
@@ -914,17 +939,55 @@ mod test {
             peak_power_cost(&bill(), peaks(), &two_reports()).expect("the delivery cost");
         let energy = energy_cost(&bill(), &two_reports()).expect("the energy cost");
 
-        assert!(close(s.recovery.cost_recovery, recovery.cost_recovery));
-        assert!(close(s.delivery.delivery_cost, delivery.delivery_cost));
-        assert!(close(s.energy.energy_cost, energy.energy_cost));
-        assert!(
-            close(
-                s.surplus,
-                recovery.cost_recovery - delivery.delivery_cost - energy.energy_cost
-            ),
-            "{}",
-            s.surplus
+        assert_eq!(s.recovery.cost_recovery, recovery.cost_recovery);
+        assert_eq!(s.delivery.delivery_cost, delivery.delivery_cost);
+        assert_eq!(s.energy.energy_cost, energy.energy_cost);
+        // To the cent, since that is what the surplus is; the parts keep their unrounded totals.
+        assert_eq!(
+            s.surplus,
+            to_the_cent(
+                to_the_cent(recovery.cost_recovery)
+                    - to_the_cent(delivery.delivery_cost)
+                    - to_the_cent(energy.energy_cost)
+            )
         );
+    }
+
+    /// The summary is an accounting column, so it has to add down as printed. Read back off the
+    /// rendered report rather than off the struct, because a reader checking the bill has only the
+    /// four printed amounts.
+    #[test]
+    fn the_summary_column_adds_down_as_printed() {
+        let report = cost_recovery_surplus(
+            &bill(),
+            peaks(),
+            &two_reports(),
+            flat(date(2026, 5, 1), 0.10),
+            None,
+        )
+        .expect("the fixture bill closes a billing period")
+        .to_string();
+
+        let amount = |label: &str| -> f64 {
+            let row = report
+                .lines()
+                .find(|l| l.starts_with(&format!("| {label}")))
+                .unwrap_or_else(|| panic!("no {label} row in\n{report}"));
+            row.rsplit('|')
+                .nth(1)
+                .expect("an amount cell")
+                .trim()
+                .parse()
+                .expect("an amount")
+        };
+
+        let recovery = amount("Cost recovery");
+        let energy = amount("EV energy cost");
+        let delivery = amount("EV delivery cost");
+        let surplus = amount("Surplus");
+
+        // The costs print negative, so the column is added rather than subtracted.
+        assert_eq!(recovery + energy + delivery, surplus);
     }
 
     /// The sign is the answer, so both directions are exercised. Rates high enough to cover the
@@ -944,13 +1007,12 @@ mod test {
 
         let none = surplus_at(0.0);
         assert_eq!(none.recovery.cost_recovery, 0.0);
-        assert!(
-            close(
-                none.surplus,
-                -none.delivery.delivery_cost - none.energy.energy_cost
-            ),
-            "{}",
-            none.surplus
+        // The two costs to the cent, since that is what the surplus is built from.
+        assert_eq!(
+            none.surplus,
+            to_the_cent(
+                -to_the_cent(none.delivery.delivery_cost) - to_the_cent(none.energy.energy_cost)
+            )
         );
         assert!(none.surplus < 0.0, "{}", none.surplus);
 
