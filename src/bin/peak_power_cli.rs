@@ -24,7 +24,7 @@ Usage:
     peak_power_cli --help
 
 Example:
-    peak_power_cli 2026-06-22 data/TH_Electric_Usage.XML data/May.csv data/June.csv
+    peak_power_cli 2026-06-23 data/TH_Electric_Usage.XML data/May.csv data/June.csv
 ";
 
 fn main() -> ExitCode {
