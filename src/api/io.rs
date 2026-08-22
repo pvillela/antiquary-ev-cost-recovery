@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 pub use crate::api::error::{ApiError, CostRecoveryError, EnergyError, PeakPowerError};
 pub use crate::api::pure::energy::{Energy, EnergyCost, TouKwh};
 pub use crate::api::pure::peak_power::{DeliveryCost, PowerEstimates};
-pub use crate::api::pure::recovery::{AtRates, CostRecovery, CostRecoveryRates};
+pub use crate::api::pure::recovery::{CostRecovery, CostRecoveryRates, CostRecoveryStretch};
 
 /// A source file could not be read.
 ///

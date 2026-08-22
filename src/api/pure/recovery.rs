@@ -38,13 +38,19 @@ pub struct CostRecoveryRates {
     pub off_peak: f64,
 }
 
-/// The stretch of a billing period over which one schedule of rates was in effect, and what it
-/// recovers.
+/// One stretch of a billing period over which a single schedule of rates was in effect: the dates
+/// it spans, the rates charged on it, the energy drawn within it, and what that recovers.
+///
+/// Self-contained, and the level at which every figure here has one rate behind it. The energy is
+/// this stretch's own — only the sessions falling inside its dates, split by time-of-use band — and
+/// each band's recovery is that band's kilowatt-hours times that band's rate from `rates`. Nothing
+/// has to be looked up elsewhere to check a row of the report against it.
 ///
 /// A billing period does not begin on the first of a month, so a rate change in the middle of one
-/// leaves two of these rather than two months.
+/// leaves two of these rather than two months. The whole-period figures are on
+/// [`CostRecovery`], which holds these.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AtRates {
+pub struct CostRecoveryStretch {
     /// The rates charged over this stretch.
     pub rates: CostRecoveryRates,
     /// First calendar date the rates were charged on within the billing period.
@@ -64,7 +70,7 @@ pub struct AtRates {
     pub off_peak_recovery: f64,
 }
 
-impl AtRates {
+impl CostRecoveryStretch {
     /// What this stretch recovers in total.
     pub fn recovery(&self) -> f64 {
         self.on_peak_recovery + self.mid_peak_recovery + self.off_peak_recovery
@@ -77,12 +83,16 @@ pub struct CostRecovery {
     /// The billing period these figures are for, named by the date it closes on.
     pub billing_period_ending: Date,
 
-    /// One entry per schedule of rates in effect during the period, in date order.
+    /// The period broken into stretches, one per schedule of rates in effect, in date order.
     ///
-    /// One when the rates held all period, two when they changed during it. A `Vec` rather than a
-    /// pair, because the stretches are what the report lists and what the totals below are summed
-    /// from, and both read the same whichever it is.
-    pub at_rates: Vec<AtRates>,
+    /// Not a list of rate schedules. Each entry carries its own dates, its own energy split by
+    /// time-of-use band, and its own recovery per band — see [`CostRecoveryStretch`]. This is where
+    /// the per-band detail lives, and the whole of what the report's tables are drawn from.
+    ///
+    /// One entry when the rates held all period, two when they changed during it. A `Vec` rather
+    /// than a pair, because the stretches are what the report lists and what the totals below are
+    /// summed from, and both read the same whichever it is.
+    pub stretches: Vec<CostRecoveryStretch>,
 
     /// EV energy over the whole period, split by time-of-use band.
     ///
@@ -98,7 +108,7 @@ pub struct CostRecovery {
 // No per-band recovery for the whole period. A band's kilowatt-hours were charged at one rate in
 // each stretch and at a different rate in the next, so their sum is money recovered under two
 // schedules at once -- a figure no table here shows and no invoice would state. The bands are
-// reported per stretch, on [`AtRates`], where each has a single rate behind it.
+// reported per stretch, on [`CostRecoveryStretch`], where each has a single rate behind it.
 //
 // [`Self::kwh`] and [`Self::cost_recovery`] are summable in the same way and are kept, because
 // both are figures the report itself states.
@@ -243,8 +253,8 @@ pub fn cost_recovery(
 
     // The instant the rates change, and with it the two stretches. Checked above to fall strictly
     // inside the period, so neither stretch is empty and the two partition it exactly.
-    let at_rates = match recovery_rates_at_end {
-        None => vec![at_rates(
+    let stretches = match recovery_rates_at_end {
+        None => vec![stretch(
             recovery_rates_at_start,
             period_start,
             period_ending,
@@ -259,7 +269,7 @@ pub fn cost_recovery(
                 .yesterday()
                 .expect("a date inside a billing period has a yesterday");
             vec![
-                at_rates(
+                stretch(
                     recovery_rates_at_start,
                     period_start,
                     last_of_first,
@@ -267,7 +277,7 @@ pub fn cost_recovery(
                     change,
                     &counted,
                 ),
-                at_rates(
+                stretch(
                     rates_at_end,
                     rates_at_end.effective_date,
                     period_ending,
@@ -279,7 +289,7 @@ pub fn cost_recovery(
         }
     };
 
-    let sum = |f: fn(&AtRates) -> f64| at_rates.iter().map(f).sum::<f64>();
+    let sum = |f: fn(&CostRecoveryStretch) -> f64| stretches.iter().map(f).sum::<f64>();
 
     Ok(CostRecovery {
         billing_period_ending,
@@ -288,8 +298,8 @@ pub fn cost_recovery(
             mid_peak: sum(|a| a.kwh.mid_peak),
             off_peak: sum(|a| a.kwh.off_peak),
         },
-        cost_recovery: sum(AtRates::recovery),
-        at_rates,
+        cost_recovery: sum(CostRecoveryStretch::recovery),
+        stretches,
     })
 }
 
@@ -298,16 +308,16 @@ pub fn cost_recovery(
 /// The dates and the instants are given separately because they are not the same cut. `from` and
 /// `to` are what a reader checks against a calendar; `start` and `end` are where the energy is
 /// actually divided, and the period's own ends sit at standard-time midnight rather than on a date.
-fn at_rates(
+fn stretch(
     rates: CostRecoveryRates,
     from: Date,
     to: Date,
     start: Timestamp,
     end: Timestamp,
     counted: &[RSession],
-) -> AtRates {
+) -> CostRecoveryStretch {
     let kwh = tou_kwh(Interval::from_start_end(start, end), counted);
-    AtRates {
+    CostRecoveryStretch {
         on_peak_recovery: kwh.on_peak * rates.on_peak,
         mid_peak_recovery: kwh.mid_peak * rates.mid_peak,
         off_peak_recovery: kwh.off_peak * rates.off_peak,
@@ -333,31 +343,31 @@ fn band_row(name: &str, kwh: f64, rate: f64, recovery: f64) -> Vec<String> {
 /// The total row leaves the rate cell empty rather than averaging the three: a weighted mean of
 /// rates is not a rate anybody was charged, and the column exists to be checked against the
 /// schedule that was published.
-fn at_rates_table(at: &AtRates) -> String {
+fn stretch_table(s: &CostRecoveryStretch) -> String {
     let rows = vec![
         band_row(
             "On-peak",
-            at.kwh.on_peak,
-            at.rates.on_peak,
-            at.on_peak_recovery,
+            s.kwh.on_peak,
+            s.rates.on_peak,
+            s.on_peak_recovery,
         ),
         band_row(
             "Mid-peak",
-            at.kwh.mid_peak,
-            at.rates.mid_peak,
-            at.mid_peak_recovery,
+            s.kwh.mid_peak,
+            s.rates.mid_peak,
+            s.mid_peak_recovery,
         ),
         band_row(
             "Off-peak",
-            at.kwh.off_peak,
-            at.rates.off_peak,
-            at.off_peak_recovery,
+            s.kwh.off_peak,
+            s.rates.off_peak,
+            s.off_peak_recovery,
         ),
         vec![
             "Total".to_owned(),
-            format!("{:.3}", at.kwh.total_kwh()),
+            format!("{:.3}", s.kwh.total_kwh()),
             String::new(),
-            format!("{:.2}", at.recovery()),
+            format!("{:.2}", s.recovery()),
         ],
     ];
     table(
@@ -378,7 +388,7 @@ impl fmt::Display for CostRecovery {
 
         // One schedule is the ordinary case, and it gets one table under a heading line rather than
         // a section of its own followed by a total that repeats it.
-        if let [only] = &self.at_rates[..] {
+        if let [only] = &self.stretches[..] {
             writeln!(
                 f,
                 "{}\n",
@@ -387,30 +397,30 @@ impl fmt::Display for CostRecovery {
                     &format!("effective {}", only.rates.effective_date)
                 )
             )?;
-            return writeln!(f, "{}", at_rates_table(only));
+            return writeln!(f, "{}", stretch_table(only));
         };
 
         writeln!(f)?;
-        for at in &self.at_rates {
+        for s in &self.stretches {
             writeln!(
                 f,
                 "{}\n",
                 h2(&format!(
                     "EV rates effective {}  ({} - {})",
-                    at.rates.effective_date, at.from, at.to
+                    s.rates.effective_date, s.from, s.to
                 ))
             )?;
-            writeln!(f, "{}\n", at_rates_table(at))?;
+            writeln!(f, "{}\n", stretch_table(s))?;
         }
 
         writeln!(f, "{}\n", h2("EV Cost Recovery Total"))?;
         let mut rows: Vec<(String, f64)> = self
-            .at_rates
+            .stretches
             .iter()
-            .map(|at| {
+            .map(|s| {
                 (
-                    format!("At rates effective {}", at.rates.effective_date),
-                    at.recovery(),
+                    format!("At rates effective {}", s.rates.effective_date),
+                    s.recovery(),
                 )
             })
             .collect();
@@ -456,9 +466,9 @@ mod test {
         let r = cost_recovery(ending(), &[s], flat(date(2026, 5, 1), 0.10), None)
             .expect("23 June closes a billing period");
 
-        assert_eq!(r.at_rates.len(), 1);
-        assert_eq!(r.at_rates[0].from, date(2026, 5, 24));
-        assert_eq!(r.at_rates[0].to, date(2026, 6, 23));
+        assert_eq!(r.stretches.len(), 1);
+        assert_eq!(r.stretches[0].from, date(2026, 5, 24));
+        assert_eq!(r.stretches[0].to, date(2026, 6, 23));
         assert!((r.kwh.total_kwh() - 7.0).abs() < 1e-9, "{:?}", r.kwh);
         assert!((r.cost_recovery - 0.70).abs() < 1e-9, "{}", r.cost_recovery);
     }
@@ -490,18 +500,18 @@ mod test {
         )
         .expect("1 June falls inside the period");
 
-        assert_eq!(split.at_rates.len(), 2);
+        assert_eq!(split.stretches.len(), 2);
         // Both stretches see energy, so the sum below is a real test rather than one of them being
         // the whole and the other zero.
-        for at in &split.at_rates {
-            assert!(at.kwh.total_kwh() > 0.0, "{:?}", at);
+        for s in &split.stretches {
+            assert!(s.kwh.total_kwh() > 0.0, "{s:?}");
         }
         for band in [
             |k: &TouKwh| k.on_peak,
             |k: &TouKwh| k.mid_peak,
             |k: &TouKwh| k.off_peak,
         ] {
-            let parts: f64 = split.at_rates.iter().map(|a| band(&a.kwh)).sum();
+            let parts: f64 = split.stretches.iter().map(|a| band(&a.kwh)).sum();
             assert!(
                 (parts - band(&whole.kwh)).abs() < 1e-9,
                 "{parts} vs {}",
@@ -529,8 +539,11 @@ mod test {
         )
         .expect("1 June falls inside the period");
 
-        let [first, second] = &r.at_rates[..] else {
-            panic!("two schedules give two stretches, got {}", r.at_rates.len());
+        let [first, second] = &r.stretches[..] else {
+            panic!(
+                "two schedules give two stretches, got {}",
+                r.stretches.len()
+            );
         };
         assert_eq!(
             (first.from, first.to),
@@ -558,10 +571,10 @@ mod test {
 
         assert!((r.kwh.off_peak - 10.0).abs() < 1e-9, "{:?}", r.kwh);
         // Per stretch, which is the only level a band has one rate behind it.
-        let at = &r.at_rates[0];
-        assert_eq!(at.on_peak_recovery, 0.0);
-        assert_eq!(at.mid_peak_recovery, 0.0);
-        assert!((at.off_peak_recovery - 30.0).abs() < 1e-9, "{at:?}");
+        let s = &r.stretches[0];
+        assert_eq!(s.on_peak_recovery, 0.0);
+        assert_eq!(s.mid_peak_recovery, 0.0);
+        assert!((s.off_peak_recovery - 30.0).abs() < 1e-9, "{s:?}");
         assert!((r.cost_recovery - 30.0).abs() < 1e-9, "{}", r.cost_recovery);
     }
 
