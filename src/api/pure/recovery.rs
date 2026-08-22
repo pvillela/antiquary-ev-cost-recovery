@@ -953,22 +953,18 @@ mod test {
         );
     }
 
-    /// The summary is an accounting column, so it has to add down as printed. Read back off the
-    /// rendered report rather than off the struct, because a reader checking the bill has only the
-    /// four printed amounts.
+    /// The contract the summary is read under: the four printed amounts, put into a calculator,
+    /// give the printed surplus.
+    ///
+    /// Read back off the rendered report rather than off the struct, because those four numbers are
+    /// all a reader checking the bill has.
+    ///
+    /// Swept across many rate schedules rather than asserted once. Whether the rounding of three
+    /// amounts happens to agree with the rounding of their difference depends on where each falls
+    /// against a half cent, so a single fixture proves nothing about the next bill.
     #[test]
-    fn the_summary_column_adds_down_as_printed() {
-        let report = cost_recovery_surplus(
-            &bill(),
-            peaks(),
-            &two_reports(),
-            flat(date(2026, 5, 1), 0.10),
-            None,
-        )
-        .expect("the fixture bill closes a billing period")
-        .to_string();
-
-        let amount = |label: &str| -> f64 {
+    fn the_printed_amounts_add_up_to_the_printed_surplus() {
+        let amount = |report: &str, label: &str| -> f64 {
             let row = report
                 .lines()
                 .find(|l| l.starts_with(&format!("| {label}")))
@@ -981,13 +977,28 @@ mod test {
                 .expect("an amount")
         };
 
-        let recovery = amount("Cost recovery");
-        let energy = amount("EV energy cost");
-        let delivery = amount("EV delivery cost");
-        let surplus = amount("Surplus");
+        // Rates in tenth-of-a-cent steps, and three unequal bands, so the three totals land all
+        // over the cent rather than tracking each other.
+        for step in 0..200 {
+            let base = f64::from(step) * 0.001;
+            let rates = rates(date(2026, 5, 1), base, base + 0.0007, base + 0.0003);
+            let report = cost_recovery_surplus(&bill(), peaks(), &two_reports(), rates, None)
+                .expect("the fixture bill closes a billing period")
+                .to_string();
 
-        // The costs print negative, so the column is added rather than subtracted.
-        assert_eq!(recovery + energy + delivery, surplus);
+            let recovery = amount(&report, "Cost recovery");
+            let energy = amount(&report, "EV energy cost");
+            let delivery = amount(&report, "EV delivery cost");
+            let surplus = amount(&report, "Surplus");
+
+            // The costs print negative, so the column is added rather than subtracted. Compared as
+            // printed strings, since that is the comparison a reader makes.
+            assert_eq!(
+                format!("{:.2}", recovery + energy + delivery),
+                format!("{surplus:.2}"),
+                "at rate {base:.4}:\n{report}"
+            );
+        }
     }
 
     /// The sign is the answer, so both directions are exercised. Rates high enough to cover the
