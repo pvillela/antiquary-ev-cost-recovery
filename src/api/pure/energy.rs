@@ -11,9 +11,12 @@
 
 use crate::{
     hydro_bill::{BILL_END_DAY, BillingPeriod, NotABillingPeriodEnding, billing_period_dates},
+    markdown::{Left, Right, amounts, field, h1, h2, table},
     session::{SessionReport, tou_kwh},
     time::Interval,
 };
+
+use super::period_line;
 use jiff::civil::Date;
 use std::{error::Error, fmt};
 
@@ -24,6 +27,18 @@ pub use crate::hydro_bill::HydroBill;
 pub use crate::session::{RSession, TouKwh};
 pub use crate::time::Tou;
 
+/// EV energy over a billing period, split by time-of-use band.
+///
+/// The period is carried rather than left to the caller because the three figures mean nothing
+/// without it: they are what was drawn *within* it, and a session outside contributes none of it.
+#[derive(Debug)]
+pub struct Energy {
+    /// The billing period these figures are for, named by the date it closes on.
+    pub billing_period_ending: Date,
+    /// EV energy used by TOU.
+    pub kwh: TouKwh,
+}
+
 /// EV cost-recovery TOU rates.
 pub struct CostRecoveryRates {
     pub on_peak: f64,
@@ -33,6 +48,9 @@ pub struct CostRecoveryRates {
 
 /// Breakdown of energy costs attributable to EV sessions in a billing period.
 pub struct EnergyCost {
+    /// The billing period these figures are for, named by the date it closes on. The bill's own,
+    /// since every figure below is a proportion of one of its lines.
+    pub billing_period_ending: Date,
     /// EV energy used by TOU.
     pub kwh: TouKwh,
     /// Loss factor adjustment from bill.
@@ -151,7 +169,7 @@ impl Error for EnergyError {
 ///
 /// [`EnergyError::NotABillingPeriodEnding`] if `billing_period_ending` is not [`BILL_END_DAY`] of its
 /// month.
-pub fn energy(billing_period_ending: Date, sessions: &[RSession]) -> Result<TouKwh, EnergyError> {
+pub fn energy(billing_period_ending: Date, sessions: &[RSession]) -> Result<Energy, EnergyError> {
     billing_period_dates(billing_period_ending)?;
 
     let period = BillingPeriod::ending_on(billing_period_ending, BILL_END_DAY);
@@ -170,7 +188,10 @@ pub fn energy(billing_period_ending: Date, sessions: &[RSession]) -> Result<TouK
         .cloned()
         .collect();
 
-    Ok(tou_kwh(time_range, &counted))
+    Ok(Energy {
+        billing_period_ending,
+        kwh: tou_kwh(time_range, &counted),
+    })
 }
 
 /// Estimates the net energy cost attributable to EV charging sessions during a billing period.
@@ -220,7 +241,7 @@ pub fn energy_cost(bill: &HydroBill, sessions: &[RSession]) -> Result<EnergyCost
     // refused rather than estimated from, because `energy` sums over a period this does not model.
     // The check is `energy`'s own; there is no second one here.
     let billing_period_ending = bill.period_end_date();
-    let kwh = energy(billing_period_ending, sessions)?;
+    let kwh = energy(billing_period_ending, sessions)?.kwh;
 
     let loss_factor_adjustment = bill.loss_factor_adjustment;
     let adjusted_kwh = TouKwh {
@@ -247,6 +268,7 @@ pub fn energy_cost(bill: &HydroBill, sessions: &[RSession]) -> Result<EnergyCost
         charges * bill.ontario_electricity_rebate / bill.total_electricity_charges;
 
     Ok(EnergyCost {
+        billing_period_ending,
         kwh,
         loss_factor_adjustment,
         adjusted_kwh,
@@ -283,6 +305,110 @@ fn blended_rate(
     Ok(cost / band_kwh)
 }
 
+impl fmt::Display for Energy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kwh = &self.kwh;
+        let rows = vec![
+            band_row("On-peak", kwh.on_peak),
+            band_row("Mid-peak", kwh.mid_peak),
+            band_row("Off-peak", kwh.off_peak),
+            band_row("Total", kwh.total_kwh()),
+        ];
+        writeln!(f, "{}\n", h1("EV Energy"))?;
+        writeln!(f, "{}\n", period_line(self.billing_period_ending))?;
+        writeln!(f, "{}", table(&["Band", "kWh"], &rows, &[Left, Right]))
+    }
+}
+
+impl fmt::Display for EnergyCost {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let band = |name: &str, kwh: f64, adj: f64, rate: f64, cost: f64| {
+            vec![
+                name.to_owned(),
+                format!("{kwh:.3}"),
+                format!("{adj:.3}"),
+                format!("{rate:.5}"),
+                format!("{cost:.2}"),
+            ]
+        };
+        let charges = self.on_peak_cost + self.mid_peak_cost + self.off_peak_cost;
+        let rows = vec![
+            band(
+                "On-peak",
+                self.kwh.on_peak,
+                self.adjusted_kwh.on_peak,
+                self.th_on_peak_rate,
+                self.on_peak_cost,
+            ),
+            band(
+                "Mid-peak",
+                self.kwh.mid_peak,
+                self.adjusted_kwh.mid_peak,
+                self.th_mid_peak_rate,
+                self.mid_peak_cost,
+            ),
+            band(
+                "Off-peak",
+                self.kwh.off_peak,
+                self.adjusted_kwh.off_peak,
+                self.th_off_peak_rate,
+                self.off_peak_cost,
+            ),
+            // No rate on the total line: the three differ, so one there would be read as a fourth
+            // rate rather than as the absence of one.
+            vec![
+                "Total".to_owned(),
+                format!("{:.3}", self.kwh.total_kwh()),
+                format!("{:.3}", self.adjusted_kwh.total_kwh()),
+                String::new(),
+                format!("{charges:.2}"),
+            ],
+        ];
+
+        writeln!(f, "{}\n", h1("EV Energy Cost"))?;
+        writeln!(f, "{}", period_line(self.billing_period_ending))?;
+        writeln!(
+            f,
+            "{}\n",
+            field(
+                "Loss factor",
+                &format!("{:.4}", self.loss_factor_adjustment)
+            )
+        )?;
+        writeln!(
+            f,
+            "{}\n",
+            table(
+                &["Band", "kWh", "Adj. kWh", "Toronto Hydro rate", "Cost"],
+                &rows,
+                &[Left, Right, Right, Right, Right],
+            )
+        )?;
+
+        writeln!(f, "{}\n", h2("Total"))?;
+        writeln!(
+            f,
+            "{}",
+            amounts(&[
+                ("Energy charges", charges),
+                ("HST", self.hst),
+                // Negative because it is a credit. The bill prints it as one, and a column that is
+                // alternately added and subtracted cannot be checked by eye.
+                (
+                    "Ontario Electricity Rebate",
+                    -self.ontario_electricity_rebate
+                ),
+                ("Energy cost", self.energy_cost),
+            ])
+        )
+    }
+}
+
+/// One `| Band | kWh |` row.
+fn band_row(name: &str, kwh: f64) -> Vec<String> {
+    vec![name.to_owned(), format!("{kwh:.3}")]
+}
+
 /// A band's name as a bill and a reader spell it.
 ///
 /// Not [`Tou::as_str`], which is documented as a wire format for workbook column names and spells
@@ -310,6 +436,7 @@ mod test {
     fn kwh(sessions: &[RSession]) -> f64 {
         energy(period_ending_date(), sessions)
             .expect("23 June closes a billing period")
+            .kwh
             .total_kwh()
     }
 
@@ -450,10 +577,12 @@ mod test {
     #[test]
     fn the_energy_priced_is_the_energy_attributed() {
         let cost = cost();
-        let kwh = energy(period_ending_date(), &sessions()).unwrap();
+        let kwh = energy(period_ending_date(), &sessions()).unwrap().kwh;
         assert_eq!(cost.kwh.on_peak, kwh.on_peak);
         assert_eq!(cost.kwh.mid_peak, kwh.mid_peak);
         assert_eq!(cost.kwh.off_peak, kwh.off_peak);
+        // The report heads itself with the period, taken from the bill rather than passed in.
+        assert_eq!(cost.billing_period_ending, period_ending_date());
         // Each fixture session lands whole in one band, so all three are non-zero and distinct --
         // otherwise the assertions below could pass on zeros.
         assert!(close(cost.kwh.on_peak, 5.0));
@@ -538,6 +667,40 @@ mod test {
             // The message names the band in prose, not as the workbook token.
             assert!(err.to_string().contains(band_name(band)), "{err}");
         }
+    }
+
+    /// The report heads itself with the period's full span, which is what a bill states, rather
+    /// than with the closing date it is named by.
+    #[test]
+    fn the_reports_head_themselves_with_the_period() {
+        let period = "Period       2026-05-24 - 2026-06-23  (31 days)";
+        let energy = energy(period_ending_date(), &sessions())
+            .unwrap()
+            .to_string();
+        assert!(energy.starts_with("EV Energy\n=========\n"), "{energy}");
+        assert!(energy.contains(period), "{energy}");
+
+        let cost = cost().to_string();
+        assert!(cost.starts_with("EV Energy Cost\n"), "{cost}");
+        assert!(cost.contains(period), "{cost}");
+    }
+
+    /// Rates are labelled as Toronto Hydro's. [`CostRecoveryRates`] is what the EV owners are
+    /// charged, and a report that said only "rate" would leave the two indistinguishable.
+    #[test]
+    fn the_cost_report_says_whose_rates_it_is_pricing_at() {
+        let text = cost().to_string();
+        assert!(text.contains("Toronto Hydro rate"), "{text}");
+        // The loss factor is stated, because it is what separates the two kWh columns.
+        assert!(text.contains("Loss factor  1.0500"), "{text}");
+        // The rebate is shown as the credit it is, not as a positive to be subtracted by the
+        // reader. Read off the line rather than matched against a figure, so the test says what it
+        // is checking and not merely that the arithmetic has not moved.
+        let rebate = text
+            .lines()
+            .find(|l| l.contains("Ontario Electricity Rebate"))
+            .expect("the totals table lists the rebate");
+        assert!(rebate.contains("-0."), "{rebate}");
     }
 
     /// Every figure is a proportion of a bill line, so an off-cycle bill -- one whose meter reading

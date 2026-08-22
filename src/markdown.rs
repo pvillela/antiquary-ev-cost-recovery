@@ -98,3 +98,26 @@ pub(crate) fn h1(s: &str) -> String {
 pub(crate) fn h2(s: &str) -> String {
     format!("{s}\n{}", "-".repeat(s.chars().count()))
 }
+
+/// Width the header labels are padded to, so their values start in one column.
+const LABEL: usize = 12;
+
+/// A label and its value on one line.
+///
+/// What sits above a report's tables. A two-column table would render the same pairs, but reads as
+/// data to be scanned rather than as the heading it is.
+pub(crate) fn field(label: &str, value: &str) -> String {
+    format!("{label:<LABEL$} {value}")
+}
+
+/// A table of money, one amount per line, laid out the way a bill totals itself.
+///
+/// Amounts are given signed: a credit is passed negative and prints that way, since a column of
+/// positive numbers that must be alternately added and subtracted cannot be checked by eye.
+pub(crate) fn amounts(rows: &[(&str, f64)]) -> String {
+    let cells: Vec<Vec<String>> = rows
+        .iter()
+        .map(|(label, amount)| vec![(*label).to_owned(), format!("{amount:.2}")])
+        .collect();
+    table(&["Item", "Amount"], &cells, &[Left, Right])
+}

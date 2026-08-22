@@ -9,8 +9,10 @@
 //! same rules, and both refuse a period the meter data does not cover. Splitting them would leave
 //! two copies of that agreement to keep.
 
+use super::period_line;
 use crate::green_button::{METER_INTERVAL, Peak};
 use crate::hydro_bill::{NotABillingPeriodEnding, billing_period_dates};
+use crate::markdown::{Left, Right, amounts, field, h1, h2, table};
 use crate::session::{
     Bracket, EstimateSet, IntervalEstimates, SessionReport, estimates_from_report,
 };
@@ -38,6 +40,10 @@ pub struct PowerEstimates {
 /// Every field is stated rather than left to be recomputed, because the point of the breakdown is
 /// to be checked against the bill line by line.
 pub struct DeliveryCost {
+    /// The billing period these figures are for, named by the date it closes on. The bill's own,
+    /// since every figure below is a proportion of one of its lines.
+    pub billing_period_ending: Date,
+
     /// `'Distribution Charges' / 'Adj. kVA'` from bill.
     pub blended_distribution_rate: f64,
     /// `'Transmission Connection Charge' / 'Adj. kW'` from bill.
@@ -376,6 +382,7 @@ pub fn peak_power_cost(
         charges * bill.ontario_electricity_rebate / bill.total_electricity_charges;
 
     Ok(DeliveryCost {
+        billing_period_ending,
         blended_distribution_rate,
         blended_transmission_connection_rate,
         blended_transmission_network_rate,
@@ -394,6 +401,97 @@ pub fn peak_power_cost(
         // credit.
         delivery_cost: charges + hst - ontario_electricity_rebate,
     })
+}
+
+impl fmt::Display for DeliveryCost {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Each line carries the demand it is levied on and the prorated figure it was actually
+        // priced at, so that rate times adjusted demand comes to the charge on the same row. With
+        // the raw demand alone a reader checking the arithmetic would be out by the day factor.
+        let line = |name: &str, unit: &str, demand: f64, rate: f64, charge: f64| {
+            vec![
+                name.to_owned(),
+                unit.to_owned(),
+                format!("{demand:.3}"),
+                format!("{:.3}", demand * self.days_adj_factor),
+                format!("{rate:.4}"),
+                format!("{charge:.2}"),
+            ]
+        };
+        let charges = self.distribution_charges
+            + self.transmission_connection_charge
+            + self.transmission_network_charge;
+        let rows = vec![
+            line(
+                "Distribution Charges",
+                "kVA",
+                self.demand_kva,
+                self.blended_distribution_rate,
+                self.distribution_charges,
+            ),
+            line(
+                "Transmission Connection Charge",
+                "kW",
+                self.demand_kw,
+                self.blended_transmission_connection_rate,
+                self.transmission_connection_charge,
+            ),
+            line(
+                "Transmission Network Charge",
+                "kW 7-7",
+                self.peak_7_7_kw,
+                self.blended_transmission_network_rate,
+                self.transmission_network_charge,
+            ),
+        ];
+
+        writeln!(f, "{}\n", h1("EV Delivery Cost"))?;
+        writeln!(f, "{}", period_line(self.billing_period_ending))?;
+        writeln!(
+            f,
+            "{}\n",
+            field(
+                "Days adj.",
+                &format!(
+                    "{}/{BILLED_DAYS_PER_MONTH:.0} = {:.4}",
+                    self.days_in_period, self.days_adj_factor
+                )
+            )
+        )?;
+        writeln!(
+            f,
+            "{}\n",
+            table(
+                &[
+                    "Bill line",
+                    "Unit",
+                    "EV demand",
+                    "Adj. demand",
+                    "Toronto Hydro rate",
+                    "Charge",
+                ],
+                &rows,
+                &[Left, Left, Right, Right, Right, Right],
+            )
+        )?;
+
+        writeln!(f, "{}\n", h2("Total"))?;
+        writeln!(
+            f,
+            "{}",
+            amounts(&[
+                ("Delivery charges", charges),
+                ("HST", self.hst),
+                // Negative because it is a credit. The bill prints it as one, and a column that is
+                // alternately added and subtracted cannot be checked by eye.
+                (
+                    "Ontario Electricity Rebate",
+                    -self.ontario_electricity_rebate
+                ),
+                ("Delivery cost", self.delivery_cost),
+            ])
+        )
+    }
 }
 
 /// One figure off the segment that maximises an interval's energy-based estimate.
@@ -919,6 +1017,36 @@ mod test {
         ));
         // The rebate is smaller than the tax on these proportions, so the total exceeds the charges.
         assert!(cost.delivery_cost > charges);
+    }
+
+    /// Each row carries the adjusted demand it was actually priced at, so rate times adjusted
+    /// demand comes to the charge on the same line. With the raw demand alone, a reader checking
+    /// the arithmetic would be out by the day factor.
+    #[test]
+    fn the_report_rows_can_be_checked_across() {
+        let cost = cost();
+        let text = cost.to_string();
+        assert!(text.starts_with("EV Delivery Cost\n"), "{text}");
+        assert!(
+            text.contains("Period       2026-05-24 - 2026-06-23  (31 days)"),
+            "{text}"
+        );
+        assert!(text.contains("Days adj.    31/30 = 1.0333"), "{text}");
+        // Rates are labelled as Toronto Hydro's, not left as a bare "rate" that could be read as
+        // what the EV owners are charged.
+        assert!(text.contains("Toronto Hydro rate"), "{text}");
+
+        // The distribution row: 10.0000 per kVA on the fixture bill, against the adjusted kVA.
+        let row = text
+            .lines()
+            .find(|l| l.contains("Distribution Charges"))
+            .expect("the table lists the distribution line");
+        let adj = cost.demand_kva * cost.days_adj_factor;
+        assert!(row.contains(&format!("{adj:.3}")), "{row}");
+        assert!(
+            row.contains(&format!("{:.2}", adj * cost.blended_distribution_rate)),
+            "{row}"
+        );
     }
 
     /// Every figure is a proportion of a bill line, so a bill from another month would give a

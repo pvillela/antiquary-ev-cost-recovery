@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 // Re-exported rather than merely imported: these name what the functions here return, and a caller
 // should not have to know which module a call delegates to in order to spell that.
 pub use crate::api::error::ApiError;
-pub use crate::api::pure::energy::{EnergyCost, TouKwh};
+pub use crate::api::pure::energy::{Energy, EnergyCost, TouKwh};
 pub use crate::api::pure::peak_power::{DeliveryCost, PowerEstimates};
 
 /// A source file could not be read.
@@ -211,7 +211,7 @@ pub fn energy(
     billing_period_ending: Date,
     session_csv1: &Path,
     session_csv2: &Path,
-) -> Result<TouKwh, ApiError> {
+) -> Result<Energy, ApiError> {
     pure::check_reports_cover_period(billing_period_ending, &[session_csv1, session_csv2])?;
     let sessions = read_sessions(&[session_csv1, session_csv2])?;
     Ok(pure::energy(billing_period_ending, &sessions)?)
