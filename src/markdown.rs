@@ -110,6 +110,25 @@ pub(crate) fn field(label: &str, value: &str) -> String {
     format!("{label:<LABEL$} {value}")
 }
 
+/// The standing caveat every report that rounds for display carries.
+///
+/// One wording in one place, because it is the same fact about every table here: a cell is what
+/// [`table`] and [`amounts`] chose to print, while the total beneath it was computed from what the
+/// figures actually are. Wrapped, so it sits at the foot of a report as prose rather than as a
+/// long line.
+///
+/// A report whose total is computed from the printed amounts rather than the underlying ones does
+/// not carry this, and should say so instead — see
+/// [`CostRecoverySurplus`](crate::pure::recovery::CostRecoverySurplus).
+pub(crate) fn rounding_note() -> String {
+    wrap(
+        "Note: figures are rounded for display. A column can therefore differ by a cent, or by a \
+         thousandth of a kilowatt-hour, from the total stated for it, which is computed from the \
+         unrounded values.",
+        "",
+    )
+}
+
 /// A table of money, one amount per line, laid out the way a bill totals itself.
 ///
 /// Amounts are given signed: a credit is passed negative and prints that way, since a column of

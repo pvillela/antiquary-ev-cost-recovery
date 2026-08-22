@@ -14,7 +14,7 @@ use crate::{
         BILL_END_DAY, BillingPeriod, NotABillingPeriodEnding, billing_period_dates,
         billing_period_span,
     },
-    markdown::{Left, Right, amounts, field, h1, h2, table},
+    markdown::{Left, Right, amounts, field, h1, h2, rounding_note, table},
     session::{SessionReport, tou_kwh},
     time::Interval,
 };
@@ -323,7 +323,8 @@ impl fmt::Display for Energy {
             "{}\n",
             field("Period", &billing_period_span(self.billing_period_ending))
         )?;
-        writeln!(f, "{}", table(&["TOU", "kWh"], &rows, &[Left, Right]))
+        writeln!(f, "{}\n", table(&["TOU", "kWh"], &rows, &[Left, Right]))?;
+        writeln!(f, "{}", rounding_note())
     }
 }
 
@@ -411,7 +412,8 @@ impl fmt::Display for EnergyCost {
                 ),
                 ("Energy cost", self.energy_cost),
             ])
-        )
+        )?;
+        writeln!(f, "\n{}", rounding_note())
     }
 }
 

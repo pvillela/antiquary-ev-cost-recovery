@@ -11,7 +11,7 @@
 
 use crate::green_button::{METER_INTERVAL, Peak};
 use crate::hydro_bill::{NotABillingPeriodEnding, billing_period_dates, billing_period_span};
-use crate::markdown::{Left, Right, amounts, field, h1, h2, table};
+use crate::markdown::{Left, Right, amounts, field, h1, h2, rounding_note, table};
 use crate::session::{
     Bracket, EstimateSet, IntervalEstimates, SessionReport, estimates_from_report,
 };
@@ -493,7 +493,8 @@ impl fmt::Display for DeliveryCost {
                 ),
                 ("Delivery cost", self.delivery_cost),
             ])
-        )
+        )?;
+        writeln!(f, "\n{}", rounding_note())
     }
 }
 

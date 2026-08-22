@@ -13,7 +13,7 @@
 use crate::hydro_bill::{
     BILL_END_DAY, BillingPeriod, NotABillingPeriodEnding, billing_period_dates, billing_period_span,
 };
-use crate::markdown::{Left, Right, amounts, field, h1, h2, table, wrap};
+use crate::markdown::{Left, Right, amounts, field, h1, h2, rounding_note, table, wrap};
 use crate::session::tou_kwh;
 use crate::time::{Interval, local_midnight};
 use jiff::{Timestamp, civil::Date};
@@ -576,7 +576,8 @@ impl fmt::Display for CostRecovery {
                     &format!("effective {}", only.rates.effective_date)
                 )
             )?;
-            return writeln!(f, "{}", stretch_table(only));
+            writeln!(f, "{}\n", stretch_table(only))?;
+            return writeln!(f, "{}", rounding_note());
         };
 
         writeln!(f)?;
@@ -605,7 +606,8 @@ impl fmt::Display for CostRecovery {
             .collect();
         rows.push(("Cost recovery".to_owned(), self.cost_recovery));
         let rows: Vec<(&str, f64)> = rows.iter().map(|(l, a)| (l.as_str(), *a)).collect();
-        writeln!(f, "{}", amounts(&rows))
+        writeln!(f, "{}", amounts(&rows))?;
+        writeln!(f, "\n{}", rounding_note())
     }
 }
 
@@ -637,6 +639,18 @@ impl fmt::Display for CostRecoverySurplus {
             f,
             "{}\n",
             wrap(VERDICT[usize::from(self.surplus < 0.0)], "")
+        )?;
+        // Not the standard rounding note: this column does add. The surplus is computed from the
+        // three amounts as printed, precisely so that it can be checked on a calculator.
+        writeln!(
+            f,
+            "{}\n",
+            wrap(
+                "Note: the four amounts above add exactly, because the surplus is computed from \
+                 the three as they are printed. The reports below round their own figures for \
+                 display, so their columns may not.",
+                "",
+            )
         )?;
 
         // The three parts in full, under their own headings. The figure above is a subtraction of
@@ -1130,5 +1144,29 @@ mod test {
         ] {
             assert!(s.contains(heading), "{heading:?} missing from\n{s}");
         }
+    }
+
+    /// Every report says whether its columns can be checked by eye. The summary's own note is the
+    /// opposite of the others': it promises the column adds, because it is the one built from the
+    /// printed amounts.
+    #[test]
+    fn every_report_says_how_its_columns_round() {
+        let s = cost_recovery_surplus(
+            &bill(),
+            peaks(),
+            &two_reports(),
+            flat(date(2026, 5, 1), 0.10),
+            None,
+        )
+        .expect("the fixture bill closes a billing period")
+        .to_string();
+
+        assert!(s.contains("the four amounts above add exactly"), "{s}");
+        // Once for each of the three parts printed beneath, and not for the summary.
+        assert_eq!(
+            s.matches("figures are rounded for display").count(),
+            3,
+            "{s}"
+        );
     }
 }
