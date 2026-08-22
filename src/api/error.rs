@@ -22,6 +22,7 @@ pub use crate::api::io::ReadError;
 pub use crate::api::pure::coverage::CoverageError;
 pub use crate::api::pure::energy::EnergyError;
 pub use crate::api::pure::peak_power::PeakPowerError;
+pub use crate::api::pure::recovery::CostRecoveryError;
 
 /// Every way an API call can fail, in one type, by the stage that failed.
 #[derive(Debug)]
@@ -41,6 +42,11 @@ pub enum ApiError {
         source: Option<PathBuf>,
         cause: EnergyError,
     },
+    /// The sessions were read but do not yield a cost recovery.
+    ///
+    /// No `source`, unlike the two above. The rates are given as values and the period as a date,
+    /// so a cost recovery has no file for a failure to be about.
+    CostRecovery(CostRecoveryError),
 }
 
 // `source` names the file the failure is *about*, which is not the same as a file that could not be
@@ -62,6 +68,12 @@ impl From<CoverageError> for ApiError {
 impl From<ReadError> for ApiError {
     fn from(e: ReadError) -> Self {
         Self::Read(e)
+    }
+}
+
+impl From<CostRecoveryError> for ApiError {
+    fn from(e: CostRecoveryError) -> Self {
+        Self::CostRecovery(e)
     }
 }
 
@@ -97,6 +109,7 @@ impl fmt::Display for ApiError {
             Self::Read(e) => e.fmt(f),
             Self::PeakPower { source, cause } => named(f, source.as_deref(), cause),
             Self::Energy { source, cause } => named(f, source.as_deref(), cause),
+            Self::CostRecovery(e) => e.fmt(f),
         }
     }
 }
@@ -120,6 +133,7 @@ impl Error for ApiError {
             Self::Read(e) => Some(e),
             Self::PeakPower { cause, .. } => Some(cause),
             Self::Energy { cause, .. } => Some(cause),
+            Self::CostRecovery(e) => Some(e),
         }
     }
 }

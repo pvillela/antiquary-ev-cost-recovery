@@ -15,6 +15,8 @@
 //! [`PeakPowerError`](pure::peak_power::PeakPowerError) with `peak_power`,
 //! [`SessionReportCoverage`](pure::coverage::SessionReportCoverage) and
 //! [`CoverageError`](pure::coverage::CoverageError) with `coverage`,
+//! [`CostRecovery`](pure::recovery::CostRecovery) and
+//! [`CostRecoveryError`](pure::recovery::CostRecoveryError) with `recovery`,
 //! [`ReadError`](io::ReadError) with `io`.
 //!
 //! [`ApiError`](error::ApiError) is the exception, and has a module of its own: it is the union every call collapses

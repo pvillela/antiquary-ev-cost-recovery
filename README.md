@@ -59,15 +59,21 @@ The command-line tools are `ev_csv_to_xlsx` (session report to workbook), `ev_pe
 over an interval), `gb_peak_values` (Green Button feed to workbook) and `hydro_bill_dump` (a bill
 PDF's figures). Each prints its usage when run with no arguments.
 
-Four more report on one billing period. `peak_power_cli` gives the kW and kVA peaks, estimated from
+Five more report on one billing period. `peak_power_cli` gives the kW and kVA peaks, estimated from
 a Green Button export and the two session reports spanning the period. `energy_cli` gives the
-kilowatt-hours drawn, split by time-of-use band. The other two price those against a Toronto Hydro
+kilowatt-hours drawn, split by time-of-use band. Two of them price those against a Toronto Hydro
 bill: `energy_cost_cli` for the consumption lines and `peak_power_cost_cli` for the three
 demand-priced delivery lines. Every rate they use is read off the bill; no tariff is assumed.
 
 The two costing tools ask for no closing date, because the bill states which period it covers.
 
-These four need two adjacent months' session reports, since a billing period runs from the
+`cost_recovery_cli` is the other side of the ledger: it prices the same kilowatt-hours at EV
+cost-recovery rates you give on the command line, and reports what they recover. No bill is read
+and no tax is added — the rates are yours, and what they have to cover is your decision. A schedule
+is written `EFFECTIVE_DATE:ON_PEAK,MID_PEAK,OFF_PEAK`; give a second one when the rates changed
+during the period, and the energy is split at local midnight on its effective date.
+
+These five need two adjacent months' session reports, since a billing period runs from the
 24th to the 23rd. Only June's is real, so `scripts/make-may-mock.py` builds the May half from it —
 shifted dates, fresh ids, and two deliberate quirks that exercise the merge: a session at the end
 of May that both reports carry, and a reused `Charge_Session_ID` of May's own. The script explains

@@ -5,7 +5,7 @@ use crate::{
     time::{Interval, Tou, tou_partition},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TouKwh {
     pub on_peak: f64,
     pub mid_peak: f64,

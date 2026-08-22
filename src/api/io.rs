@@ -16,9 +16,10 @@ use std::path::{Path, PathBuf};
 
 // Re-exported rather than merely imported: these name what the functions here return, and a caller
 // should not have to know which module a call delegates to in order to spell that.
-pub use crate::api::error::{ApiError, EnergyError, PeakPowerError};
+pub use crate::api::error::{ApiError, CostRecoveryError, EnergyError, PeakPowerError};
 pub use crate::api::pure::energy::{Energy, EnergyCost, TouKwh};
 pub use crate::api::pure::peak_power::{DeliveryCost, PowerEstimates};
+pub use crate::api::pure::recovery::{AtRates, CostRecovery, CostRecoveryRates};
 
 /// A source file could not be read.
 ///
@@ -272,6 +273,52 @@ pub fn energy_cost(
     })
 }
 
+/// Returns the cost recovery allocated to a billing period, at the EV cost-recovery rates given.
+///
+/// Reads the two session reports and hands them to
+/// [`pure::cost_recovery`](fn@super::pure::cost_recovery), which states how the figures are arrived
+/// at. No bill and no meter export: the rates here are ours rather than Toronto Hydro's, so nothing
+/// on the bill bears on the answer.
+///
+/// # Arguments
+/// - `billing_period_ending` - the billing period, named by the date it closes on. Must be
+///   [`BILL_END_DAY`] of its month.
+/// - `session_csv1` - Evolute session report covering the left end of the billing period.
+/// - `session_csv2` - Evolute session report covering the right end of the billing period.
+/// - `recovery_rates_at_start` - the rates in effect on the period's first day.
+/// - `recovery_rates_at_end` - the rates the period changed to, or `None` if it did not.
+///
+/// The rates are values rather than a path. Nothing in this crate writes them down, so there is no
+/// file for this to read them from and no file a rate failure could be about.
+///
+/// The two reports must cover the billing period completely between them, which is checked from
+/// their file names before anything is read. That check matters as much here as to
+/// [`energy`]: the recovery is a sum over whatever it is given, so a month's report missing from
+/// the call yields a figure that is simply too low, with nothing in it to say so.
+///
+/// Reading a report writes a `.csv.read.log` beside it, as [`csv::session_list`] always does.
+///
+/// # Errors
+///
+/// See [`ApiError`]. Nothing is read until the file names have been checked against the period, and
+/// the rates are checked against it before the reports are opened for the same reason.
+pub fn cost_recovery(
+    billing_period_ending: Date,
+    session_csv1: &Path,
+    session_csv2: &Path,
+    recovery_rates_at_start: CostRecoveryRates,
+    recovery_rates_at_end: Option<CostRecoveryRates>,
+) -> Result<CostRecovery, ApiError> {
+    pure::check_reports_cover_period(billing_period_ending, &[session_csv1, session_csv2])?;
+    let sessions = read_sessions(&[session_csv1, session_csv2])?;
+    Ok(pure::cost_recovery(
+        billing_period_ending,
+        &sessions,
+        recovery_rates_at_start,
+        recovery_rates_at_end,
+    )?)
+}
+
 /// Names the file a [`PeakPowerError`] is about, given the paths this call was made with.
 ///
 /// Which file that is turns on the variant, not on the call: a period only partly covered is the
@@ -476,6 +523,33 @@ mod test {
             cause: cause.clone(),
         };
         assert_eq!(bare.to_string(), cause.to_string());
+    }
+
+    /// The recovery is a sum over whatever it is given, as the energy total is, so the same name
+    /// check has to catch a month missing from the call before either file is opened.
+    #[test]
+    fn cost_recovery_refuses_reports_that_do_not_cover_the_period() {
+        let rates = CostRecoveryRates {
+            effective_date: date(2026, 5, 1),
+            on_peak: 0.11,
+            mid_peak: 0.09,
+            off_peak: 0.07,
+        };
+        let err = cost_recovery(
+            date(2026, 6, 23),
+            Path::new("Session_Report_April_1_2026-April_30_2026.csv"),
+            Path::new("Session_Report_June_1_2026-June_30_2026.csv"),
+            rates,
+            None,
+        )
+        .expect_err("April and June do not cover a period starting 24 May");
+        assert!(
+            matches!(
+                err,
+                ApiError::Coverage(CoverageError::PeriodNotCovered { .. })
+            ),
+            "{err}"
+        );
     }
 
     /// The energy cost takes no period either, so the bill is read before the report check, as it

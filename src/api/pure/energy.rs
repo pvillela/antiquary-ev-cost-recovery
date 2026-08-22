@@ -170,23 +170,31 @@ pub fn energy(billing_period_ending: Date, sessions: &[RSession]) -> Result<Ener
     let period = BillingPeriod::ending_on(billing_period_ending, BILL_END_DAY);
     let time_range = Interval::from_start_end(period.start, period.end);
 
-    // Not summed as given: `sessions` may state the same session more than once, and this is what
-    // counts it once.
+    Ok(Energy {
+        billing_period_ending,
+        kwh: tou_kwh(time_range, &countable(sessions)),
+    })
+}
+
+/// The sessions whose energy may be placed on a timeline, from a list that may state one of them
+/// more than once.
+///
+/// Two things at once, and both are needed by every figure drawn from sessions.
+///
+/// Deduplicated, because a caller supplying overlapping reports states a session twice and summing
+/// as given would count its energy twice.
+///
+/// Two of the three report buckets. `excluded` is left out rather than overlooked: those records'
+/// start, end and duration contradict each other, and an inverted one panics in `adj_duration`
+/// before any figure comes of it.
+pub(super) fn countable(sessions: &[RSession]) -> Vec<RSession> {
     let report = SessionReport::from_session_lists(vec![sessions.to_vec()], Vec::new());
-    // Two of the three report buckets. `excluded` is left out rather than overlooked: those
-    // records' start, end and duration contradict each other, and an inverted one panics in
-    // `adj_duration` before any figure comes of it.
-    let counted: Vec<RSession> = report
+    report
         .sessions
         .iter()
         .chain(&report.spikes)
         .cloned()
-        .collect();
-
-    Ok(Energy {
-        billing_period_ending,
-        kwh: tou_kwh(time_range, &counted),
-    })
+        .collect()
 }
 
 /// Estimates the net energy cost attributable to EV charging sessions during a billing period.
