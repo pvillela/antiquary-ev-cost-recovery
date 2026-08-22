@@ -56,6 +56,7 @@ pub(crate) fn period_values_with_nop(
         tou,
     };
     PeriodValues {
+        source: None,
         period: BillingPeriod::ending_on(period_ending_date(), BILL_END_DAY),
         interval_count: 744,
         kwh_total: 0,

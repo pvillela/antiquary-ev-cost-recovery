@@ -579,7 +579,7 @@ fn check_period_covered(
 /// period cannot be built from different readings of the same records.
 fn one_report(sessions: &[RSession]) -> (Sessions, Vec<PathBuf>) {
     (
-        Sessions::from_session_lists(vec![sessions.to_vec()], Vec::new()),
+        Sessions::from_session_lists(vec![sessions.to_vec()], sources_of(sessions), Vec::new()),
         sources_of(sessions),
     )
 }
@@ -592,7 +592,7 @@ fn one_report(sessions: &[RSession]) -> (Sessions, Vec<PathBuf>) {
 /// A file that contributed no session is therefore not named. That is the intended reading of
 /// [`IntervalEstimates::sources`](crate::session::IntervalEstimates::sources) — the files the sessions were
 /// read from — and a month in which nobody charged contributed nothing to any figure.
-fn sources_of(sessions: &[RSession]) -> Vec<PathBuf> {
+pub(super) fn sources_of(sessions: &[RSession]) -> Vec<PathBuf> {
     let mut sources: Vec<PathBuf> = Vec::new();
     for session in sessions {
         if !sources.iter().any(|p| p == session.path.as_ref()) {

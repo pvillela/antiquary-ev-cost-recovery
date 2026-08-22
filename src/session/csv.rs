@@ -105,7 +105,11 @@ fn read_session_list(path: &Path) -> Result<Sessions, Box<dyn Error>> {
     // merge, because that is where a shared `Charge_Session_ID` is noticed, and one file can carry
     // one as readily as two can.
     let sessions: Vec<RSession> = rows.rows.into_iter().map(|row| row.session).collect();
-    Ok(Sessions::from_session_lists(vec![sessions], vec![log_path]))
+    Ok(Sessions::from_session_lists(
+        vec![sessions],
+        vec![path.to_path_buf()],
+        vec![log_path],
+    ))
 }
 
 /// Every row one session report CSV yields, in the order the report states them.

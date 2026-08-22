@@ -883,6 +883,13 @@ pub struct Sessions {
     /// a fault in one: an id is a duplicate only relative to another session, and which of the two
     /// is at fault is not a question the data answers.
     pub anomalies: Vec<Anomaly>,
+    /// The files these sessions were read from, in the order they were read.
+    ///
+    /// Not derived from the sessions. Every [`Session`] carries its own `path`, but a file holding
+    /// no session — or none that survived — would then leave no trace, and "this file contributed
+    /// nothing" is exactly what a reader checking a period against two monthly exports needs to be
+    /// able to see.
+    pub sources: Vec<PathBuf>,
     /// Where the run logs were written, one per file read. Each always exists, and says either
     /// that nothing was found or what was. Their contents depend on which reader produced this
     /// report — see their docs.
@@ -917,6 +924,7 @@ impl Sessions {
     /// Order within each bucket is the order given, which for both readers is report order.
     pub(crate) fn from_session_lists(
         session_lists: Vec<Vec<RSession>>,
+        sources: Vec<PathBuf>,
         log_paths: Vec<PathBuf>,
     ) -> Self {
         let MergedSessions {
@@ -928,6 +936,7 @@ impl Sessions {
             spikes: Vec::new(),
             excluded: Vec::new(),
             anomalies,
+            sources,
             log_paths,
         };
         for session in sessions {

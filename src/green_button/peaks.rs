@@ -9,6 +9,7 @@ use crate::hydro_bill::BillingPeriod;
 use crate::time::{Interval, Tou, is_off_peak, tou_of};
 use jiff::Timestamp;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 /// A reported maximum, and the state of the interval it was found in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +39,13 @@ pub struct PeriodValues {
     pub max_kva: Option<Peak>,
     pub max_kva_nop: Option<Peak>,
     pub anomaly_counts: BTreeMap<Anomaly, usize>,
+
+    /// The export these figures were read from, carried through from
+    /// [`Readings::source`](crate::green_button::Readings).
+    ///
+    /// `None` when the readings came from a string rather than a file. An anomaly counted above is
+    /// a fact about a file, and this is the only thing here that says which one.
+    pub source: Option<PathBuf>,
 }
 
 impl PeriodValues {
@@ -81,6 +89,7 @@ pub fn period_values(readings: &Readings, bill_end_day: i8) -> Vec<PeriodValues>
                 max_kva: peak(&rows, |r| r.kva, |r| r.kw, false),
                 max_kva_nop: peak(&rows, |r| r.kva, |r| r.kw, true),
                 anomaly_counts,
+                source: readings.source.clone(),
                 period,
             }
         })
@@ -159,6 +168,7 @@ mod test {
             })
             .collect();
         Readings {
+            source: None,
             rows,
             anomalies: BTreeMap::new(),
         }

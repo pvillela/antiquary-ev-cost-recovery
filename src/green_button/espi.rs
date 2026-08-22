@@ -19,6 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
+use std::path::PathBuf;
 
 use jiff::Timestamp;
 use roxmltree::{Document, Node};
@@ -86,6 +87,25 @@ pub struct Readings {
     /// feed skipped.
     pub rows: Vec<Reading>,
     pub anomalies: BTreeMap<Timestamp, BTreeSet<Anomaly>>,
+
+    /// The export these rows were read from, when they came from a file.
+    ///
+    /// `None` for readings parsed from a string, which is how the tests build them and how nothing
+    /// else does. A caller reporting an anomaly needs to name the file it is in, and the anomalies
+    /// above travel without one otherwise.
+    pub source: Option<PathBuf>,
+}
+
+impl Readings {
+    /// The same readings, recorded as having been read from `path`.
+    ///
+    /// Set here rather than by [`Feed::readings`], which is handed a parsed feed and never sees a
+    /// file. Whoever opened one is the only party that knows.
+    #[must_use]
+    pub fn from_source(mut self, path: &std::path::Path) -> Self {
+        self.source = Some(path.to_path_buf());
+        self
+    }
 }
 
 /// Parses an ESPI feed.
@@ -307,7 +327,13 @@ impl Feed {
             rows.push(reading);
         }
 
-        Readings { rows, anomalies }
+        Readings {
+            rows,
+            anomalies,
+            // A `Feed` is parsed from a string and has no file behind it. Whoever opened one says
+            // so, through `Readings::from_source`.
+            source: None,
+        }
     }
 }
 

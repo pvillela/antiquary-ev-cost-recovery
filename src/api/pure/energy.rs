@@ -203,7 +203,13 @@ pub fn energy(billing_period_ending: Date, sessions: &[RSession]) -> Result<Ener
 /// start, end and duration contradict each other, and an inverted one panics in `adj_duration`
 /// before any figure comes of it.
 pub(super) fn countable(sessions: &[RSession]) -> Vec<RSession> {
-    let report = Sessions::from_session_lists(vec![sessions.to_vec()], Vec::new());
+    let report = Sessions::from_session_lists(
+        vec![sessions.to_vec()],
+        // Derived from the sessions, which is all a pure function has. A file that contributed no
+        // session is invisible here; `io` is where the paths actually passed in are known.
+        super::peak_power::sources_of(sessions),
+        Vec::new(),
+    );
     report
         .sessions
         .iter()

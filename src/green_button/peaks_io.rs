@@ -43,7 +43,8 @@ pub fn period_values_xml(
     let xml =
         std::fs::read_to_string(xml_path).map_err(|e| format!("{}: {e}", xml_path.display()))?;
     let feed = parse(&xml).map_err(|e| format!("{}: {e}", xml_path.display()))?;
-    let readings = feed.readings();
+    // The one place that knows which file these came from, since `parse` is handed a string.
+    let readings = feed.readings().from_source(xml_path);
 
     // `period_values` already scopes each period's anomaly counts to that period, so picking the
     // row out of its result is the whole of the work. Nothing is recomputed here, and no second
@@ -143,5 +144,18 @@ mod test {
     fn a_missing_file_is_named() {
         let err = err_for(date(2026, 6, 23), BILL_END_DAY);
         assert!(err.contains("/nonexistent/feed.XML"), "{err}");
+    }
+
+    /// The figures carry the file they came from. An anomaly counted in a period is a fact about an
+    /// export, and this is the only thing in the result that says which one.
+    #[test]
+    fn the_period_carries_the_export_it_was_read_from() {
+        let xml = Path::new("data/TH_Electric_Usage_23-11-2024_to_24-06-2026.XML");
+        if !xml.exists() {
+            return; // The export is not in every checkout.
+        }
+        let values = period_values_xml(xml, date(2026, 6, 23), BILL_END_DAY)
+            .expect("the export covers the June 2026 period");
+        assert_eq!(values.source.as_deref(), Some(xml));
     }
 }

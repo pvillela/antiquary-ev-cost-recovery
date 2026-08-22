@@ -606,7 +606,11 @@ fn read_session_list(path: &Path) -> Result<Sessions, Box<dyn Error>> {
 
     // Through the merge for the same reason `csv::session_list` is: it is where a shared
     // `Charge_Session_ID` is noticed, and one file can carry one as readily as two can.
-    Ok(Sessions::from_session_lists(vec![sessions], vec![log_path]))
+    Ok(Sessions::from_session_lists(
+        vec![sessions],
+        vec![path.to_path_buf()],
+        vec![log_path],
+    ))
 }
 
 /// Compares the workbook's stored derived columns against what the [`Session`] methods recompute,
