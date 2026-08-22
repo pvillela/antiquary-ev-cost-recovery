@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 // Re-exported rather than merely imported: these name what the functions here return, and a caller
 // should not have to know which module a call delegates to in order to spell that.
-pub use crate::api::error::ApiError;
+pub use crate::api::error::{ApiError, EnergyError, PeakPowerError};
 pub use crate::api::pure::energy::{Energy, EnergyCost, TouKwh};
 pub use crate::api::pure::peak_power::{DeliveryCost, PowerEstimates};
 
@@ -119,11 +119,12 @@ pub fn peak_power(
         })?;
     let sessions = read_sessions(&[session_csv1, session_csv2])?;
 
-    Ok(pure::peak_power(
-        billing_period_ending,
-        gb_period_values,
-        &sessions,
-    )?)
+    pure::peak_power(billing_period_ending, gb_period_values, &sessions).map_err(|cause| {
+        ApiError::PeakPower {
+            source: gb_source(&cause, None, gb_xml),
+            cause,
+        }
+    })
 }
 
 /// Returns the delivery cost attributable to EV charging sessions in a billing period.
@@ -181,7 +182,10 @@ pub fn peak_power_cost(
         })?;
     let sessions = read_sessions(&[session_csv1, session_csv2])?;
 
-    Ok(pure::peak_power_cost(&bill, gb_period_values, &sessions)?)
+    pure::peak_power_cost(&bill, gb_period_values, &sessions).map_err(|cause| ApiError::PeakPower {
+        source: gb_source(&cause, Some(bill_pdf), gb_xml),
+        cause,
+    })
 }
 
 /// Returns the energy attributable to EV charging sessions in a billing period, split by
@@ -214,7 +218,10 @@ pub fn energy(
 ) -> Result<Energy, ApiError> {
     pure::check_reports_cover_period(billing_period_ending, &[session_csv1, session_csv2])?;
     let sessions = read_sessions(&[session_csv1, session_csv2])?;
-    Ok(pure::energy(billing_period_ending, &sessions)?)
+    pure::energy(billing_period_ending, &sessions).map_err(|cause| ApiError::Energy {
+        source: bill_source(&cause, None),
+        cause,
+    })
 }
 
 /// Returns the energy cost attributable to EV charging sessions in a billing period.
@@ -259,7 +266,39 @@ pub fn energy_cost(
     pure::check_reports_cover_period(bill.period_end_date(), &[session_csv1, session_csv2])?;
     let sessions = read_sessions(&[session_csv1, session_csv2])?;
 
-    Ok(pure::energy_cost(&bill, &sessions)?)
+    pure::energy_cost(&bill, &sessions).map_err(|cause| ApiError::Energy {
+        source: bill_source(&cause, Some(bill_pdf)),
+        cause,
+    })
+}
+
+/// Names the file a [`PeakPowerError`] is about, given the paths this call was made with.
+///
+/// Which file that is turns on the variant, not on the call: a period only partly covered is the
+/// meter export's, while a date that closes no period is the bill's when a bill supplied it. Pure
+/// says what went wrong and this says where, because neither knows both.
+///
+/// `bill_pdf` is `None` for [`peak_power`], where the date is the caller's own argument and no file
+/// is at fault.
+fn gb_source(cause: &PeakPowerError, bill_pdf: Option<&Path>, gb_xml: &Path) -> Option<PathBuf> {
+    match cause {
+        PeakPowerError::NotABillingPeriodEnding(_) => bill_pdf.map(Path::to_path_buf),
+        PeakPowerError::NoPeak { .. }
+        | PeakPowerError::ValuesAreForAnotherPeriod { .. }
+        | PeakPowerError::PeriodNotFullyCovered { .. } => Some(gb_xml.to_path_buf()),
+    }
+}
+
+/// Names the file an [`EnergyError`] is about.
+///
+/// Both variants concern the bill: it states the period, and it states the rates. `bill_pdf` is
+/// `None` for [`energy`], which takes no bill and gets its date from the caller.
+fn bill_source(cause: &EnergyError, bill_pdf: Option<&Path>) -> Option<PathBuf> {
+    match cause {
+        EnergyError::NotABillingPeriodEnding(_) | EnergyError::NoRate { .. } => {
+            bill_pdf.map(Path::to_path_buf)
+        }
+    }
 }
 
 /// Every session the named reports hold, in the order the reports are given.
@@ -289,6 +328,7 @@ fn read_sessions(paths: &[&Path]) -> Result<Vec<RSession>, ReadError> {
 mod test {
     use super::*;
     use crate::api::error::CoverageError;
+    use crate::hydro_bill::billing_period_dates;
     use jiff::civil::date;
 
     /// A date that is not a closing date is the caller's mistake, and is reported as such rather
@@ -375,6 +415,67 @@ mod test {
             "{err}"
         );
         assert!(err.to_string().contains("2026-05-24"), "{err}");
+    }
+
+    /// A validation failure names the file it is about, which pure could not: it is handed figures,
+    /// not paths, so it can say a period is only partly covered but not which export left the hole.
+    #[test]
+    fn a_validation_failure_names_the_file_it_is_about() {
+        let bill = Path::new("June.pdf");
+        let xml = Path::new("meter.XML");
+
+        // The meter export's fault, whether or not a bill was given.
+        let gap = PeakPowerError::PeriodNotFullyCovered {
+            period_ending: date(2026, 6, 23),
+            intervals: 743,
+            expected: 744,
+        };
+        assert_eq!(gb_source(&gap, Some(bill), xml).as_deref(), Some(xml));
+        assert_eq!(gb_source(&gap, None, xml).as_deref(), Some(xml));
+
+        // The bill's fault, when a bill is what supplied the date. Same variant, different file:
+        // this is why the choice cannot be made from the variant alone.
+        let off_cycle = PeakPowerError::NotABillingPeriodEnding(
+            billing_period_dates(date(2026, 6, 30)).expect_err("30 June closes no period"),
+        );
+        assert_eq!(
+            gb_source(&off_cycle, Some(bill), xml).as_deref(),
+            Some(bill)
+        );
+        // `peak_power` takes the date from its caller, so no file is at fault.
+        assert_eq!(gb_source(&off_cycle, None, xml), None);
+
+        // The rate a bill does not state is the bill's.
+        let no_rate = EnergyError::NoRate {
+            period_ending: date(2026, 6, 23),
+            tou: crate::time::Tou::OnPeak,
+        };
+        assert_eq!(bill_source(&no_rate, Some(bill)).as_deref(), Some(bill));
+        assert_eq!(bill_source(&no_rate, None), None);
+    }
+
+    /// The path is written into the message, unlike `ReadError::path`. These errors name no file of
+    /// their own, so without it a caller holding four paths is told a period is uncovered and left
+    /// to guess by which.
+    #[test]
+    fn the_named_file_reaches_the_message() {
+        let cause = PeakPowerError::PeriodNotFullyCovered {
+            period_ending: date(2026, 6, 23),
+            intervals: 743,
+            expected: 744,
+        };
+        let named = ApiError::PeakPower {
+            source: Some(PathBuf::from("meter.XML")),
+            cause: cause.clone(),
+        };
+        assert!(named.to_string().starts_with("meter.XML: "), "{named}");
+
+        // Without one the message is the pure error's, unchanged - no stray separator.
+        let bare = ApiError::PeakPower {
+            source: None,
+            cause: cause.clone(),
+        };
+        assert_eq!(bare.to_string(), cause.to_string());
     }
 
     /// The energy cost takes no period either, so the bill is read before the report check, as it

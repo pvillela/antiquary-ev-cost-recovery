@@ -12,6 +12,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 // Re-exported, not merely imported. Matching on `ApiError` past its first level -- which is the
 // ordinary thing to do with an error union -- forces a caller to name the payload types, so a
@@ -31,10 +32,26 @@ pub enum ApiError {
     /// A source file could not be read.
     Read(ReadError),
     /// The figures were read but do not yield estimates.
-    PeakPower(PeakPowerError),
+    PeakPower {
+        source: Option<PathBuf>,
+        cause: PeakPowerError,
+    },
     /// The figures were read but do not yield an energy attribution.
-    Energy(EnergyError),
+    Energy {
+        source: Option<PathBuf>,
+        cause: EnergyError,
+    },
 }
+
+// `source` names the file the failure is *about*, which is not the same as a file that could not be
+// read -- that is `Read`. A pure function is handed figures, not paths, so it can say a period is
+// only partly covered but not which export left the hole; `io` knows, and fills it in on the way
+// past. `None` when the argument at fault named no file, which is how `pure` is reached directly
+// and how a bad date passed to `io::peak_power` arrives here.
+//
+// Written into the message, unlike `ReadError::path`. The readers name their own file and prefixing
+// theirs produced `data/x.XML: data/x.XML: ...`; these errors name none, so without the prefix a
+// caller holding four paths is told a period is uncovered and left to guess by which.
 
 impl From<CoverageError> for ApiError {
     fn from(e: CoverageError) -> Self {
@@ -48,15 +65,24 @@ impl From<ReadError> for ApiError {
     }
 }
 
+// Both conversions leave `source` unset. `?` on a pure call carries no path with it, so a caller
+// that wants one attaches it deliberately -- see `io::gb_source` and `io::bill_source`.
+
 impl From<PeakPowerError> for ApiError {
-    fn from(e: PeakPowerError) -> Self {
-        Self::PeakPower(e)
+    fn from(cause: PeakPowerError) -> Self {
+        Self::PeakPower {
+            source: None,
+            cause,
+        }
     }
 }
 
 impl From<EnergyError> for ApiError {
-    fn from(e: EnergyError) -> Self {
-        Self::Energy(e)
+    fn from(cause: EnergyError) -> Self {
+        Self::Energy {
+            source: None,
+            cause,
+        }
     }
 }
 
@@ -69,9 +95,21 @@ impl fmt::Display for ApiError {
         match self {
             Self::Coverage(e) => e.fmt(f),
             Self::Read(e) => e.fmt(f),
-            Self::PeakPower(e) => e.fmt(f),
-            Self::Energy(e) => e.fmt(f),
+            Self::PeakPower { source, cause } => named(f, source.as_deref(), cause),
+            Self::Energy { source, cause } => named(f, source.as_deref(), cause),
         }
+    }
+}
+
+/// The failure, prefixed by the file it is about when one is known.
+fn named(
+    f: &mut fmt::Formatter<'_>,
+    source: Option<&Path>,
+    cause: &dyn fmt::Display,
+) -> fmt::Result {
+    match source {
+        Some(path) => write!(f, "{}: {cause}", path.display()),
+        None => cause.fmt(f),
     }
 }
 
@@ -80,8 +118,8 @@ impl Error for ApiError {
         match self {
             Self::Coverage(e) => Some(e),
             Self::Read(e) => Some(e),
-            Self::PeakPower(e) => Some(e),
-            Self::Energy(e) => Some(e),
+            Self::PeakPower { cause, .. } => Some(cause),
+            Self::Energy { cause, .. } => Some(cause),
         }
     }
 }
