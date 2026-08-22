@@ -56,11 +56,18 @@ cargo run --example sessions -- <workbook.xlsx>
 ```
 
 The command-line tools are `ev_csv_to_xlsx` (session report to workbook), `ev_peak_cli` (estimate
-over an interval), `gb_peak_values` (Green Button feed to workbook) and `peak_power_cli` (the
-billing period's kW and kVA peaks, estimated from a Green Button export and the two session reports
-spanning it). Each prints its usage when run with no arguments.
+over an interval), `gb_peak_values` (Green Button feed to workbook) and `hydro_bill_dump` (a bill
+PDF's figures). Each prints its usage when run with no arguments.
 
-`peak_power_cli` needs two adjacent months' session reports, since a billing period runs from the
+Four more report on one billing period. `peak_power_cli` gives the kW and kVA peaks, estimated from
+a Green Button export and the two session reports spanning the period. `energy_cli` gives the
+kilowatt-hours drawn, split by time-of-use band. The other two price those against a Toronto Hydro
+bill: `energy_cost_cli` for the consumption lines and `peak_power_cost_cli` for the three
+demand-priced delivery lines. Every rate they use is read off the bill; no tariff is assumed.
+
+The two costing tools ask for no closing date, because the bill states which period it covers.
+
+These four need two adjacent months' session reports, since a billing period runs from the
 24th to the 23rd. Only June's is real, so `scripts/make-may-mock.py` builds the May half from it —
 shifted dates, fresh ids, and two deliberate quirks that exercise the merge: a session at the end
 of May that both reports carry, and a reused `Charge_Session_ID` of May's own. The script explains
