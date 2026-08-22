@@ -316,7 +316,7 @@ impl fmt::Display for Energy {
         ];
         writeln!(f, "{}\n", h1("EV Energy"))?;
         writeln!(f, "{}\n", period_line(self.billing_period_ending))?;
-        writeln!(f, "{}", table(&["Band", "kWh"], &rows, &[Left, Right]))
+        writeln!(f, "{}", table(&["TOU", "kWh"], &rows, &[Left, Right]))
     }
 }
 
@@ -357,7 +357,7 @@ impl fmt::Display for EnergyCost {
             // No rate on the total line: the three differ, so one there would be read as a fourth
             // rate rather than as the absence of one.
             vec![
-                "Total".to_owned(),
+                "Total before HST & OER".to_owned(),
                 format!("{:.3}", self.kwh.total_kwh()),
                 format!("{:.3}", self.adjusted_kwh.total_kwh()),
                 String::new(),
@@ -379,13 +379,13 @@ impl fmt::Display for EnergyCost {
             f,
             "{}\n",
             table(
-                &["Band", "kWh", "Adj. kWh", "Toronto Hydro rate", "Cost"],
+                &["TOU", "kWh", "Adj. kWh", "TH blended rate", "Cost"],
                 &rows,
                 &[Left, Right, Right, Right, Right],
             )
         )?;
 
-        writeln!(f, "{}\n", h2("Total"))?;
+        writeln!(f, "{}\n", h2("EV Energy Cost (after HST & OER)"))?;
         writeln!(
             f,
             "{}",
@@ -404,7 +404,7 @@ impl fmt::Display for EnergyCost {
     }
 }
 
-/// One `| Band | kWh |` row.
+/// One `| TOU | kWh |` row.
 fn band_row(name: &str, kwh: f64) -> Vec<String> {
     vec![name.to_owned(), format!("{kwh:.3}")]
 }
@@ -690,7 +690,7 @@ mod test {
     #[test]
     fn the_cost_report_says_whose_rates_it_is_pricing_at() {
         let text = cost().to_string();
-        assert!(text.contains("Toronto Hydro rate"), "{text}");
+        assert!(text.contains("TH blended rate"), "{text}");
         // The loss factor is stated, because it is what separates the two kWh columns.
         assert!(text.contains("Loss factor  1.0500"), "{text}");
         // The rebate is shown as the credit it is, not as a positive to be subtracted by the

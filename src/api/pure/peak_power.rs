@@ -463,11 +463,11 @@ impl fmt::Display for DeliveryCost {
             "{}\n",
             table(
                 &[
-                    "Bill line",
-                    "Unit",
+                    "Delivery charges component",
+                    "Basis",
                     "EV demand",
                     "Adj. demand",
-                    "Toronto Hydro rate",
+                    "TH blended rate",
                     "Charge",
                 ],
                 &rows,
@@ -475,7 +475,7 @@ impl fmt::Display for DeliveryCost {
             )
         )?;
 
-        writeln!(f, "{}\n", h2("Total"))?;
+        writeln!(f, "{}\n", h2("EV Delivery Cost (after HST & OER)"))?;
         writeln!(
             f,
             "{}",
@@ -1034,7 +1034,7 @@ mod test {
         assert!(text.contains("Days adj.    31/30 = 1.0333"), "{text}");
         // Rates are labelled as Toronto Hydro's, not left as a bare "rate" that could be read as
         // what the EV owners are charged.
-        assert!(text.contains("Toronto Hydro rate"), "{text}");
+        assert!(text.contains("TH blended rate"), "{text}");
 
         // The distribution row: 10.0000 per kVA on the fixture bill, against the adjusted kVA.
         let row = text
