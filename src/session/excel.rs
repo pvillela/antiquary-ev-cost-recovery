@@ -17,7 +17,7 @@ use super::csv::{self, SessionRows};
 use super::{Anomaly, AnomalyKind, RSession, RunLog, Session, Sessions};
 use jiff::Timestamp;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     error::Error,
     path::{Path, PathBuf},
     rc::Rc,
@@ -559,12 +559,13 @@ fn read_session_list(path: &Path) -> Result<Sessions, Box<dyn Error>> {
     let headers = sheet_headers(sheet)?;
 
     let mut log = RunLog::new();
-    // Counted rather than logged per row. Every formula column of a freshly written workbook is
-    // unevaluated, so a line each would bury the real discrepancies under one per row per column.
-    let mut unevaluated: BTreeMap<&'static str, usize> = BTreeMap::new();
     // One allocation for the workbook, shared by every session read from it.
     let source = Rc::new(path.to_path_buf());
     let mut sessions: Vec<RSession> = Vec::new();
+    // Held apart from `Session::anomalies` because a disagreement belongs to this reading of this
+    // sheet, not to the record. On the session it would be written into the `anomalies` column and
+    // read back on the next pass, still asserting a disagreement that had since been corrected.
+    let mut discrepancies: Vec<Anomaly> = Vec::new();
     for row in 2..=sheet.highest_row() {
         let id = sheet
             .value((headers["Charge_Session_ID"], row))
@@ -577,7 +578,7 @@ fn read_session_list(path: &Path) -> Result<Sessions, Box<dyn Error>> {
         let energy_use = number(sheet, &headers, "Energy_Use", row)?;
         let charge_time = duration_of_serial(number(sheet, &headers, "Active_Charge_Time", row)?);
         let anomalies = anomaly_kinds(sheet, &headers, row)?;
-        let session = Session {
+        let session = Rc::new(Session {
             path: source.clone(),
             row: row as usize,
             id,
@@ -587,78 +588,88 @@ fn read_session_list(path: &Path) -> Result<Sessions, Box<dyn Error>> {
             charge_time,
             energy_use,
             anomalies,
-        };
+        });
 
-        check_stored_columns(sheet, &headers, row, &session, &mut log, &mut unevaluated);
+        if check_stored_columns(sheet, &headers, row, &session, &mut log) {
+            discrepancies.push(Anomaly {
+                session: session.clone(),
+                kind: AnomalyKind::WorkbookDiscrepancy,
+            });
+        }
 
-        sessions.push(Rc::new(session));
+        sessions.push(session);
     }
 
-    for (name, count) in &unevaluated {
-        log.note(format!(
-            "{name}: {count} row(s) hold a formula with no stored value, so there was nothing to \
-             check. Normal for a workbook this software wrote — it writes formulas and Excel \
-             computes them, so values appear only once Excel has opened and saved the file. The \
-             recomputed figures are used throughout either way."
-        ));
-    }
     let log_path = log.write_beside(path, "xlsx.read", "Read back from workbook")?;
 
     // Through the merge for the same reason `csv::session_list` is: it is where a shared
     // `Charge_Session_ID` is noticed, and one file can carry one as readily as two can.
-    Ok(Sessions::from_session_lists(
-        vec![sessions],
-        vec![path.to_path_buf()],
-        vec![log_path],
-    ))
+    let mut report =
+        Sessions::from_session_lists(vec![sessions], vec![path.to_path_buf()], vec![log_path]);
+    report.anomalies.extend(discrepancies);
+    Ok(report)
 }
 
 /// Compares the workbook's stored derived columns against what the [`Session`] methods recompute,
 /// noting any disagreement in the run log.
 ///
-/// **The recomputed value always wins.** Nothing here changes a `Session`, and nothing here raises
-/// an [`AnomalyKind`]. A disagreement means the sheet is stale or was edited by hand, which is a
-/// fact about the file and not about the session — and letting it feed the estimates would make an
-/// edited cell silently change which sessions count. See `session::log`.
+/// Returns whether any column disagreed, which the caller raises as
+/// [`AnomalyKind::WorkbookDiscrepancy`] against the session — on [`Sessions::anomalies`], never on
+/// [`Session::anomalies`], since a disagreement belongs to this reading rather than to the record.
+///
+/// **The recomputed value always wins.** Nothing here changes a `Session`. Letting a stale cell
+/// feed the estimates would make an edited workbook silently change which sessions count, which is
+/// why the flag this raises is one nothing branches on.
 ///
 /// `adj_conn_duration` and `avg_kw` hold formulas. This crate writes the formula and no cached
 /// value, so Excel has to have opened and saved the workbook for one to be there. A missing cached
-/// value is therefore the normal state of a freshly written workbook, not a fault — it is counted
-/// into `unevaluated` and summarised once per column, rather than logged per row. Per row it would
-/// be two lines for every session, which is a log nobody reads and real discrepancies buried in
-/// it.
+/// value is therefore the normal state of a freshly written workbook and not a finding at all: the
+/// column is skipped, and neither the log nor the flag says anything about it.
 fn check_stored_columns(
     sheet: &Worksheet,
     headers: &SheetHeaders,
     row: u32,
     session: &Session,
     log: &mut RunLog,
-    unevaluated: &mut BTreeMap<&'static str, usize>,
-) {
+) -> bool {
     let id = &session.id;
+    let mut disagreed = false;
 
-    let mut check_instant = |name: &str, expected: Timestamp| {
+    let mut check_instant = |name: &str, expected: Timestamp, disagreed: &mut bool| {
         let Some(&col) = headers.get(name) else {
             return; // not a required header; absence is not a discrepancy
         };
         match sheet.value((col, row)).trim().parse::<f64>() {
             Ok(serial) => match instant_of_serial(serial) {
-                Ok(stored) if stored != expected => log.note(format!(
-                    "row {row} ({id}): stored {name} is {stored}, recomputed {expected}; \
-                     using the recomputed value"
-                )),
+                Ok(stored) if stored != expected => {
+                    *disagreed = true;
+                    log.note(format!(
+                        "row {row} ({id}): stored {name} is {stored}, recomputed {expected}; \
+                         using the recomputed value"
+                    ));
+                }
                 Ok(_) => {}
-                Err(e) => log.note(format!(
-                    "row {row} ({id}): {name} is not a valid instant: {e}"
-                )),
+                Err(e) => {
+                    *disagreed = true;
+                    log.note(format!(
+                        "row {row} ({id}): {name} is not a valid instant: {e}"
+                    ));
+                }
             },
-            Err(_) => log.note(format!(
-                "row {row} ({id}): {name} does not hold a number; using the recomputed value"
-            )),
+            Err(_) => {
+                *disagreed = true;
+                log.note(format!(
+                    "row {row} ({id}): {name} does not hold a number; using the recomputed value"
+                ));
+            }
         }
     };
-    check_instant("adj_conn_start_utc", session.adj_conn_start());
-    check_instant("adj_conn_end_utc", session.adj_conn_end());
+    check_instant(
+        "adj_conn_start_utc",
+        session.adj_conn_start(),
+        &mut disagreed,
+    );
+    check_instant("adj_conn_end_utc", session.adj_conn_end(), &mut disagreed);
 
     // `adj_duration` subtracts one adjusted bound from the other and panics if they are inverted.
     // This runs before the exclusion sort, so an `InconsistentDuration` row reaches here — and the
@@ -678,23 +689,33 @@ fn check_stored_columns(
         };
         let raw = sheet.value((col, row));
         let raw = raw.trim();
+        // A formula this crate wrote and Excel has not yet evaluated. Nothing to compare against,
+        // so nothing to report: an absent cached value is the normal state of a freshly written
+        // workbook rather than a disagreement with it.
         if raw.is_empty() {
-            *unevaluated.entry(name).or_default() += 1;
             continue;
         }
         match raw.parse::<f64>() {
             // Serials and kilowatts both come back through floating point, so compare to the
             // resolution the sheet actually shows rather than for equality.
-            Ok(stored) if (stored - expected).abs() > 1e-6 => log.note(format!(
-                "row {row} ({id}): stored {name} is {stored}, recomputed {expected}; \
-                 using the recomputed value"
-            )),
+            Ok(stored) if (stored - expected).abs() > 1e-6 => {
+                disagreed = true;
+                log.note(format!(
+                    "row {row} ({id}): stored {name} is {stored}, recomputed {expected}; \
+                     using the recomputed value"
+                ));
+            }
             Ok(_) => {}
-            Err(_) => log.note(format!(
-                "row {row} ({id}): {name} does not hold a number; using the recomputed value"
-            )),
+            Err(_) => {
+                disagreed = true;
+                log.note(format!(
+                    "row {row} ({id}): {name} does not hold a number; using the recomputed value"
+                ));
+            }
         }
     }
+
+    disagreed
 }
 
 /// Parses the `anomalies` cell. An unrecognised token is an error rather than a shrug: it means the
@@ -1207,7 +1228,27 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
             log.contains("using the recomputed value"),
             "the log does not say what was done:\n{log}"
         );
-        // A discrepancy is not an anomaly. Nothing about the session changed classification.
+        // Raised against the session, but on the context rather than on the record. The record is
+        // unchanged: the CSV this workbook was written from disagrees with nothing.
+        assert!(
+            report
+                .anomalies
+                .iter()
+                .any(|a| a.kind == AnomalyKind::WorkbookDiscrepancy
+                    && a.session.row == session.row),
+            "the discrepancy was not raised: {:?}",
+            report.anomalies
+        );
+        assert!(
+            !session
+                .anomalies
+                .contains(&AnomalyKind::WorkbookDiscrepancy),
+            "a discrepancy reached Session::anomalies, from where it would be written into the \
+             next workbook: {:?}",
+            session.anomalies
+        );
+
+        // And it changes no classification, which is the property the channel exists for.
         assert!(
             !session
                 .anomalies
@@ -1218,6 +1259,28 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
         assert!(
             report.excluded.is_empty(),
             "a stale cell excluded a session"
+        );
+    }
+
+    /// A clean workbook raises nothing. Every formula column of a freshly written one is
+    /// unevaluated, and that is the normal state rather than a disagreement with it.
+    #[test]
+    fn an_unevaluated_formula_is_not_a_discrepancy() {
+        let xlsx = convert("unevaluated", FIXTURE);
+        let report = session_list(&xlsx).unwrap();
+
+        assert!(
+            !report
+                .anomalies
+                .iter()
+                .any(|a| a.kind == AnomalyKind::WorkbookDiscrepancy),
+            "a freshly written workbook reported a discrepancy: {:?}",
+            report.anomalies
+        );
+        let log = fs::read_to_string(&report.log_paths[0]).unwrap();
+        assert!(
+            !log.contains("nothing to check"),
+            "the unevaluated-formula note survived:\n{log}"
         );
     }
 

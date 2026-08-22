@@ -739,6 +739,37 @@ pub enum AnomalyKind {
     /// id and differing in their figures, which is all the merge can see. Both are worth a
     /// reader's eye.
     DuplicateId,
+
+    /// The reported start or end does not land on a whole [`TIME_GRID_STEP`].
+    ///
+    /// Informational only. Every allowance this software makes for the reporting's truncation
+    /// assumes the reported times are truncated to that step. If Evolute starts reporting seconds,
+    /// they no longer are, and the allowances become too wide rather than wrong — a session gets a
+    /// padded end it does not need, and the consistency window admits records it should reject.
+    /// Nothing crashes and no figure looks odd, which is exactly why it needs saying.
+    ///
+    /// A property of the record's own times, so it travels on [`Session::anomalies`] and survives
+    /// the round trip through a workbook honestly: the times it describes are the ones written.
+    ///
+    /// Expect it on every row or on none. A report that has switched resolution has switched it
+    /// throughout, so whatever renders these should say how many rather than list them all.
+    OffGridTimes,
+
+    /// A workbook column disagrees with what the [`Session`] methods recompute from it, or does not
+    /// hold a value of the right kind at all.
+    ///
+    /// The sheet is stale or was edited. The recomputed value always wins and no figure changes;
+    /// this only says the stored one no longer matches.
+    ///
+    /// A property of *this reading of this workbook* rather than of the session — the CSV the
+    /// workbook was written from has no such disagreement — so it lives on
+    /// [`Sessions::anomalies`] and is never written into a sheet. Were it on
+    /// [`Session::anomalies`] it would be serialised into the `anomalies` column, read back on the
+    /// next pass, and go on asserting a disagreement that had been corrected.
+    ///
+    /// Says only that a column disagreed. Which one, what it held and what was recomputed are not
+    /// carried: an [`AnomalyKind`] is a bare token, and [`Anomaly`] is a session and a kind.
+    WorkbookDiscrepancy,
 }
 
 impl AnomalyKind {
@@ -754,6 +785,8 @@ impl AnomalyKind {
             Self::DstUnresolvable => "DstUnresolvable",
             Self::ExcessiveAvgKw => "ExcessiveAvgKw",
             Self::DuplicateId => "DuplicateId",
+            Self::OffGridTimes => "OffGridTimes",
+            Self::WorkbookDiscrepancy => "WorkbookDiscrepancy",
         }
     }
 
@@ -767,6 +800,8 @@ impl AnomalyKind {
             "DstUnresolvable" => Self::DstUnresolvable,
             "ExcessiveAvgKw" => Self::ExcessiveAvgKw,
             "DuplicateId" => Self::DuplicateId,
+            "OffGridTimes" => Self::OffGridTimes,
+            "WorkbookDiscrepancy" => Self::WorkbookDiscrepancy,
             _ => return None,
         })
     }
@@ -813,6 +848,16 @@ impl fmt::Display for AnomalyKind {
             Self::DuplicateId => {
                 "another session in the report carries the same Charge_Session_ID; the id is not \
                  unique in Evolute's reports, so both sessions still count towards every estimate"
+            }
+            Self::OffGridTimes => {
+                "the reported start or end does not land on a whole minute, so the report's \
+                 resolution has become finer than this software's time grid; nothing is wrong with \
+                 the record, but the padding and the consistency window are now wider than the \
+                 data needs"
+            }
+            Self::WorkbookDiscrepancy => {
+                "a stored column in the workbook disagrees with what this software recomputes from \
+                 the row, so the sheet is stale or was edited; the recomputed value is the one used"
             }
         };
         f.write_str(s)

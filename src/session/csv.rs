@@ -189,7 +189,12 @@ pub(crate) fn session_rows(path: &Path) -> Result<SessionRows, Box<dyn Error>> {
     let mut log = RunLog::new();
     note_off_grid_rows(&rows, &mut log);
     for anomaly in &anomalies {
-        log.note(anomaly.to_string());
+        // `OffGridTimes` is summarised above instead. A report that has switched resolution has
+        // switched it throughout, so listing it per row would bury every other finding under a few
+        // hundred identical lines.
+        if anomaly.kind != AnomalyKind::OffGridTimes {
+            log.note(anomaly.to_string());
+        }
     }
 
     Ok(SessionRows {
@@ -213,12 +218,11 @@ pub(crate) fn session_rows(path: &Path) -> Result<SessionRows, Box<dyn Error>> {
 /// switched resolution every row qualifies, and a log with 238 identical lines is a log nobody
 /// reads.
 fn note_off_grid_rows(rows: &[Row], log: &mut RunLog) {
+    // Reads the flag rather than repeating the test, so the summary and the anomalies cannot
+    // disagree about which rows qualify.
     let offenders: Vec<&Row> = rows
         .iter()
-        .filter(|r| {
-            !is_on_grid(r.session.conn_start, TIME_GRID_STEP)
-                || !is_on_grid(r.session.conn_end, TIME_GRID_STEP)
-        })
+        .filter(|r| r.session.anomalies.contains(&AnomalyKind::OffGridTimes))
         .collect();
     if offenders.is_empty() {
         return;
@@ -482,6 +486,12 @@ impl CsvSession {
                 if !duration_is_consistent(start_utc, end_utc, self.conn_duration) {
                     anomalies.push(AnomalyKind::InconsistentDuration);
                 }
+                // Checked on the resolved instants rather than the reported wall times: the two
+                // differ only by a whole-hour offset in this zone, so either answers the question,
+                // and these are the values every later allowance is applied to.
+                if !is_on_grid(start_utc, TIME_GRID_STEP) || !is_on_grid(end_utc, TIME_GRID_STEP) {
+                    anomalies.push(AnomalyKind::OffGridTimes);
+                }
 
                 Ok(Row {
                     record: row - 2,
@@ -560,8 +570,13 @@ mod test {
     use std::fs;
     use std::path::PathBuf;
 
+    /// Both forms the reader itself accepts, in the same order — see `parse_datetime`. A helper
+    /// that took only whole minutes could not express a report that has moved to seconds, which is
+    /// the case [`AnomalyKind::OffGridTimes`] exists for.
     fn dt(s: &str) -> civil::DateTime {
-        civil::DateTime::strptime("%Y-%m-%d %H:%M", s).unwrap()
+        civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", s)
+            .or_else(|_| civil::DateTime::strptime("%Y-%m-%d %H:%M", s))
+            .unwrap()
     }
 
     /// A stand-in source file for tests that call [`CsvSession::resolve`] directly. Nothing here
@@ -728,6 +743,50 @@ mod test {
             civil::date(2026, 11, 1).at(6, 30, 0, 0), // EST is UTC-5
         );
         assert!(timing_anomalies(&rows[0].session.anomalies).is_empty());
+    }
+
+    /// A reported boundary that does not land on a whole minute is flagged on the record itself,
+    /// since it is a fact about the times the report states.
+    ///
+    /// Not a fault: every figure is computed the same way either way. It says the report's
+    /// resolution has outgrown this software's time grid, which makes the truncation allowances
+    /// wider than the data needs.
+    #[test]
+    fn a_boundary_off_the_time_grid_is_flagged() {
+        // Ordinary minute boundaries, so nothing is flagged.
+        let rows = session("2026-06-10 02:00", "2026-06-10 03:00", "1:00:00")
+            .resolve(&time_zone(), &test_source(), 2)
+            .unwrap();
+        assert!(
+            !rows[0]
+                .session
+                .anomalies
+                .contains(&AnomalyKind::OffGridTimes),
+            "{:?}",
+            rows[0].session.anomalies
+        );
+
+        // A start carrying seconds: the report has moved to a finer resolution than the grid.
+        let rows = session("2026-06-10 02:00:30", "2026-06-10 03:00", "0:59:30")
+            .resolve(&time_zone(), &test_source(), 2)
+            .unwrap();
+        assert!(
+            rows[0]
+                .session
+                .anomalies
+                .contains(&AnomalyKind::OffGridTimes),
+            "{:?}",
+            rows[0].session.anomalies
+        );
+        // And it is only that: the record is otherwise sound and still counts.
+        assert!(
+            !rows[0]
+                .session
+                .anomalies
+                .contains(&AnomalyKind::InconsistentDuration),
+            "{:?}",
+            rows[0].session.anomalies
+        );
     }
 
     /// Reported times are truncated to the minute while `Conn_Duration` carries seconds, so a
