@@ -41,13 +41,6 @@ pub struct Energy {
     pub kwh: TouKwh,
 }
 
-/// EV cost-recovery TOU rates.
-pub struct CostRecoveryRates {
-    pub on_peak: f64,
-    pub mid_peak: f64,
-    pub off_peak: f64,
-}
-
 /// Breakdown of energy costs attributable to EV sessions in a billing period.
 pub struct EnergyCost {
     /// The billing period these figures are for, named by the date it closes on. The bill's own,

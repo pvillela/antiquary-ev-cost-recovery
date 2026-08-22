@@ -21,6 +21,7 @@
 pub mod coverage;
 pub mod energy;
 pub mod peak_power;
+pub mod recovery;
 
 pub use coverage::check_reports_cover_period;
 pub use energy::{energy, energy_cost};
