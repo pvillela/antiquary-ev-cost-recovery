@@ -13,8 +13,8 @@
 //! Types live with the function that produces them, errors included:
 //! [`PowerEstimates`](pure::peak_power::PowerEstimates) and
 //! [`PeakPowerError`](pure::peak_power::PeakPowerError) with `peak_power`,
-//! [`SessionReportCoverage`](pure::session_report::SessionReportCoverage) and
-//! [`CoverageError`](pure::session_report::CoverageError) with `session_report`,
+//! [`SessionReportCoverage`](pure::coverage::SessionReportCoverage) and
+//! [`CoverageError`](pure::coverage::CoverageError) with `coverage`,
 //! [`ReadError`](io::ReadError) with `io`.
 //!
 //! [`ApiError`](error::ApiError) is the exception, and has a module of its own: it is the union every call collapses

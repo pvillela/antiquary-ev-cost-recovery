@@ -19,9 +19,9 @@ use std::path::{Path, PathBuf};
 // module that hands out the union has to hand out what its variants carry. Nothing deeper: the
 // fields inside those payloads can be read without being named.
 pub use crate::api::io::ReadError;
+pub use crate::api::pure::coverage::CoverageError;
 pub use crate::api::pure::energy::EnergyError;
 pub use crate::api::pure::peak_power::PeakPowerError;
-pub use crate::api::pure::session_report::CoverageError;
 
 /// Every way an API call can fail, in one type, by the stage that failed.
 #[derive(Debug)]

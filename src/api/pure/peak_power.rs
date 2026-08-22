@@ -9,9 +9,8 @@
 //! same rules, and both refuse a period the meter data does not cover. Splitting them would leave
 //! two copies of that agreement to keep.
 
-use super::period_line;
 use crate::green_button::{METER_INTERVAL, Peak};
-use crate::hydro_bill::{NotABillingPeriodEnding, billing_period_dates};
+use crate::hydro_bill::{NotABillingPeriodEnding, billing_period_dates, billing_period_span};
 use crate::markdown::{Left, Right, amounts, field, h1, h2, table};
 use crate::session::{
     Bracket, EstimateSet, IntervalEstimates, SessionReport, estimates_from_report,
@@ -446,7 +445,11 @@ impl fmt::Display for DeliveryCost {
         ];
 
         writeln!(f, "{}\n", h1("EV Delivery Cost"))?;
-        writeln!(f, "{}", period_line(self.billing_period_ending))?;
+        writeln!(
+            f,
+            "{}",
+            field("Period", &billing_period_span(self.billing_period_ending))
+        )?;
         writeln!(
             f,
             "{}\n",

@@ -10,13 +10,15 @@
 //! by the kilowatt-hour at a rate that depends on when it was drawn.
 
 use crate::{
-    hydro_bill::{BILL_END_DAY, BillingPeriod, NotABillingPeriodEnding, billing_period_dates},
+    hydro_bill::{
+        BILL_END_DAY, BillingPeriod, NotABillingPeriodEnding, billing_period_dates,
+        billing_period_span,
+    },
     markdown::{Left, Right, amounts, field, h1, h2, table},
     session::{SessionReport, tou_kwh},
     time::Interval,
 };
 
-use super::period_line;
 use jiff::civil::Date;
 use std::{error::Error, fmt};
 
@@ -89,7 +91,7 @@ pub struct EnergyCost {
 ///
 /// No variant names a file. Producing this is a computation, and a computation cannot fail to read
 /// something. [`NotABillingPeriodEnding`] is embedded rather than restated, which is what
-/// [`CoverageError`](super::session_report::CoverageError) and
+/// [`CoverageError`](super::coverage::CoverageError) and
 /// [`PeakPowerError`](super::peak_power::PeakPowerError) do with the same failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnergyError {
@@ -315,7 +317,11 @@ impl fmt::Display for Energy {
             band_row("Total", kwh.total_kwh()),
         ];
         writeln!(f, "{}\n", h1("EV Energy"))?;
-        writeln!(f, "{}\n", period_line(self.billing_period_ending))?;
+        writeln!(
+            f,
+            "{}\n",
+            field("Period", &billing_period_span(self.billing_period_ending))
+        )?;
         writeln!(f, "{}", table(&["TOU", "kWh"], &rows, &[Left, Right]))
     }
 }
@@ -366,7 +372,11 @@ impl fmt::Display for EnergyCost {
         ];
 
         writeln!(f, "{}\n", h1("EV Energy Cost"))?;
-        writeln!(f, "{}", period_line(self.billing_period_ending))?;
+        writeln!(
+            f,
+            "{}",
+            field("Period", &billing_period_span(self.billing_period_ending))
+        )?;
         writeln!(
             f,
             "{}\n",

@@ -30,8 +30,8 @@
 //!
 //! What is *not* here is anything that reads a period rather than defining one. `green_button`
 //! knows how many meter intervals one should hold, because that is a question about the feed;
-//! `api::pure::session_report` knows which monthly reports cover one, because that is a question
-//! about file names.
+//! `api::pure::coverage` knows which monthly reports cover one, because that is a question about
+//! file names.
 //!
 //! # Choosing the closing day
 //!
@@ -41,7 +41,7 @@
 //! the fact it is cut on in the other.
 
 use crate::time::{standard_date, standard_midnight};
-use jiff::{Timestamp, civil::Date, civil::date};
+use jiff::{Timestamp, Unit, civil::Date, civil::date};
 use std::error::Error;
 use std::fmt;
 
@@ -194,6 +194,31 @@ pub fn billing_period_dates(
     // ones. `period.end` is exclusive and lands on the day after the close, which is why the last
     // date is the closing date itself rather than anything read off `end`.
     Ok((standard_date(period.start), billing_period_ending))
+}
+
+/// The period's calendar span, written the way a report heads itself:
+/// `2026-05-24 - 2026-06-23  (31 days)`.
+///
+/// The span rather than the closing date alone. A period is named by the day it closes on, which is
+/// what the argument carries, but a reader checking a figure against a bill needs the dates the
+/// bill states — and those run from the 24th of the month before.
+///
+/// Both ends count, so 24 May to 23 June is 31 days. That is the count the bill prorates its demand
+/// charges by, so a report that said 30 here would contradict the `Adj.` columns it is checked
+/// against.
+///
+/// Total, unlike [`billing_period_dates`]: a date that labels no period degrades to
+/// `ending 2026-06-30` rather than failing. Every caller is a `Display` impl, and one that can
+/// bring a process down is worse than one that says less.
+pub fn billing_period_span(billing_period_ending: Date) -> String {
+    let span = billing_period_dates(billing_period_ending)
+        .ok()
+        .and_then(|(start, end)| Some((start, end, start.until((Unit::Day, end)).ok()?)));
+
+    match span {
+        Some((start, end, days)) => format!("{start} - {end}  ({} days)", days.get_days() + 1),
+        None => format!("ending {billing_period_ending}"),
+    }
 }
 
 // cargo test --lib -- hydro_bill::billing_period::test --nocapture
