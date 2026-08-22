@@ -614,7 +614,8 @@ fn read_session_list(path: &Path) -> Result<Sessions, Box<dyn Error>> {
 ///
 /// Returns whether any column disagreed, which the caller raises as
 /// [`AnomalyKind::WorkbookDiscrepancy`] against the session — on [`Sessions::anomalies`], never on
-/// [`Session::anomalies`], since a disagreement belongs to this reading rather than to the record.
+/// [`Session::anomalies`], since a disagreement belongs to the workbook rather than to the
+/// instantiated session.
 ///
 /// **The recomputed value always wins.** Nothing here changes a `Session`. Letting a stale cell
 /// feed the estimates would make an edited workbook silently change which sessions count, which is
@@ -1227,8 +1228,9 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
             log.contains("using the recomputed value"),
             "the log does not say what was done:\n{log}"
         );
-        // Raised against the session, but on the context rather than on the record: a stale cell
-        // is a fact about this workbook, and the CSV it was written from disagrees with nothing.
+        // Raised against the session, but on the context rather than on the instantiated session:
+        // a stale cell is a fact about this workbook, and the CSV it was written from disagrees
+        // with nothing.
         assert!(
             report
                 .anomalies
@@ -1242,8 +1244,8 @@ CKT-7,,Toronto,,Station-7,Evolute Inc.,FLO,G5,S00002,,2026-06-03 10:00,2026-06-0
             !session
                 .anomalies
                 .contains(&AnomalyKind::WorkbookDiscrepancy),
-            "a discrepancy reached Session::anomalies, which describes the record rather than the \
-             file it was read from: {:?}",
+            "a discrepancy reached Session::anomalies, which describes the instantiated session \
+             rather than the file it was read from: {:?}",
             session.anomalies
         );
 
