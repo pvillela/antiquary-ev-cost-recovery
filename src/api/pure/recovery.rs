@@ -10,21 +10,25 @@
 //! the chargers metered, which is what a driver can check against their own session history; what
 //! the rate has to cover is a question for whoever sets it.
 
-use crate::green_button::PeriodValues;
 use crate::hydro_bill::{
     BILL_END_DAY, BillingPeriod, NotABillingPeriodEnding, billing_period_dates, billing_period_span,
 };
-use crate::io::{DeliveryCost, EnergyCost};
-use crate::markdown::{Left, Right, amounts, field, h1, h2, table};
+use crate::markdown::{Left, Right, amounts, field, h1, h2, table, wrap};
 use crate::session::tou_kwh;
 use crate::time::{Interval, local_midnight};
 use jiff::{Timestamp, civil::Date};
 use std::{error::Error, fmt};
 
-use super::energy::countable;
+// Through `super`, not through `crate::io`. The two cost breakdowns are computed here in `pure`;
+// reaching them by the path `io` re-exports them under would point this half of the API at the
+// other, which is the one direction the split exists to prevent.
+use super::energy::{EnergyCost, EnergyError, countable, energy_cost};
+use super::peak_power::{DeliveryCost, PeakPowerError, peak_power_cost};
 
-// Re-exported because the function here takes these and returns those, and a caller should not have
+// Re-exported because the functions here take these and return those, and a caller should not have
 // to know which module they come from in order to spell the call.
+pub use crate::green_button::PeriodValues;
+pub use crate::hydro_bill::HydroBill;
 pub use crate::session::{RSession, TouKwh};
 
 /// EV cost-recovery TOU rates. The rates are effective for at least one month.
@@ -109,10 +113,24 @@ pub struct CostRecovery {
 
 /// The EV cost recovery for the billing period, the hydro delivery and energy costs attributable
 /// to EV charging sessions during the period, and their net financial impact.
+///
+/// All three are for the same billing period, which is the bill's: it is what
+/// [`cost_recovery_surplus`] takes a period from, and all three parts are built against it. There
+/// is no separate `billing_period_ending` field because each part already carries one, and a fourth
+/// copy could only agree with them.
 pub struct CostRecoverySurplus {
+    /// What the drivers are charged, at our own rates.
     pub recovery: CostRecovery,
+    /// What the chargers' share of the three demand-priced delivery lines cost, after HST and the
+    /// rebate.
     pub delivery: DeliveryCost,
+    /// What the chargers' share of the three time-of-use consumption lines cost, after HST and the
+    /// rebate.
     pub energy: EnergyCost,
+    /// `recovery.cost_recovery - delivery.delivery_cost - energy.energy_cost`.
+    ///
+    /// Positive when the rates over-recover and negative when they fall short, so the sign is the
+    /// answer the figure exists to give.
     pub surplus: f64,
 }
 
@@ -156,6 +174,61 @@ pub enum CostRecoveryError {
         period_ending: Date,
         effective_date: Date,
     },
+}
+
+/// Why a billing period does not yield a cost-recovery surplus.
+///
+/// One variant per part the answer is built from, each carrying that part's own error. A surplus is
+/// three calculations subtracted from each other, and any of the three can refuse; widening
+/// [`CostRecoveryError`] instead would have given [`cost_recovery`] two variants it cannot raise.
+///
+/// No variant names a file, for the same reason [`CostRecoveryError`] names none.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CostRecoverySurplusError {
+    /// The recovery side refused. See [`CostRecoveryError`].
+    Recovery(CostRecoveryError),
+    /// The delivery cost refused. See [`PeakPowerError`].
+    PeakPower(PeakPowerError),
+    /// The energy cost refused. See [`EnergyError`].
+    Energy(EnergyError),
+}
+
+impl From<CostRecoveryError> for CostRecoverySurplusError {
+    fn from(e: CostRecoveryError) -> Self {
+        Self::Recovery(e)
+    }
+}
+
+impl From<PeakPowerError> for CostRecoverySurplusError {
+    fn from(e: PeakPowerError) -> Self {
+        Self::PeakPower(e)
+    }
+}
+
+impl From<EnergyError> for CostRecoverySurplusError {
+    fn from(e: EnergyError) -> Self {
+        Self::Energy(e)
+    }
+}
+
+impl fmt::Display for CostRecoverySurplusError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Recovery(e) => e.fmt(f),
+            Self::PeakPower(e) => e.fmt(f),
+            Self::Energy(e) => e.fmt(f),
+        }
+    }
+}
+
+impl Error for CostRecoverySurplusError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Recovery(e) => Some(e),
+            Self::PeakPower(e) => Some(e),
+            Self::Energy(e) => Some(e),
+        }
+    }
 }
 
 impl From<NotABillingPeriodEnding> for CostRecoveryError {
@@ -317,14 +390,71 @@ pub fn cost_recovery(
 /// Returns the EV cost-recovery surplus for the billing period, i.e., the EV cost recovery for the
 /// billing period minus the hydro delivery and energy costs attributable to EV charging sessions
 /// during the period.
+///
+/// # How the figure is arrived at
+///
+/// The three parts are [`cost_recovery`], [`peak_power_cost`](super::peak_power::peak_power_cost)
+/// and [`energy_cost`](super::energy::energy_cost), each computed exactly as it is on its own and
+/// each returned whole. Nothing is recomputed here and no figure is adjusted to make the three
+/// agree: this function subtracts, and the parts are kept so that the subtraction can be checked.
+///
+/// The two costs are net of HST and the Ontario Electricity Rebate, because that is what the
+/// chargers actually cost. The recovery carries neither, because our rates are whatever we set them
+/// to. Subtracting one from the other is therefore money against money, which is the only basis on
+/// which the two sides compare.
+///
+/// The costs cover the two parts of the bill a charger can be held to. The customer charge, the
+/// standard supply administration charge and the wholesale market service charge are none of them
+/// in either, so a surplus of zero is not the same as breaking even on the whole invoice.
+///
+/// # Arguments
+///
+/// - `bill` - the Toronto Hydro bill for the period, which supplies the period and every rate the
+///   two costs use.
+/// - `gb_period_values` - the meter export's figures for the period, as
+///   [`peak_power_cost`](super::peak_power::peak_power_cost) takes them.
+/// - `sessions` - every session from every report covering the period, as
+///   [`energy`](super::energy::energy) takes them.
+/// - `recovery_rates_at_start` - the rates in effect on the period's first day.
+/// - `recovery_rates_at_end` - the rates the period changed to, or `None` if it did not.
+///
+/// There is no `billing_period_ending` argument, for the reason the two costing functions have
+/// none: the bill states which period it covers, and one passed alongside could only agree with it
+/// or contradict it. Here that matters more than it does to either alone, since a date disagreeing
+/// with the bill would subtract two periods' figures from each other.
+///
+/// # Errors
+///
+/// [`CostRecoverySurplusError`], carrying whichever of the three parts refused. The recovery is
+/// computed first, so rates that do not fit the period are reported before the meter export is
+/// examined.
 pub fn cost_recovery_surplus(
-    billing_period_ending: Date,
+    bill: &HydroBill,
     gb_period_values: PeriodValues,
     sessions: &[RSession],
     recovery_rates_at_start: CostRecoveryRates,
     recovery_rates_at_end: Option<CostRecoveryRates>,
-) -> Result<CostRecoverySurplus, CostRecoveryError> {
-    todo!()
+) -> Result<CostRecoverySurplus, CostRecoverySurplusError> {
+    // The bill is the single source of the period, so all three parts are for the same one by
+    // construction rather than by a check. An off-cycle bill is refused by each of them in turn;
+    // the recovery is called first, so that is where it surfaces.
+    let billing_period_ending = bill.period_end_date();
+
+    let recovery = cost_recovery(
+        billing_period_ending,
+        sessions,
+        recovery_rates_at_start,
+        recovery_rates_at_end,
+    )?;
+    let delivery = peak_power_cost(bill, gb_period_values, sessions)?;
+    let energy = energy_cost(bill, sessions)?;
+
+    Ok(CostRecoverySurplus {
+        surplus: recovery.cost_recovery - delivery.delivery_cost - energy.energy_cost,
+        recovery,
+        delivery,
+        energy,
+    })
 }
 
 /// One stretch of the period priced at one schedule of rates.
@@ -454,16 +584,75 @@ impl fmt::Display for CostRecovery {
     }
 }
 
+impl fmt::Display for CostRecoverySurplus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{}\n", h1("EV Cost Recovery Surplus"))?;
+        writeln!(
+            f,
+            "{}\n",
+            field(
+                "Period",
+                &billing_period_span(self.recovery.billing_period_ending)
+            )
+        )?;
+
+        // The costs are shown negative so the column adds down to the surplus. A reader checking a
+        // figure that is meant to be a subtraction cannot do it against three positive numbers.
+        writeln!(
+            f,
+            "{}\n",
+            amounts(&[
+                ("Cost recovery", self.recovery.cost_recovery),
+                ("EV energy cost", -self.energy.energy_cost),
+                ("EV delivery cost", -self.delivery.delivery_cost),
+                ("Surplus", self.surplus),
+            ])
+        )?;
+        writeln!(
+            f,
+            "{}\n",
+            wrap(VERDICT[usize::from(self.surplus < 0.0)], "")
+        )?;
+
+        // The three parts in full, under their own headings. The figure above is a subtraction of
+        // three numbers, and none of them can be checked without the report it came from.
+        writeln!(f, "{}", self.recovery)?;
+        writeln!(f, "{}", self.energy)?;
+        write!(f, "{}", self.delivery)
+    }
+}
+
+/// What the sign of the surplus means, indexed by `surplus < 0.0`.
+///
+/// Spelled out because the sign alone is read the wrong way about as often as the right way: money
+/// coming in is positive here, so a shortfall is the negative number.
+const VERDICT: [&str; 2] = [
+    "The cost-recovery rates covered the chargers' share of the bill for this period, with the \
+     surplus above left over.",
+    "The cost-recovery rates fell short of the chargers' share of the bill for this period, by the \
+     amount above.",
+];
+
 // cargo test --lib -- api::pure::recovery::test --nocapture
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::api::pure::test_support::{
+        KVA_PEAK_HOUR, KW_PEAK_HOUR, NOP_PEAK_HOUR, bill, close, period_ending_date,
+        period_values_with_nop, two_reports,
+    };
     use crate::session::test_support::session;
     use jiff::civil::date;
 
     /// The period every fixture here belongs to: 24 May to 23 June 2026.
     fn ending() -> Date {
-        date(2026, 6, 23)
+        period_ending_date()
+    }
+
+    /// The meter figures the surplus fixture uses: all three maxima stated, as a real export has
+    /// them.
+    fn peaks() -> PeriodValues {
+        period_values_with_nop(Some(KW_PEAK_HOUR), Some(KVA_PEAK_HOUR), Some(NOP_PEAK_HOUR))
     }
 
     fn rates(effective: Date, on_peak: f64, mid_peak: f64, off_peak: f64) -> CostRecoveryRates {
@@ -708,5 +897,165 @@ mod test {
         assert!(two.contains("EV rates effective 2026-06-01"), "{two}");
         assert!(two.contains("EV Cost Recovery Total"), "{two}");
         assert!(two.contains("| Cost recovery"), "{two}");
+    }
+
+    /// The surplus is a subtraction and nothing else: each part equals what its own function
+    /// returns for the same inputs, and the figure is those three combined.
+    #[test]
+    fn the_surplus_is_the_recovery_less_the_two_costs() {
+        let rates = flat(date(2026, 5, 1), 0.10);
+        let s = cost_recovery_surplus(&bill(), peaks(), &two_reports(), rates, None)
+            .expect("the fixture bill closes a billing period and has all three maxima");
+
+        // Recomputed independently, so a surplus built from anything other than these three parts
+        // fails here rather than in the arithmetic below.
+        let recovery = cost_recovery(ending(), &two_reports(), rates, None).expect("the recovery");
+        let delivery =
+            peak_power_cost(&bill(), peaks(), &two_reports()).expect("the delivery cost");
+        let energy = energy_cost(&bill(), &two_reports()).expect("the energy cost");
+
+        assert!(close(s.recovery.cost_recovery, recovery.cost_recovery));
+        assert!(close(s.delivery.delivery_cost, delivery.delivery_cost));
+        assert!(close(s.energy.energy_cost, energy.energy_cost));
+        assert!(
+            close(
+                s.surplus,
+                recovery.cost_recovery - delivery.delivery_cost - energy.energy_cost
+            ),
+            "{}",
+            s.surplus
+        );
+    }
+
+    /// The sign is the answer, so both directions are exercised. Rates high enough to cover the
+    /// share give a positive surplus; rates of zero give a negative one of exactly the two costs.
+    #[test]
+    fn the_sign_says_whether_the_rates_covered_the_share() {
+        let surplus_at = |rate: f64| {
+            cost_recovery_surplus(
+                &bill(),
+                peaks(),
+                &two_reports(),
+                flat(date(2026, 5, 1), rate),
+                None,
+            )
+            .expect("the fixture bill closes a billing period")
+        };
+
+        let none = surplus_at(0.0);
+        assert_eq!(none.recovery.cost_recovery, 0.0);
+        assert!(
+            close(
+                none.surplus,
+                -none.delivery.delivery_cost - none.energy.energy_cost
+            ),
+            "{}",
+            none.surplus
+        );
+        assert!(none.surplus < 0.0, "{}", none.surplus);
+
+        // Far above any plausible rate, so the recovery outruns the share whatever the fixture's
+        // costs come to.
+        assert!(surplus_at(100.0).surplus > 0.0);
+    }
+
+    /// Each of the three parts can refuse, and the error says which did. The recovery is computed
+    /// first, so its failure is the one reported when more than one would fire.
+    #[test]
+    fn a_failure_says_which_part_refused() {
+        // Rates that begin after the period does: the recovery's own complaint.
+        let err = cost_recovery_surplus(
+            &bill(),
+            peaks(),
+            &two_reports(),
+            flat(date(2026, 6, 1), 0.10),
+            None,
+        )
+        .err()
+        .expect("1 June is after the period starts on 24 May");
+        assert!(
+            matches!(
+                err,
+                CostRecoverySurplusError::Recovery(CostRecoveryError::RatesNotYetInEffect { .. })
+            ),
+            "{err}"
+        );
+
+        // A meter export with no kVA maximum: the delivery cost's.
+        let no_kva = period_values_with_nop(Some(KW_PEAK_HOUR), None, Some(NOP_PEAK_HOUR));
+        let err = cost_recovery_surplus(
+            &bill(),
+            no_kva,
+            &two_reports(),
+            flat(date(2026, 5, 1), 0.10),
+            None,
+        )
+        .err()
+        .expect("no kVA maximum to estimate against");
+        assert!(
+            matches!(
+                err,
+                CostRecoverySurplusError::PeakPower(PeakPowerError::NoPeak { .. })
+            ),
+            "{err}"
+        );
+
+        // A bill stating no on-peak consumption: the energy cost's, since it states no on-peak rate
+        // to price the EV share at.
+        let mut flat_band = bill();
+        flat_band.on_peak_kwh = 0.0;
+        let err = cost_recovery_surplus(
+            &flat_band,
+            peaks(),
+            &two_reports(),
+            flat(date(2026, 5, 1), 0.10),
+            None,
+        )
+        .err()
+        .expect("the bill states no on-peak rate");
+        assert!(
+            matches!(
+                err,
+                CostRecoverySurplusError::Energy(EnergyError::NoRate { .. })
+            ),
+            "{err}"
+        );
+    }
+
+    /// The summary is a subtraction the reader checks by eye, so it states all four figures and
+    /// says which way the sign runs. The three parts follow in full, since none of the three can be
+    /// checked without the report it came from.
+    #[test]
+    fn the_surplus_report_carries_its_three_parts() {
+        let s = cost_recovery_surplus(
+            &bill(),
+            peaks(),
+            &two_reports(),
+            flat(date(2026, 5, 1), 0.10),
+            None,
+        )
+        .expect("the fixture bill closes a billing period")
+        .to_string();
+
+        assert!(s.starts_with("EV Cost Recovery Surplus\n"), "{s}");
+        for line in [
+            "| Cost recovery",
+            "| EV energy cost",
+            "| EV delivery cost",
+            "| Surplus",
+        ] {
+            assert!(s.contains(line), "{line} missing from\n{s}");
+        }
+        // Rates of 0.10 do not cover the share, so the shortfall wording is the one shown.
+        assert!(s.contains("fell short"), "{s}");
+
+        // Each part's own report, by its heading.
+        for heading in [
+            "EV Cost Recovery\n=",
+            "EV Energy Cost\n=",
+            "EV Delivery Cost\n=",
+        ] {
+            assert!(s.contains(heading), "{heading:?} missing from\n{s}");
+        }
     }
 }

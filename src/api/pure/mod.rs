@@ -23,7 +23,10 @@ pub mod energy;
 pub mod peak_power;
 pub mod recovery;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use coverage::check_reports_cover_period;
 pub use energy::{energy, energy_cost};
 pub use peak_power::{peak_power, peak_power_cost};
-pub use recovery::cost_recovery;
+pub use recovery::{cost_recovery, cost_recovery_surplus};

@@ -59,7 +59,7 @@ The command-line tools are `ev_csv_to_xlsx` (session report to workbook), `ev_pe
 over an interval), `gb_peak_values` (Green Button feed to workbook) and `hydro_bill_dump` (a bill
 PDF's figures). Each prints its usage when run with no arguments.
 
-Five more report on one billing period. `peak_power_cli` gives the kW and kVA peaks, estimated from
+Six more report on one billing period. `peak_power_cli` gives the kW and kVA peaks, estimated from
 a Green Button export and the two session reports spanning the period. `energy_cli` gives the
 kilowatt-hours drawn, split by time-of-use band. Two of them price those against a Toronto Hydro
 bill: `energy_cost_cli` for the consumption lines and `peak_power_cost_cli` for the three
@@ -73,7 +73,15 @@ and no tax is added — the rates are yours, and what they have to cover is your
 is written `EFFECTIVE_DATE:ON_PEAK,MID_PEAK,OFF_PEAK`; give a second one when the rates changed
 during the period, and the energy is split at local midnight on its effective date.
 
-These five need two adjacent months' session reports, since a billing period runs from the
+`cost_recovery_surplus_cli` puts the two sides together: what the rates recover, less the delivery
+and energy costs, and the difference. A positive surplus means the rates covered the chargers'
+share of the bill; a negative one means they fell short. It prints all three reports beneath the
+summary, so every figure in the subtraction can be checked. Only the delivery and energy sides are
+counted as EV cost — the customer charge, the standard supply administration charge and the
+wholesale market service charge are in neither — so a surplus of zero is not breaking even on the
+whole invoice.
+
+These six need two adjacent months' session reports, since a billing period runs from the
 24th to the 23rd. Only June's is real, so `scripts/make-may-mock.py` builds the May half from it —
 shifted dates, fresh ids, and two deliberate quirks that exercise the merge: a session at the end
 of May that both reports carry, and a reused `Charge_Session_ID` of May's own. The script explains

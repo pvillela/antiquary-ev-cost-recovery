@@ -16,10 +16,14 @@ use std::path::{Path, PathBuf};
 
 // Re-exported rather than merely imported: these name what the functions here return, and a caller
 // should not have to know which module a call delegates to in order to spell that.
-pub use crate::api::error::{ApiError, CostRecoveryError, EnergyError, PeakPowerError};
+pub use crate::api::error::{
+    ApiError, CostRecoveryError, CostRecoverySurplusError, EnergyError, PeakPowerError,
+};
 pub use crate::api::pure::energy::{Energy, EnergyCost, TouKwh};
 pub use crate::api::pure::peak_power::{DeliveryCost, PowerEstimates};
-pub use crate::api::pure::recovery::{CostRecovery, CostRecoveryRates, CostRecoveryStretch};
+pub use crate::api::pure::recovery::{
+    CostRecovery, CostRecoveryRates, CostRecoveryStretch, CostRecoverySurplus,
+};
 
 /// A source file could not be read.
 ///
@@ -319,6 +323,92 @@ pub fn cost_recovery(
     )?)
 }
 
+/// Returns the EV cost-recovery surplus for a billing period: what the rates recover, less what the
+/// chargers' share of the bill cost.
+///
+/// Reads the bill, the meter export and the two session reports — every source the library has —
+/// and hands them to [`pure::cost_recovery_surplus`](fn@super::pure::cost_recovery_surplus), which
+/// states how the figures are arrived at. The result carries all three parts whole, so the
+/// subtraction can be checked against the reports it came from.
+///
+/// # Arguments
+/// - `bill_pdf` - the Toronto Hydro bill PDF for the period.
+/// - `gb_xml` - source Green Button XML file covering the billing period.
+/// - `session_csv1` - Evolute session report covering the left end of the billing period.
+/// - `session_csv2` - Evolute session report covering the right end of the billing period.
+/// - `recovery_rates_at_start` - the rates in effect on the period's first day.
+/// - `recovery_rates_at_end` - the rates the period changed to, or `None` if it did not.
+///
+/// There is no `billing_period_ending` argument. The bill states which period it covers, and it is
+/// read first so that every other source is fetched for that period. A date passed alongside could
+/// only agree with the bill or contradict it, and contradicting it here would subtract two periods'
+/// figures from each other.
+///
+/// The two reports must cover the billing period completely between them, checked from their file
+/// names. Which is given first makes no difference; the names say what each holds.
+///
+/// Reading a report writes a `.csv.read.log` beside it, as [`csv::session_list`] always does.
+///
+/// # Errors
+///
+/// See [`ApiError`]. The bill is read before the checks that need a period, so an unreadable bill is
+/// reported ahead of anything the reports or the export might also be wrong about.
+pub fn cost_recovery_surplus(
+    bill_pdf: &Path,
+    gb_xml: &Path,
+    session_csv1: &Path,
+    session_csv2: &Path,
+    recovery_rates_at_start: CostRecoveryRates,
+    recovery_rates_at_end: Option<CostRecoveryRates>,
+) -> Result<CostRecoverySurplus, ApiError> {
+    // First, because it is what says which period this is about, as it is for the two costs.
+    let bill = hydro_bill_from_pdf(bill_pdf).map_err(|cause| ReadError::Bill {
+        path: bill_pdf.to_path_buf(),
+        cause: Box::new(cause),
+    })?;
+    let billing_period_ending = bill.period_end_date();
+
+    pure::check_reports_cover_period(billing_period_ending, &[session_csv1, session_csv2])?;
+
+    let gb_period_values =
+        period_values_xml(gb_xml, billing_period_ending, BILL_END_DAY).map_err(|cause| {
+            ReadError::GreenButton {
+                path: gb_xml.to_path_buf(),
+                cause,
+            }
+        })?;
+    let sessions = read_sessions(&[session_csv1, session_csv2])?;
+
+    pure::cost_recovery_surplus(
+        &bill,
+        gb_period_values,
+        &sessions,
+        recovery_rates_at_start,
+        recovery_rates_at_end,
+    )
+    .map_err(|cause| ApiError::CostRecoverySurplus {
+        source: surplus_source(&cause, bill_pdf, gb_xml),
+        cause,
+    })
+}
+
+/// Names the file a [`CostRecoverySurplusError`] is about.
+///
+/// Delegates to the two functions that already answer this for the costing errors, since a surplus
+/// fails in exactly their ways plus the recovery's. A recovery failure names no file: the rates are
+/// the caller's own values, and the period came from the bill only after it was read successfully.
+fn surplus_source(
+    cause: &CostRecoverySurplusError,
+    bill_pdf: &Path,
+    gb_xml: &Path,
+) -> Option<PathBuf> {
+    match cause {
+        CostRecoverySurplusError::Recovery(_) => None,
+        CostRecoverySurplusError::PeakPower(e) => gb_source(e, Some(bill_pdf), gb_xml),
+        CostRecoverySurplusError::Energy(e) => bill_source(e, Some(bill_pdf)),
+    }
+}
+
 /// Names the file a [`PeakPowerError`] is about, given the paths this call was made with.
 ///
 /// Which file that is turns on the variant, not on the call: a period only partly covered is the
@@ -550,6 +640,66 @@ mod test {
             ),
             "{err}"
         );
+    }
+
+    /// The surplus reads every source the library has, and the bill is what names the period for
+    /// all of them, so it is read before anything else. With every path bad, it is still the
+    /// failure reported.
+    #[test]
+    fn the_surplus_reads_the_bill_first_too() {
+        let rates = CostRecoveryRates {
+            effective_date: date(2026, 5, 1),
+            on_peak: 0.11,
+            mid_peak: 0.09,
+            off_peak: 0.07,
+        };
+        let err = cost_recovery_surplus(
+            Path::new("nothing.pdf"),
+            Path::new("nothing.XML"),
+            // Months that do not cover a period between them, so the report check would fire first
+            // if it could run at all. It cannot: it has no period to check against yet.
+            Path::new("Session_Report_April_1_2026-April_30_2026.csv"),
+            Path::new("Session_Report_June_1_2026-June_30_2026.csv"),
+            rates,
+            None,
+        )
+        .err()
+        .expect("there is no such bill");
+        assert!(
+            matches!(err, ApiError::Read(ReadError::Bill { .. })),
+            "{err}"
+        );
+        assert!(err.to_string().contains("nothing.pdf"), "{err}");
+    }
+
+    /// A surplus fails in the two costing operations' ways plus the recovery's, and names a file
+    /// only where they would. The rates are the caller's own values, so a recovery failure names
+    /// none.
+    #[test]
+    fn a_surplus_failure_names_a_file_only_where_a_cost_would() {
+        let bill = Path::new("June.pdf");
+        let xml = Path::new("meter.XML");
+
+        let gap = CostRecoverySurplusError::PeakPower(PeakPowerError::PeriodNotFullyCovered {
+            period_ending: date(2026, 6, 23),
+            intervals: 743,
+            expected: 744,
+        });
+        assert_eq!(surplus_source(&gap, bill, xml).as_deref(), Some(xml));
+
+        let no_rate = CostRecoverySurplusError::Energy(EnergyError::NoRate {
+            period_ending: date(2026, 6, 23),
+            tou: crate::time::Tou::OnPeak,
+        });
+        assert_eq!(surplus_source(&no_rate, bill, xml).as_deref(), Some(bill));
+
+        // The rates came from the caller and the period from a bill already read, so no file is at
+        // fault.
+        let rates = CostRecoverySurplusError::Recovery(CostRecoveryError::RatesNotYetInEffect {
+            period_start: date(2026, 5, 24),
+            effective_date: date(2026, 6, 1),
+        });
+        assert_eq!(surplus_source(&rates, bill, xml), None);
     }
 
     /// The energy cost takes no period either, so the bill is read before the report check, as it

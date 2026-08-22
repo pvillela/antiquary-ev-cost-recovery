@@ -22,7 +22,7 @@ pub use crate::api::io::ReadError;
 pub use crate::api::pure::coverage::CoverageError;
 pub use crate::api::pure::energy::EnergyError;
 pub use crate::api::pure::peak_power::PeakPowerError;
-pub use crate::api::pure::recovery::CostRecoveryError;
+pub use crate::api::pure::recovery::{CostRecoveryError, CostRecoverySurplusError};
 
 /// Every way an API call can fail, in one type, by the stage that failed.
 #[derive(Debug)]
@@ -47,6 +47,14 @@ pub enum ApiError {
     /// No `source`, unlike the two above. The rates are given as values and the period as a date,
     /// so a cost recovery has no file for a failure to be about.
     CostRecovery(CostRecoveryError),
+    /// The figures were read but do not yield a cost-recovery surplus.
+    ///
+    /// A `source` here, unlike [`Self::CostRecovery`]: a surplus is built from the two costing
+    /// operations as well as the recovery, and those *can* fail about the bill or the meter export.
+    CostRecoverySurplus {
+        source: Option<PathBuf>,
+        cause: CostRecoverySurplusError,
+    },
 }
 
 // `source` names the file the failure is *about*, which is not the same as a file that could not be
@@ -74,6 +82,15 @@ impl From<ReadError> for ApiError {
 impl From<CostRecoveryError> for ApiError {
     fn from(e: CostRecoveryError) -> Self {
         Self::CostRecovery(e)
+    }
+}
+
+impl From<CostRecoverySurplusError> for ApiError {
+    fn from(cause: CostRecoverySurplusError) -> Self {
+        Self::CostRecoverySurplus {
+            source: None,
+            cause,
+        }
     }
 }
 
@@ -110,6 +127,7 @@ impl fmt::Display for ApiError {
             Self::PeakPower { source, cause } => named(f, source.as_deref(), cause),
             Self::Energy { source, cause } => named(f, source.as_deref(), cause),
             Self::CostRecovery(e) => e.fmt(f),
+            Self::CostRecoverySurplus { source, cause } => named(f, source.as_deref(), cause),
         }
     }
 }
@@ -134,6 +152,7 @@ impl Error for ApiError {
             Self::PeakPower { cause, .. } => Some(cause),
             Self::Energy { cause, .. } => Some(cause),
             Self::CostRecovery(e) => Some(e),
+            Self::CostRecoverySurplus { cause, .. } => Some(cause),
         }
     }
 }
