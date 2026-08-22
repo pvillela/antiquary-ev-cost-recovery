@@ -7,7 +7,7 @@
 
 use ev_cost_recovery::{
     session::{
-        ConversionReport, HourEntry, IntervalEstimates, IoiLength, SessionReport, checked_interval,
+        ConversionReport, HourEntry, IntervalEstimates, IoiLength, Sessions, checked_interval,
         excel::{session_csv_to_xlsx, session_list},
         hours_of, interval_estimates,
     },
@@ -342,7 +342,7 @@ impl EstimateState {
 
 /// First and last local date any session in the workbook touches — sessions that were excluded from
 /// the estimates included, since they still say what month this is.
-fn covered_range(report: &SessionReport) -> Option<(civil::Date, civil::Date)> {
+fn covered_range(report: &Sessions) -> Option<(civil::Date, civil::Date)> {
     let sessions = report
         .sessions
         .iter()

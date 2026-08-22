@@ -31,7 +31,7 @@ pub fn tou_kwh(time_range: Interval, sessions: &[impl Deref<Target = Session>]) 
         // `truncate(conn_end + 1s) + TIME_GRID_STEP` while `adj_conn_start` is
         // `truncate(conn_start)`, so the two coincide only when `conn_end` precedes `conn_start` by
         // a full step -- an inverted record, which is flagged `InconsistentDuration` and sorted into
-        // `SessionReport::excluded` before any caller here sees it. See
+        // `Sessions::excluded` before any caller here sees it. See
         // `a_sound_record_cannot_have_a_zero_adjusted_duration` below.
         //
         // Kept because this function is public and takes whatever list it is handed. A caller that

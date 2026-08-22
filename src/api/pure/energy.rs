@@ -15,7 +15,7 @@ use crate::{
         billing_period_dates, billing_period_span,
     },
     markdown::{Left, Right, amounts, field, h1, h2, rounding_note, table},
-    session::{SessionReport, tou_kwh},
+    session::{Sessions, tou_kwh},
     time::Interval,
 };
 
@@ -203,7 +203,7 @@ pub fn energy(billing_period_ending: Date, sessions: &[RSession]) -> Result<Ener
 /// start, end and duration contradict each other, and an inverted one panics in `adj_duration`
 /// before any figure comes of it.
 pub(super) fn countable(sessions: &[RSession]) -> Vec<RSession> {
-    let report = SessionReport::from_session_lists(vec![sessions.to_vec()], Vec::new());
+    let report = Sessions::from_session_lists(vec![sessions.to_vec()], Vec::new());
     report
         .sessions
         .iter()

@@ -122,7 +122,7 @@ pub(crate) fn duration_is_consistent(
 /// A shared [`Session`].
 ///
 /// Public because it appears in public signatures — [`Segment::sessions`],
-/// [`SessionReport::sessions`], and the API's estimating calls — and naming the type a caller has
+/// [`Sessions::sessions`], and the API's estimating calls — and naming the type a caller has
 /// to write is the point of an alias. The sharing is what lets one session belong to several
 /// segments, and to an [`Anomaly`], without being copied.
 pub type RSession = Rc<Session>;
@@ -189,7 +189,7 @@ impl Session {
     /// If `adj_conn_end` precedes `conn_start`. That is a precondition, not a defensive check: a
     /// session whose span is inverted has fields that contradict each other, is flagged
     /// [`AnomalyKind::InconsistentDuration`] on conversion, and is sorted into
-    /// [`SessionReport::excluded`] — so it never reaches the estimating logic at all.
+    /// [`Sessions::excluded`] — so it never reaches the estimating logic at all.
     ///
     /// What establishes that is check 1 of [`duration_is_consistent`], `conn_start <= conn_end`,
     /// which is there for this reason. It is not implied by the other two: a one-minute inversion
@@ -833,15 +833,28 @@ impl fmt::Display for Anomaly {
 // Session reports
 // ---------------------------------------------------------------------------
 
-/// The sessions one session report describes, grouped by how the peak power contribution logic
-/// must treat them.
+/// Sessions, grouped by how the peak power contribution logic must treat them, and what else is
+/// known about them.
+///
+/// Named for the objects rather than for the context around them, the way
+/// [`Readings`](crate::green_button::Readings) is, so the two sources read the same way.
+///
+/// This is where a finding goes when it is not a property of any one session: a relation between
+/// records, a property of a particular *reading* rather than of the record, or a fact about the
+/// file. What is true of a record itself goes on [`Session::anomalies`] instead, and travels with
+/// it — including out to a workbook and back, which is why nothing that describes one reading may
+/// live there.
 ///
 /// Returned by both readers — [`crate::session::csv::session_list`] from the CSV and
 /// [`crate::session::excel::session_list`] from a workbook written from it — because the grouping
 /// is a property of the sessions, not of the file they were read out of. The writing direction
 /// returns a [`crate::session::ConversionReport`] instead.
+///
+/// It was `SessionReport` until this crate had three things called a report: the document a
+/// [`Display`](std::fmt::Display) writes, the CSV Evolute exports, and this. Only the CSV is still
+/// called one.
 #[derive(Debug)]
-pub struct SessionReport {
+pub struct Sessions {
     /// Sessions with a finite average power. This is what the peak power contribution logic
     /// consumes unaltered. A session with zero `Energy_Use` belongs here — its `avg_kw` is
     /// legitimately zero, and it still occupies a breaker.
@@ -875,12 +888,12 @@ pub struct SessionReport {
     /// report — see their docs.
     ///
     /// A vector because a report can be built from several files at once — see
-    /// `SessionReport::from_session_lists` — and each source file has a log of its own, written
+    /// `Sessions::from_session_lists` — and each source file has a log of its own, written
     /// beside it.
     pub log_paths: Vec<PathBuf>,
 }
 
-impl SessionReport {
+impl Sessions {
     /// Merges the session lists and sorts what survives into the three buckets.
     ///
     /// One call rather than two because every caller wants both and neither step is useful without
@@ -894,12 +907,12 @@ impl SessionReport {
     /// same session read back from the workbook written from it cannot land in different buckets.
     /// The tests are applied in this order, strongest first:
     ///
-    /// 1. Flagged [`AnomalyKind::InconsistentDuration`] — [`SessionReport::excluded`]. Such a
+    /// 1. Flagged [`AnomalyKind::InconsistentDuration`] — [`Sessions::excluded`]. Such a
     ///    session takes no part in the estimates whatever its charge time, and letting one through
     ///    would put an inverted session in front of the segmenting logic, whose endpoints would
     ///    then arrive out of order.
-    /// 2. Zero `Active_Charge_Time` — [`SessionReport::spikes`].
-    /// 3. Everything else — [`SessionReport::sessions`].
+    /// 2. Zero `Active_Charge_Time` — [`Sessions::spikes`].
+    /// 3. Everything else — [`Sessions::sessions`].
     ///
     /// Order within each bucket is the order given, which for both readers is report order.
     pub(crate) fn from_session_lists(

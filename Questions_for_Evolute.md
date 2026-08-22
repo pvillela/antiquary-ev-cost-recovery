@@ -25,4 +25,4 @@ Consequences for the software:
   corrected.
 - A zero `Active_Charge_Time` on a session that reports energy is therefore not "energy delivered
   in no time at all" but a reporting fault. Such rows are still surfaced rather than dropped — see
-  `SessionReport::spikes`.
+  `Sessions::spikes`.

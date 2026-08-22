@@ -1,5 +1,5 @@
 use super::excel::session_list;
-use super::{Anomaly, Bracket, RSegment, RSession, SEGMENT_DURATION, Segment, SessionReport};
+use super::{Anomaly, Bracket, RSegment, RSession, SEGMENT_DURATION, Segment, Sessions};
 use crate::time::Interval;
 use std::{
     error::Error,
@@ -84,7 +84,7 @@ pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimate
 /// The estimate proper, once the sessions have been read.
 ///
 /// Separate from [`interval_estimates`] because there is more than one way to arrive at a
-/// [`SessionReport`]: that function reads one workbook, while [`crate::peak_power`] merges the two
+/// [`Sessions`]: that function reads one workbook, while [`crate::peak_power`] merges the two
 /// monthly CSVs a billing period spans. Both must produce the same figures from the same sessions,
 /// which they do by both coming through here.
 ///
@@ -93,7 +93,7 @@ pub fn interval_estimates(ioi: Interval, path: &Path) -> Result<IntervalEstimate
 pub(crate) fn estimates_from_report(
     ioi: Interval,
     sources: Vec<PathBuf>,
-    report: &SessionReport,
+    report: &Sessions,
 ) -> IntervalEstimates {
     // Spikes take part in the estimates on the same footing as any other session. A spike's raw
     // energy over charge time is infinite or NaN, either of which would swamp or poison any

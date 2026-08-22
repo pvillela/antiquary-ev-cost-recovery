@@ -55,7 +55,7 @@ pub(crate) fn session(
 /// wrong figure.
 ///
 /// Carries [`AnomalyKind::InconsistentDuration`] because that is what the readers attach to it, and
-/// what [`SessionReport`](super::SessionReport) sorts on. See
+/// what [`Sessions`](super::Sessions) sorts on. See
 /// [`duration_is_consistent`](super::duration_is_consistent), check 1.
 pub(crate) fn inverted_session(
     path: &str,

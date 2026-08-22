@@ -5,7 +5,7 @@
 //! the three hours the three demand-priced delivery lines are each charged on.
 //!
 //! One module rather than two, because the cost is the estimate priced. Both read the same meter
-//! figures over the same intervals, both build one [`SessionReport`] from the same records by the
+//! figures over the same intervals, both build one [`Sessions`] from the same records by the
 //! same rules, and both refuse a period the meter data does not cover. Splitting them would leave
 //! two copies of that agreement to keep.
 
@@ -14,9 +14,7 @@ use crate::hydro_bill::{
     NotABillingPeriodEnding, ZeroDenominator, billing_period_dates, billing_period_span,
 };
 use crate::markdown::{Left, Right, amounts, field, h1, h2, rounding_note, table};
-use crate::session::{
-    Bracket, EstimateSet, IntervalEstimates, SessionReport, estimates_from_report,
-};
+use crate::session::{Bracket, EstimateSet, IntervalEstimates, Sessions, estimates_from_report};
 use crate::time::Interval;
 
 // Re-exported because `peak_power` and `peak_power_cost` take them. `IntervalEstimates` is
@@ -321,7 +319,7 @@ const BILLED_DAYS_PER_MONTH: f64 = 30.0;
 /// answer, and every figure here is a proportion of a line on that same bill.
 ///
 /// The session handling is [`fn@peak_power`]'s exactly, duplicates and all: both calls build one
-/// [`SessionReport`] from the same records by the same rules, so a cost and the estimates it rests
+/// [`Sessions`] from the same records by the same rules, so a cost and the estimates it rests
 /// on can never disagree about which sessions there were.
 ///
 /// # Errors
@@ -579,9 +577,9 @@ fn check_period_covered(
 ///
 /// Shared by both entry points so that a [`DeliveryCost`] and the [`PowerEstimates`] for the same
 /// period cannot be built from different readings of the same records.
-fn one_report(sessions: &[RSession]) -> (SessionReport, Vec<PathBuf>) {
+fn one_report(sessions: &[RSession]) -> (Sessions, Vec<PathBuf>) {
     (
-        SessionReport::from_session_lists(vec![sessions.to_vec()], Vec::new()),
+        Sessions::from_session_lists(vec![sessions.to_vec()], Vec::new()),
         sources_of(sessions),
     )
 }

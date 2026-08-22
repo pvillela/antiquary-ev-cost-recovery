@@ -22,7 +22,7 @@ use crate::time::{is_on_grid, local_datetime, time_zone, wall_clock_instant};
 
 use super::TIME_GRID_STEP;
 use super::{
-    Anomaly, AnomalyKind, BREAKER_RATING_KW, RSession, RunLog, Session, SessionReport,
+    Anomaly, AnomalyKind, BREAKER_RATING_KW, RSession, RunLog, Session, Sessions,
     duration_is_consistent,
 };
 use jiff::{
@@ -73,9 +73,9 @@ const REQUIRED_HEADERS: &[&str] = &[
 /// `adj_conn_duration`, and the treatment of zero-`Energy_Use` sessions — are specified in
 /// `docs/time/README.md` under "Time zone" and in `docs/session/README.md` under "Other".
 ///
-/// Sessions are sorted into the three buckets of [`SessionReport`] by
-/// `SessionReport::from_session_lists`,
-/// which carries the rules. Every session in the report reaches one of them; none is dropped.
+/// The records are sorted into the three buckets of [`Sessions`] by
+/// `Sessions::from_session_lists`, which carries the rules. Every session in the file reaches one
+/// of them; none is dropped.
 ///
 /// A `<stem>.csv.read.log` is written beside the input, holding the anomalies found and the
 /// off-grid warning if it applies — the same content [`super::excel::session_csv_to_xlsx`] writes
@@ -87,7 +87,7 @@ const REQUIRED_HEADERS: &[&str] = &[
 /// header from the private `REQUIRED_HEADERS` is missing, or a timestamp or duration does not
 /// parse. Per-row judgement calls do not abort the read; they are carried on each
 /// [`Session::anomalies`] and summarised in the log.
-pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
+pub fn session_list(path: &Path) -> Result<Sessions, Box<dyn Error>> {
     // Every error out of this function names the file it concerns, and does so in one place rather
     // than at each site that raises one. Some underlying errors carry the path and some do not --
     // the `csv` crate's do not, a per-row parse failure knows only its row -- so a caller could
@@ -96,7 +96,7 @@ pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
     read_session_list(path).map_err(|e| format!("{}: {e}", path.display()).into())
 }
 
-fn read_session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
+fn read_session_list(path: &Path) -> Result<Sessions, Box<dyn Error>> {
     let rows = session_rows(path)?;
     let log_path = rows
         .log
@@ -105,10 +105,7 @@ fn read_session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
     // merge, because that is where a shared `Charge_Session_ID` is noticed, and one file can carry
     // one as readily as two can.
     let sessions: Vec<RSession> = rows.rows.into_iter().map(|row| row.session).collect();
-    Ok(SessionReport::from_session_lists(
-        vec![sessions],
-        vec![log_path],
-    ))
+    Ok(Sessions::from_session_lists(vec![sessions], vec![log_path]))
 }
 
 /// Every row one session report CSV yields, in the order the report states them.

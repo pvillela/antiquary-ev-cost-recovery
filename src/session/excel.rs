@@ -14,7 +14,7 @@ use crate::time::{
 };
 
 use super::csv::{self, SessionRows};
-use super::{Anomaly, AnomalyKind, RSession, RunLog, Session, SessionReport};
+use super::{Anomaly, AnomalyKind, RSession, RunLog, Session, Sessions};
 use jiff::Timestamp;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -31,7 +31,7 @@ const ENERGY_USE_FORMAT: &str = "0.000";
 const AVG_KW_FORMAT: &str = "0.000";
 const TOTAL_FEE_FORMAT: &str = "0.00";
 
-/// Outcome of converting one CSV file. The reading direction returns a [`SessionReport`] instead.
+/// Outcome of converting one CSV file. The reading direction returns a [`Sessions`] instead.
 #[derive(Debug)]
 pub struct ConversionReport {
     /// Where the workbook was written.
@@ -527,9 +527,9 @@ type SheetHeaders = HashMap<String, u32>;
 /// columns in the sheet does not silently shift what is read. Only the private
 /// `REQUIRED_SHEET_HEADERS` are consulted; the first worksheet is used.
 ///
-/// Sorting into the three buckets of [`SessionReport`] happens here rather than at conversion time,
+/// Sorting into the three buckets of [`Sessions`] happens here rather than at conversion time,
 /// because the workbook is meant to be a faithful rendering of the session report. The rules are
-/// `SessionReport::from_session_lists`'s, shared with [`csv::session_list`] so the two readers
+/// `Sessions::from_session_lists`'s, shared with [`csv::session_list`] so the two readers
 /// cannot disagree.
 ///
 /// `avg_kw` is recomputed here rather than read from the sheet's `avg_kw` column, which
@@ -547,13 +547,13 @@ type SheetHeaders = HashMap<String, u32>;
 /// holds a token that is not an [`AnomalyKind`] variant name. A workbook that cannot be read in
 /// full is one whose peak numbers cannot be trusted, so no row is skipped quietly.
 /// Rows with no `Charge_Session_ID` at all are treated as trailing blanks and ignored.
-pub fn session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
+pub fn session_list(path: &Path) -> Result<Sessions, Box<dyn Error>> {
     // The path, once, for every way this can fail. See `csv::session_list` for why it is done here
     // rather than at each site.
     read_session_list(path).map_err(|e| format!("{}: {e}", path.display()).into())
 }
 
-fn read_session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
+fn read_session_list(path: &Path) -> Result<Sessions, Box<dyn Error>> {
     let book = umya_spreadsheet::reader::xlsx::read(path)?;
     let sheet = book.sheet(0)?;
     let headers = sheet_headers(sheet)?;
@@ -606,10 +606,7 @@ fn read_session_list(path: &Path) -> Result<SessionReport, Box<dyn Error>> {
 
     // Through the merge for the same reason `csv::session_list` is: it is where a shared
     // `Charge_Session_ID` is noticed, and one file can carry one as readily as two can.
-    Ok(SessionReport::from_session_lists(
-        vec![sessions],
-        vec![log_path],
-    ))
+    Ok(Sessions::from_session_lists(vec![sessions], vec![log_path]))
 }
 
 /// Compares the workbook's stored derived columns against what the [`Session`] methods recompute,
@@ -1034,13 +1031,13 @@ S4,2026-06-03 09:00,2026-06-03 09:00,0:00:00,0:00:00,4.2
         let from_csv = csv::session_list(&csv_path).unwrap();
         let from_xlsx = session_list(&xlsx).unwrap();
 
-        let ids = |r: &SessionReport| {
+        let ids = |r: &Sessions| {
             let bucket = |b: &[RSession]| b.iter().map(|s| s.id.clone()).collect::<Vec<String>>();
             (bucket(&r.sessions), bucket(&r.spikes), bucket(&r.excluded))
         };
         assert_eq!(ids(&from_csv), ids(&from_xlsx));
 
-        let rows = |r: &SessionReport| {
+        let rows = |r: &Sessions| {
             let bucket = |b: &[RSession]| b.iter().map(|s| s.row).collect::<Vec<usize>>();
             (bucket(&r.sessions), bucket(&r.spikes), bucket(&r.excluded))
         };
