@@ -10,9 +10,11 @@
 //! the chargers metered, which is what a driver can check against their own session history; what
 //! the rate has to cover is a question for whoever sets it.
 
+use crate::green_button::PeriodValues;
 use crate::hydro_bill::{
     BILL_END_DAY, BillingPeriod, NotABillingPeriodEnding, billing_period_dates, billing_period_span,
 };
+use crate::io::{DeliveryCost, EnergyCost};
 use crate::markdown::{Left, Right, amounts, field, h1, h2, table};
 use crate::session::tou_kwh;
 use crate::time::{Interval, local_midnight};
@@ -103,6 +105,15 @@ pub struct CostRecovery {
 
     /// Total cost recovery allocated to the billing period.
     pub cost_recovery: f64,
+}
+
+/// The EV cost recovery for the billing period, the hydro delivery and energy costs attributable
+/// to EV charging sessions during the period, and their net financial impact.
+pub struct CostRecoverySurplus {
+    pub recovery: CostRecovery,
+    pub delivery: DeliveryCost,
+    pub energy: EnergyCost,
+    pub surplus: f64,
 }
 
 // No per-band recovery for the whole period. A band's kilowatt-hours were charged at one rate in
@@ -301,6 +312,19 @@ pub fn cost_recovery(
         cost_recovery: sum(CostRecoveryStretch::recovery),
         stretches,
     })
+}
+
+/// Returns the EV cost-recovery surplus for the billing period, i.e., the EV cost recovery for the
+/// billing period minus the hydro delivery and energy costs attributable to EV charging sessions
+/// during the period.
+pub fn cost_recovery_surplus(
+    billing_period_ending: Date,
+    gb_period_values: PeriodValues,
+    sessions: &[RSession],
+    recovery_rates_at_start: CostRecoveryRates,
+    recovery_rates_at_end: Option<CostRecoveryRates>,
+) -> Result<CostRecoverySurplus, CostRecoveryError> {
+    todo!()
 }
 
 /// One stretch of the period priced at one schedule of rates.
